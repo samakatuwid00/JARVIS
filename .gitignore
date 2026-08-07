@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Secrets / local env (NEVER commit)
+.env
+.env.local
+*.env
+
+# Generated report artifacts
+Documents/
+*.docx
+
+# Logs
+*.log
+chrome_dbg.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+
+# Backup artifacts
+*.bak

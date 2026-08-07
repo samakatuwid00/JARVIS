@@ -1,0 +1,855 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JARVIS HUD — Voice</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root { --holo: #ffb454; --ink: #0b0805;
+    /* Amplitude-driven levers. JS rewrites these on every animation frame while
+       the TTS clip plays, and resets them to exactly these idle values when it
+       ends, so the whole reactive layer collapses to "off" with no leftovers. */
+    --amp: 0; --hue: 0deg; --bright: 1; --sat: 1; --glow: 0; --glow-r: 48vmin; }
+  html, body { height: 100%; background: var(--ink); overflow: hidden;
+    font-family: Archivo, system-ui, sans-serif; color: #f2ead9; }
+
+  /* Page = HUD only. The glow and the status strip float over it; the glow is
+     pointer-events:none, the strip is a thin non-blocking overlay. */
+  #stage { position: fixed; inset: 0; width: 100%; height: 100%; }
+  #hud { position: absolute; inset: 0; width: 100%; height: 100%;
+    border: 0; display: block; filter: none; transition: filter .12s linear; }
+  /* The artifact's canvas orb reacts to its own internal speaking state, which we
+     cannot reach. So the reconstruction is driven wrapper-side, from the live
+     amplitude of the TTS waveform, instead of a fixed breathing keyframe. */
+  #hud.speaking { filter: hue-rotate(var(--hue)) brightness(var(--bright)) saturate(var(--sat)); }
+  #hud.listening { filter: hue-rotate(-12deg) brightness(1.05); transition: filter .3s; }
+
+  /* Voice overlay — subtle full-screen tint only */
+  #jv-glow { position: fixed; inset: 0; z-index: 50; pointer-events: none; opacity: 0;
+    transition: opacity .25s; box-shadow: inset 0 0 160px color-mix(in srgb, var(--holo) 40%, transparent); }
+  /* Speaking: not a tint but a soft radial disc sitting behind the orb, whose
+     radius (--glow-r) and brightness (--glow) both track speech energy. */
+  #jv-glow.speak { opacity: 1; box-shadow: none; }
+  #jv-glow.speak::after { content: ''; position: absolute; left: 50%; top: 50%;
+    width: calc(var(--glow-r) * 2); height: calc(var(--glow-r) * 2);
+    margin: calc(var(--glow-r) * -1) 0 0 calc(var(--glow-r) * -1);
+    border-radius: 50%; opacity: var(--glow); mix-blend-mode: screen;
+    transition: opacity .08s linear;
+    background: radial-gradient(circle,
+      color-mix(in srgb, var(--holo) 34%, transparent) 0%,
+      color-mix(in srgb, var(--holo) 14%, transparent) 46%,
+      transparent 72%); }
+  #jv-glow.listen { opacity: 1; animation: jvBreathe 1.1s ease-in-out infinite;
+    box-shadow: inset 0 0 190px color-mix(in srgb, #9dff8a 45%, transparent); }
+  #jv-glow.think { opacity: .55;
+    box-shadow: inset 0 0 140px color-mix(in srgb, #6ec3ff 40%, transparent); }
+  @keyframes jvBreathe { 0%,100% { opacity: .45; } 50% { opacity: 1; } }
+
+  /* ------------------------------------------------------------ speaking rings */
+  /* Rings launched from the orb's edge while JARVIS talks. The orb sits at the
+     viewport centre, so the container does too; --r is the base radius. */
+  #jv-rings { position: fixed; inset: 0; z-index: 50; pointer-events: none;
+    display: none; --r: 24vmin; }
+  #jv-rings.speak { display: block; }
+  #jv-rings i { position: absolute; left: 50%; top: 50%; display: block;
+    width: calc(var(--r) * 2); height: calc(var(--r) * 2); margin: calc(var(--r) * -1) 0 0 calc(var(--r) * -1);
+    border-radius: 50%; opacity: 0;
+    border: 1px solid color-mix(in srgb, var(--holo) calc(45% + var(--amp) * 55%), transparent); }
+  /* Rings are no longer three looping elements on fixed delays: JS launches one
+     from the orb's edge on every fresh amplitude peak and drops it on animationend. */
+  #jv-rings i.jv-ring-spawn { animation: jvRingSpawn 2.2s ease-out 1 both; }
+  @keyframes jvRingSpawn {
+    0%   { transform: scale(.55); opacity: 0; }
+    14%  { opacity: calc(.28 + var(--amp) * .42); }
+    100% { transform: scale(1.45); opacity: 0; }
+  }
+
+  /* ------------------------------------------------------------ status strip */
+  /* Voice-only UI: a thin floating readout in the corner. No transcript, no
+     input. It never eats clicks except on its own two fallback buttons. */
+  #jv-head { position: fixed; z-index: 60; left: 16px; bottom: 14px;
+    display: flex; align-items: center; gap: 10px;
+    padding: 7px 13px; border-radius: 999px; pointer-events: none;
+    background: color-mix(in srgb, #0b0805 72%, transparent);
+    border: 1px solid color-mix(in srgb, var(--holo) 25%, transparent);
+    backdrop-filter: blur(6px); }
+  #jv-head .jv-btn { pointer-events: auto; }
+  #jv-dot { width: 11px; height: 11px; border-radius: 50%; flex: 0 0 auto;
+    background: color-mix(in srgb, var(--holo) 70%, transparent);
+    box-shadow: 0 0 10px var(--holo); transition: background .2s, box-shadow .2s; }
+  #jv-dot.listen { background: #9dff8a; box-shadow: 0 0 16px #9dff8a; animation: jvPulse .9s infinite; }
+  #jv-dot.think  { background: #6ec3ff; box-shadow: 0 0 16px #6ec3ff; animation: jvPulse 1.4s infinite; }
+  #jv-dot.speak  { background: var(--holo); box-shadow: 0 0 20px var(--holo); animation: jvPulse .7s infinite; }
+  #jv-dot.dead   { background: #ec3013; box-shadow: 0 0 12px #ec3013; animation: none; }
+  @keyframes jvPulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.45); } }
+
+  #jv-status { font: 700 11px/1.4 Archivo, system-ui; letter-spacing: .2em;
+    text-transform: uppercase; color: color-mix(in srgb, var(--holo) 80%, #fff); }
+  #jv-status.live { color: #9dff8a; }
+  #jv-level { width: 74px; height: 4px; border-radius: 3px; overflow: hidden; flex: 0 0 auto;
+    background: color-mix(in srgb, var(--holo) 18%, transparent); }
+  #jv-level i { display: block; height: 100%; width: 0%; background: var(--holo);
+    transition: width .08s linear; }
+  #jv-actions { display: flex; gap: 8px; }
+
+  .jv-btn { cursor: pointer; border: none; border-radius: 999px; padding: 6px 13px;
+    font: 800 10px/1 Archivo, system-ui; letter-spacing: .18em; text-transform: uppercase;
+    color: #0b0805; background: var(--holo); }
+  .jv-btn:hover { filter: brightness(1.12); }
+  /* Fallback controls — only shown when they are actually needed */
+  #jv-retry, #jv-unlock { display: none; }
+  #jv-retry.show, #jv-unlock.show { display: inline-block; }
+
+  /* ------------------------------------------------------------ terminal chat */
+  /* Wrapper-side (NOT iframe) typed path. It sits above #jv-head and never
+     covers the artifact's own footer controls. The container itself is
+     click-through; only the transcript and the input strip take pointer events,
+     so the mic path inside the iframe keeps working untouched. */
+  #jv-chat { position: fixed; z-index: 60; left: 0; right: 0; bottom: 104px;
+    width: min(720px, calc(100% - 32px)); margin: 0 auto;
+    display: flex; flex-direction: column; gap: 9px; pointer-events: none;
+    font-family: Archivo, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color: color-mix(in srgb, var(--holo) 86%, #fff); }
+
+  #jv-log { pointer-events: auto; overflow-y: auto; max-height: 34vh;
+    display: flex; flex-direction: column; gap: 6px; padding: 0 2px;
+    scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--holo) 35%, transparent) transparent; }
+  #jv-log::-webkit-scrollbar { width: 4px; }
+  #jv-log::-webkit-scrollbar-thumb { border-radius: 3px;
+    background: color-mix(in srgb, var(--holo) 35%, transparent); }
+
+  .jv-line { max-width: 86%; white-space: pre-wrap; word-break: break-word;
+    font: 500 13px/1.55 Archivo, ui-monospace, Menlo, Consolas, monospace;
+    letter-spacing: .02em; text-shadow: 0 0 12px color-mix(in srgb, var(--holo) 22%, transparent); }
+  .jv-line::before { content: '> '; opacity: .5; }
+  .jv-line-user { align-self: flex-end; text-align: right;
+    color: color-mix(in srgb, var(--holo) 70%, #fff); }
+  .jv-line-jarvis { align-self: flex-start;
+    color: color-mix(in srgb, var(--holo) 92%, #fff); }
+  /* Block caret, alive only while the typewriter is still revealing the line. */
+  .jv-line-jarvis.jv-typing .jv-text::after { content: '▌'; margin-left: 1px;
+    animation: jvCaret .7s step-end infinite; }
+  @keyframes jvCaret { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+
+  #jv-input-wrap { pointer-events: auto; display: flex; align-items: center; gap: 9px;
+    padding: 9px 15px; border-radius: 999px;
+    background: color-mix(in srgb, #0b0805 76%, transparent);
+    border: 1px solid color-mix(in srgb, var(--holo) 26%, transparent);
+    backdrop-filter: blur(6px); transition: border-color .2s, box-shadow .2s; }
+  #jv-input-wrap::before { content: '>'; flex: 0 0 auto; opacity: .6;
+    font: 700 13px/1 Archivo, ui-monospace, monospace; color: var(--holo); }
+  #jv-input-wrap:focus-within { border-color: color-mix(in srgb, var(--holo) 55%, transparent);
+    box-shadow: 0 0 22px color-mix(in srgb, var(--holo) 18%, transparent); }
+  #jv-input-wrap.jv-err { border-color: #ec3013; box-shadow: 0 0 20px color-mix(in srgb, #ec3013 40%, transparent); }
+
+  #jv-input { flex: 1 1 auto; min-width: 0; border: 0; outline: 0; background: transparent;
+    font-family: Archivo, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 13px; font-weight: 600; letter-spacing: .08em;
+    color: color-mix(in srgb, var(--holo) 92%, #fff); caret-color: var(--holo); }
+  #jv-input::placeholder { color: color-mix(in srgb, var(--holo) 45%, transparent);
+    letter-spacing: .16em; font-weight: 700; }
+</style>
+</head>
+<body>
+  <div id="stage">
+    <iframe id="hud" src="/hud.html" allow="microphone"></iframe>
+  </div>
+  <div id="jv-glow"></div>
+  <div id="jv-rings"></div><!-- filled by spawnPeak() while speaking -->
+
+  <!-- Typed path. Lives in the WRAPPER document, never inside the HUD iframe, so
+       it always owns focus and talks to the real backend over the same socket. -->
+  <div id="jv-chat">
+    <div id="jv-log"></div>
+    <div id="jv-input-wrap">
+      <input id="jv-input" type="text" autocomplete="off" spellcheck="false"
+             placeholder="SPEAK TO J.A.R.V.I.S. - TYPE, THEN PRESS ENTER" />
+    </div>
+  </div>
+
+  <div id="jv-head">
+    <span id="jv-dot"></span>
+    <span id="jv-status">BOOTING…</span>
+    <span id="jv-level"><i></i></span>
+    <span id="jv-actions">
+      <button id="jv-unlock" class="jv-btn">Activate audio</button>
+      <button id="jv-retry" class="jv-btn">Enable mic</button>
+    </span>
+  </div>
+
+<script>
+(function () {
+  'use strict';
+
+  // ---------------------------------------------------------------- config
+  var WAKE_WORDS = ['jarvis', 'jarviss', 'jarvus', 'jervis', 'javis', 'jarvez', 'charvis', 'jarv'];
+  var WAKE_RE = new RegExp('\\b(?:hey\\s+|ok\\s+|okay\\s+|hi\\s+)?(' + WAKE_WORDS.join('|') + ')\\b[\\s,.:;!?-]*', 'i');
+  var TARGET_RATE   = 16000;   // what we ship to Whisper
+  var PREROLL_MS    = 900;     // audio kept before speech onset so the wake word is never clipped
+  var SCAN_HANG_MS  = 600;     // silence that ends a wake-word scan clip
+  var SCAN_MAX_MS   = 4000;
+  var CMD_HANG_MS   = 800;     // silence that ends a command clip (a touch longer: sentences breathe)
+  var CMD_MAX_MS    = 9000;
+  var CMD_WAIT_MS   = 7000;    // no speech after wake word -> back to idle
+  var BUSY_TIMEOUT  = 45000;   // server watchdog, nothing can get stuck
+  var MIN_CLIP_MS   = 350;     // ignore coughs/clicks
+
+  // ---- VAD (AnalyserNode, adaptive noise floor) -------------------------
+  // The backend is only ever consulted for a clip that this VAD called speech,
+  // so room tone never reaches Whisper and JARVIS is not "constantly checking".
+  var VAD_FFT       = 1024;
+  var VAD_TICK_MS   = 50;      // analyser poll period
+  var SPEECH_MARGIN = 1.8;     // speech = rms > noiseFloor * margin
+  var SPEECH_MIN_MS = 150;     // ...sustained this long before it counts
+  var FLOOR_ALPHA   = 0.05;    // slow EMA of rms during silence
+  var WARM_ALPHA    = 0.30;    // faster convergence during the boot calibration
+  var FLOOR_MIN     = 0.0015;  // clamps: a dead-silent room must not make the
+  var FLOOR_MAX     = 0.0600;  // threshold collapse, a loud one must not deafen us
+  var ABS_MIN_RMS   = 0.0060;  // absolute gate under the adaptive one
+  var CALIBRATE_MS  = 1800;
+
+  // ---------------------------------------------------------------- dom
+  var glow = document.getElementById('jv-glow');
+  var ringsEl = document.getElementById('jv-rings');
+  var dot = document.getElementById('jv-dot');
+  var statusEl = document.getElementById('jv-status');
+  var levelEl = document.querySelector('#jv-level i');
+  var retryBtn = document.getElementById('jv-retry');
+  var unlockBtn = document.getElementById('jv-unlock');
+  var hud = document.getElementById('hud');
+  var chatLog = document.getElementById('jv-log');
+  var chatInput = document.getElementById('jv-input');
+  var chatWrap = document.getElementById('jv-input-wrap');
+  var rootStyle = document.documentElement.style;
+  var PLACEHOLDER = 'SPEAK TO J.A.R.V.I.S. - TYPE, THEN PRESS ENTER';
+
+  // ---------------------------------------------------------------- hud link
+  // The HUD artifact re-sets `--spd` on ITS OWN documentElement on every render,
+  // so writing it once is not enough: we keep re-applying the target from here.
+  var HUD_SPD = { idle: 1, scanning: 1, listening: 1.7, transcribing: 1.2, thinking: 1.2, speaking: 2.4 };
+  var hudSpd = 1;
+
+  function applyHudSpeed() {
+    try {
+      var d = hud.contentDocument || (hud.contentWindow && hud.contentWindow.document);
+      if (d && d.documentElement) d.documentElement.style.setProperty('--spd', String(hudSpd));
+    } catch (e) {}          // not loaded yet, or (never, here) cross-origin
+  }
+  function setHudSpeed(v) {
+    hudSpd = v;
+    rootStyle.setProperty('--spd', String(v));   // wrapper-level cues
+    applyHudSpeed();
+  }
+  setInterval(applyHudSpeed, 200);
+  hud.addEventListener('load', applyHudSpeed);
+
+  // ---------------------------------------------------------------- ui
+  // 'scanning' = a burst of speech is being buffered while still idle. It must
+  // stay visually calm: no glow, no fast spin — we do not know it is for us yet.
+  var uiState = 'idle';
+
+  function setState(st, txt) {
+    uiState = st;
+    setHudSpeed(HUD_SPD[st] || 1);
+    hud.className = (st === 'speaking' || st === 'listening') ? st : '';
+    glow.className = st === 'speaking' ? 'speak'
+      : st === 'listening' ? 'listen'
+      : (st === 'thinking' || st === 'transcribing') ? 'think' : '';
+    ringsEl.className = st === 'speaking' ? 'speak' : '';   // orb rings, speech only
+    dot.className = st === 'speaking' ? 'speak'
+      : (st === 'listening' || st === 'scanning') ? 'listen'
+      : (st === 'thinking' || st === 'transcribing') ? 'think' : '';
+    if (txt) statusEl.textContent = txt;
+    statusEl.className = (st === 'listening' || st === 'speaking') ? 'live' : '';
+    // The HUD artifact is read-only; it ignores this, but forward anyway so a
+    // future HUD build can react without touching hud_artifact.html.
+    try { hud.contentWindow.postMessage({ source: 'jarvis', type: 'state', state: st }, '*'); } catch (e) {}
+  }
+  function setDead(txt) { dot.className = 'dead'; glow.className = ''; hud.className = '';
+    ringsEl.className = ''; statusEl.className = ''; statusEl.textContent = txt; setHudSpeed(1); }
+  // There is no transcript panel any more. Conversation text goes to the
+  // console; only one-off failures get a moment on the status strip.
+  function notice(txt) { console.warn('[jarvis] ' + txt); statusEl.textContent = txt; }
+
+  // ---------------------------------------------------------------- chat log
+  // Terminal transcript. User lines land instantly; JARVIS lines are revealed
+  // letter-by-letter and only THEN hand their TTS clip to speak(), so the typing
+  // and the voice land together. One reveal at a time: a new response cancels
+  // whatever is still typing (its queued audio dies with it — no overlap).
+  var TYPE_MS = 30;             // per tick
+  var TYPE_MAX_TICKS = 200;     // long replies reveal >1 char/tick so the wait
+                                // before speech stays ~6s instead of unbounded
+  var twTimer = 0, twSpan = null, twLine = null, twAudio = null;
+
+  function cancelTypewriter() {
+    if (twTimer) { clearTimeout(twTimer); twTimer = 0; }
+    if (twSpan && twLine) {                     // leave the text fully revealed
+      twSpan.textContent = twSpan.getAttribute('data-full') || twSpan.textContent;
+      twLine.classList.remove('jv-typing');
+    }
+    twSpan = null; twLine = null; twAudio = null;
+  }
+
+  function logConv(role, text, audio) {
+    if (!chatLog) return;
+    var line = document.createElement('div');
+    line.className = 'jv-line jv-line-' + role;
+    var span = document.createElement('span');
+    span.className = 'jv-text';
+    line.appendChild(span);
+    chatLog.appendChild(line);
+
+    var full = String(text == null ? '' : text);
+    if (role !== 'jarvis') {                    // user: immediate, right-aligned
+      span.textContent = full;
+      chatLog.scrollTop = chatLog.scrollHeight;
+      return;
+    }
+
+    cancelTypewriter();                         // never two reveals at once
+    span.setAttribute('data-full', full);
+    line.classList.add('jv-typing');
+    twSpan = span; twLine = line; twAudio = audio || null;
+
+    var step = Math.max(1, Math.ceil(full.length / TYPE_MAX_TICKS));
+    var i = 0;
+    (function tick() {
+      if (twSpan !== span) return;              // superseded by a newer reply
+      i = Math.min(full.length, i + step);
+      span.textContent = full.slice(0, i);
+      chatLog.scrollTop = chatLog.scrollHeight;
+      if (i < full.length) { twTimer = setTimeout(tick, TYPE_MS); return; }
+      // Reveal complete: release the queued speech (or stand down if silent).
+      var pendingAudio = twAudio;
+      twTimer = 0; twSpan = null; twLine = null; twAudio = null;
+      line.classList.remove('jv-typing');
+      if (pendingAudio) speak(pendingAudio); else if (mode !== 'speaking') goIdle();
+    })();
+  }
+
+  // ---------------------------------------------------------------- chat input
+  function sendTyped() {
+    var value = chatInput.value.trim();
+    if (!value) return;
+    if (!send({ type: 'text', text: value, speak: true })) {
+      // WS down: keep the typed text, say so, log nothing as a reply.
+      notice('NOT CONNECTED — MESSAGE NOT SENT');
+      chatWrap.classList.add('jv-err');
+      setTimeout(function () { chatWrap.classList.remove('jv-err'); }, 1200);
+      chatInput.focus();
+      return;
+    }
+    logConv('user', value);
+    chatInput.value = '';
+    chatInput.placeholder = '> ';
+    setTimeout(function () { chatInput.placeholder = PLACEHOLDER; }, 900);
+    chatInput.focus();                          // typing stays the active path
+    pendingReply = true;
+    mode = 'busy'; busySince = Date.now();      // mic stays deaf until the reply lands
+    setState('thinking', 'THINKING…');
+  }
+
+  var pendingReply = false;
+  chatInput.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' || e.keyCode === 13) { e.preventDefault(); sendTyped(); }
+  });
+
+  // ---------------------------------------------------------------- websocket
+  var ws = null, wsReady = false, reconnectDelay = 800;
+
+  function connect() {
+    var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws = new WebSocket(proto + '//' + location.host + '/ws');
+    ws.onopen = function () {
+      wsReady = true; reconnectDelay = 800;
+      if (mode === 'boot') return;
+      goIdle();
+    };
+    ws.onclose = function () {
+      wsReady = false;
+      setDead('DISCONNECTED — RETRYING…');
+      setTimeout(connect, reconnectDelay);
+      reconnectDelay = Math.min(reconnectDelay * 2, 8000);
+    };
+    ws.onerror = function () { try { ws.close(); } catch (e) {} };
+    ws.onmessage = onMessage;
+  }
+  function send(obj) {
+    if (ws && ws.readyState === 1) { ws.send(JSON.stringify(obj)); return true; }
+    return false;
+  }
+
+  function onMessage(ev) {
+    var m;
+    try { m = JSON.parse(ev.data); } catch (e) { return; }
+
+    if (m.type === 'scan') {
+      onScanResult(m.text || '');
+    } else if (m.type === 'transcript') {
+      console.log('[you] ' + m.text);
+      setState('thinking', 'THINKING…');
+    } else if (m.type === 'response') {
+      console.log('[jarvis] ' + m.text);
+      pendingReply = false;
+      if (m.text) {
+        // The typewriter owns the audio now: it calls speak() the moment the
+        // last character lands (or goIdle() when the reply carries no clip).
+        logConv('jarvis', m.text, m.audio);
+      } else if (m.audio) {
+        speak(m.audio);                         // audio with no text: just talk
+      } else {
+        goIdle();
+      }
+    } else if (m.type === 'status') {
+      if (m.state === 'idle') {
+        // Never let the server yank us out of playback; goIdle() runs when TTS ends.
+        if (mode !== 'speaking') goIdle();
+      } else if (m.state === 'transcribing') {
+        if (mode === 'busy') setState('transcribing', 'TRANSCRIBING…');
+      } else if (m.state === 'thinking') {
+        if (mode === 'busy') setState('thinking', 'THINKING…');
+      }
+    } else if (m.type === 'error') {
+      goIdle();
+      notice('ERROR — ' + m.text);
+    }
+  }
+
+  // ------------------------------------------------- speech-reactive visuals
+  // A second, playback-only AudioContext taps the TTS <audio> element and turns
+  // its live waveform into the CSS levers declared in :root. It is completely
+  // separate from the mic graph below (that one gets closed on every teardown).
+  // Everything here is best-effort: if Web Audio is unavailable or the element
+  // cannot be tapped, we fall back to a timed oscillation and nothing throws.
+  var AMP_FFT      = 512;
+  var AMP_SMOOTH   = 0.6;
+  var AMP_GAIN     = 3.2;    // raw RMS of speech sits around .05–.30 -> normalise
+  var PEAK_DECAY   = 0.90;   // per-frame decay of the held peak
+  var PEAK_TRIGGER = 0.42;   // rms must cross this (from below) to launch a ring
+  var MAX_RINGS    = 12;
+
+  var ampCtx = null, ampSrc = null, ampAnalyser = null, ampGain = null;
+  var ampBuf = null, ampEl = null, ampDead = false;
+  var rafId = 0, fallbackTimer = 0, fallbackT0 = 0;
+  var lastRMS = 0, peakRMS = 0, wasOverPeak = false;
+
+  function ampVars(rms, peak) {
+    // rms/peak are already normalised to 0..1.
+    rootStyle.setProperty('--amp', rms.toFixed(3));
+    rootStyle.setProperty('--hue', (Math.sin(peakRMS * 6.0) * 12 * rms).toFixed(2) + 'deg');
+    rootStyle.setProperty('--bright', (1 + 0.25 * rms).toFixed(3));
+    rootStyle.setProperty('--sat', (1 + 0.40 * rms).toFixed(3));
+    rootStyle.setProperty('--glow', (0.40 + 0.60 * peak).toFixed(3));
+    rootStyle.setProperty('--glow-r', (48 + 40 * rms).toFixed(1) + 'vmin');
+    // The HUD's own React frame loop consumes --spd, so this really does speed
+    // up the inner blob's bands/chords/dust on loud phonemes.
+    setHudSpeed(2.4 + 1.6 * rms);
+  }
+
+  function resetAmpVars() {
+    rootStyle.setProperty('--amp', '0');
+    rootStyle.setProperty('--hue', '0deg');
+    rootStyle.setProperty('--bright', '1');
+    rootStyle.setProperty('--sat', '1');
+    rootStyle.setProperty('--glow', '0');
+    rootStyle.setProperty('--glow-r', '48vmin');
+    lastRMS = 0; peakRMS = 0; wasOverPeak = false;
+  }
+
+  function detachAnalyser() {
+    // A MediaElementSource is permanently bound to its element, so each clip
+    // gets its own node set and the previous one is unhooked here. Never leak.
+    try { if (ampSrc) ampSrc.disconnect(); } catch (e) {}
+    try { if (ampAnalyser) ampAnalyser.disconnect(); } catch (e) {}
+    try { if (ampGain) ampGain.disconnect(); } catch (e) {}
+    ampSrc = ampAnalyser = ampGain = null; ampBuf = null; ampEl = null;
+  }
+
+  function attachAnalyser(el) {
+    if (ampDead || !el) return false;
+    if (ampEl === el && ampAnalyser) return true;      // already analysing it
+    var AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) { ampDead = true; return false; }
+    detachAnalyser();
+    try {
+      if (!ampCtx) ampCtx = new AC();
+      ampSrc = ampCtx.createMediaElementSource(el);
+      ampAnalyser = ampCtx.createAnalyser();
+      ampAnalyser.fftSize = AMP_FFT;
+      ampAnalyser.smoothingTimeConstant = AMP_SMOOTH;
+      // Routing the element through the graph makes the graph its ONLY output,
+      // so this gain stays at unity — JARVIS must still be audible. (The muted
+      // sink pattern belongs to the mic path, where nothing may reach speakers.)
+      ampGain = ampCtx.createGain(); ampGain.gain.value = 1;
+      ampSrc.connect(ampAnalyser); ampAnalyser.connect(ampGain);
+      ampGain.connect(ampCtx.destination);
+      ampBuf = new Uint8Array(ampAnalyser.fftSize);
+      ampEl = el;
+    } catch (e) {
+      detachAnalyser();
+      ampDead = true;                                   // don't retry every clip
+      return false;
+    }
+    try { if (ampCtx.state === 'suspended') ampCtx.resume(); } catch (e) {}
+    return true;
+  }
+
+  function readAmp() {
+    if (!ampAnalyser) return 0;
+    ampAnalyser.getByteTimeDomainData(ampBuf);
+    var sum = 0, i, s;
+    for (i = 0; i < ampBuf.length; i++) { s = (ampBuf[i] - 128) / 128; sum += s * s; }
+    return Math.min(1, Math.sqrt(sum / ampBuf.length) * AMP_GAIN);
+  }
+
+  function spawnPeak(rms) {
+    if (!ringsEl || ringsEl.childElementCount >= MAX_RINGS) return;
+    var el = document.createElement('i');
+    el.style.animationDelay = (Math.random() * 0.5) + 's';
+    el.addEventListener('animationend', function () {
+      if (el.parentNode) el.parentNode.removeChild(el);
+    });
+    ringsEl.appendChild(el);
+    el.className = 'jv-ring-spawn';
+  }
+
+  function speakLoop() {
+    if (mode !== 'speaking') { stopSpeakLoop(); return; }
+    rafId = requestAnimationFrame(speakLoop);
+    var rms = readAmp();
+    peakRMS = Math.max(rms, peakRMS * PEAK_DECAY);
+    ampVars(rms, peakRMS);
+    if (rms >= PEAK_TRIGGER && !wasOverPeak) spawnPeak(rms);
+    wasOverPeak = rms >= PEAK_TRIGGER;
+    lastRMS = rms;
+  }
+
+  // No analyser (no Web Audio, tainted element, blocked context): keep the orb
+  // alive with a slow synthetic swell so the speaking state still reads as speech.
+  function fallbackLoop() {
+    if (mode !== 'speaking') { stopSpeakLoop(); return; }
+    var t = (Date.now() - fallbackT0) / 1000;
+    var rms = 0.25 + 0.25 * (0.5 + 0.5 * Math.sin(t * 3.4));
+    peakRMS = Math.max(rms, peakRMS * PEAK_DECAY);
+    ampVars(rms, peakRMS);
+    if (rms >= PEAK_TRIGGER && !wasOverPeak) spawnPeak(rms);
+    wasOverPeak = rms >= PEAK_TRIGGER;
+  }
+
+  function startSpeechVisuals(el) {
+    stopSpeakLoop();
+    if (attachAnalyser(el)) {
+      rafId = requestAnimationFrame(speakLoop);
+    } else {
+      fallbackT0 = Date.now();
+      fallbackTimer = setInterval(fallbackLoop, 60);
+    }
+  }
+
+  function stopSpeakLoop() {
+    if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+    if (fallbackTimer) { clearInterval(fallbackTimer); fallbackTimer = 0; }
+    detachAnalyser();
+    resetAmpVars();
+    setHudSpeed(HUD_SPD.idle);
+  }
+
+  // ---------------------------------------------------------------- audio out
+  var current = null, audioUnlocked = false;
+
+  function speak(b64) {
+    mode = 'speaking';
+    if (current) { try { current.pause(); } catch (e) {} }
+    stopSpeakLoop();                       // never double-analyse two clips
+    setState('speaking', 'SPEAKING…');
+    var a = new Audio('data:audio/mp3;base64,' + b64);
+    current = a;
+    a.onended = a.onerror = function () {
+      if (current === a) current = null;
+      stopSpeakLoop();
+      goIdle();
+    };
+    a.play().then(function () {
+              audioUnlocked = true; unlockBtn.classList.remove('show');
+              startSpeechVisuals(a);       // playback has actually begun
+            })
+            .catch(function () { unlockBtn.classList.add('show'); stopSpeakLoop(); goIdle(); });
+  }
+
+  // ---------------------------------------------------------------- wav encode
+  function resample(input, from, to) {
+    if (from === to) return input;
+    var ratio = from / to, n = Math.max(1, Math.round(input.length / ratio));
+    var out = new Float32Array(n);
+    for (var i = 0; i < n; i++) {
+      var p = i * ratio, i0 = p | 0, i1 = Math.min(i0 + 1, input.length - 1), f = p - i0;
+      out[i] = input[i0] * (1 - f) + input[i1] * f;
+    }
+    return out;
+  }
+  function encodeWav(pcm) {
+    var buf = new ArrayBuffer(44 + pcm.length * 2), v = new DataView(buf), i;
+    function str(off, s) { for (var k = 0; k < s.length; k++) v.setUint8(off + k, s.charCodeAt(k)); }
+    str(0, 'RIFF'); v.setUint32(4, 36 + pcm.length * 2, true); str(8, 'WAVEfmt ');
+    v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+    v.setUint32(24, TARGET_RATE, true); v.setUint32(28, TARGET_RATE * 2, true);
+    v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+    str(36, 'data'); v.setUint32(40, pcm.length * 2, true);
+    for (i = 0; i < pcm.length; i++) {
+      var s = Math.max(-1, Math.min(1, pcm[i]));
+      v.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    }
+    return buf;
+  }
+  function b64(buf) {
+    var bytes = new Uint8Array(buf), bin = '', cs = 0x8000;
+    for (var i = 0; i < bytes.length; i += cs) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + cs));
+    return btoa(bin);
+  }
+
+  // ---------------------------------------------------------------- capture engine
+  // One permanent getUserMedia stream + one ScriptProcessor (PCM for the clip)
+  // + one AnalyserNode (RMS for the VAD). No MediaRecorder, no start/stop
+  // button, nothing that can be left in a stuck state.
+  var ctx = null, srcNode = null, proc = null, sink = null, stream = null;
+  var analyser = null, vadBuf = null, vadTimer = null;
+  var srcRate = 48000;
+
+  var mode = 'boot';            // boot | idle | scan | command | busy | speaking | nomic
+  var micOk = false;            // false -> nothing to listen with; park in 'nomic'
+  var ring = [], ringLen = 0, ringCap = 0;
+  var cap = null, capLen = 0, capHeard = false, capWaited = 0;
+  var noiseFloor = 0.004, speechMs = 0, silenceMs = 0;
+  var busySince = 0, lastLevel = 0;
+
+  function goIdle() {
+    stopSpeakLoop();                   // idempotent: kills the RAF + resets levers
+    cap = null; capLen = 0; capHeard = false; capWaited = 0;
+    speechMs = 0; silenceMs = 0;
+    ring = []; ringLen = 0;
+    if (!micOk) {
+      // No mic: park. Voice is the only input, so there is nothing else to do.
+      mode = 'nomic';
+      setState('idle', 'NO MIC — CLICK ENABLE MIC');
+      dot.className = 'dead';
+      return;
+    }
+    mode = 'idle';
+    setState('idle', 'LISTENING FOR “JARVIS”');
+  }
+
+  function pushRing(block) {
+    ring.push(block); ringLen += block.length;
+    while (ringLen - ring[0].length > ringCap) { ringLen -= ring[0].length; ring.shift(); }
+  }
+
+  function beginCapture(kind, seed) {
+    mode = kind;                       // 'scan' or 'command'
+    cap = []; capLen = 0; capWaited = 0;
+    // A scan only ever starts because the VAD already confirmed speech.
+    capHeard = (kind === 'scan');
+    if (seed) { for (var i = 0; i < ring.length; i++) { cap.push(ring[i]); capLen += ring[i].length; } }
+    ring = []; ringLen = 0;
+    if (kind === 'command') setState('listening', 'LISTENING…');
+    else setState('scanning', 'CAPTURING…');
+  }
+
+  function endCapture() {
+    var kind = mode, blocks = cap, len = capLen;
+    cap = null;
+    var ms = (len / srcRate) * 1000;
+    if (!capHeard || ms < MIN_CLIP_MS) { goIdle(); return; }
+
+    var flat = new Float32Array(len), off = 0;
+    for (var i = 0; i < blocks.length; i++) { flat.set(blocks[i], off); off += blocks[i].length; }
+    var data = b64(encodeWav(resample(flat, srcRate, TARGET_RATE)));
+
+    mode = 'busy'; busySince = Date.now();
+    if (kind === 'scan') {
+      setState('transcribing', 'CHECKING…');
+      if (!send({ type: 'audio', mode: 'scan', data: data })) goIdle();
+    } else {
+      setState('transcribing', 'TRANSCRIBING…');
+      if (!send({ type: 'audio', data: data })) goIdle();
+    }
+  }
+
+  function onScanResult(text) {
+    if (mode !== 'busy') return;                // stale reply, we already moved on
+    var t = (text || '').trim();
+    if (!t) { goIdle(); return; }
+    var m = WAKE_RE.exec(t);
+    if (!m) { goIdle(); return; }               // heard something, not for us
+
+    var rest = t.slice(m.index + m[0].length).replace(/^[\s,.:;!?-]+/, '').trim();
+    if (WAKE_RE.test(rest)) rest = '';           // "jarvis jarvis" is not a command
+    if (rest.split(/\s+/).filter(Boolean).length >= 1) {
+      // "Jarvis, what's the weather" — wake word and command in one breath.
+      // The server echoes a transcript, so don't log it twice here.
+      mode = 'busy'; busySince = Date.now();
+      setState('thinking', 'THINKING…');
+      if (!send({ type: 'text', text: rest, speak: true })) goIdle();
+    } else {
+      // Bare "Jarvis" — open the command window and capture the next utterance.
+      beginCapture('command', false);
+    }
+  }
+
+  // The ScriptProcessor is now only a tape recorder: it buffers PCM. Every
+  // decision (is this speech? is the utterance over?) belongs to vadTick().
+  function onAudio(e) {
+    var input = e.inputBuffer.getChannelData(0);
+    if (mode === 'busy' || mode === 'speaking' || mode === 'nomic' || mode === 'boot') {
+      ring = []; ringLen = 0;            // never let JARVIS hear itself
+      return;
+    }
+    var block = new Float32Array(input); // copy, the buffer is reused
+    if (mode === 'idle') { pushRing(block); return; }
+    if (cap) { cap.push(block); capLen += block.length; }
+  }
+
+  // ---------------------------------------------------------------- VAD
+  // AnalyserNode -> getByteTimeDomainData -> RMS, every ~50ms. The noise floor
+  // is an exponential moving average of the RMS measured during silence only,
+  // so it tracks fans/AC/traffic without ever learning the user's voice.
+  function vadTick() {
+    if (!analyser) return;
+    analyser.getByteTimeDomainData(vadBuf);
+    var sum = 0, i, s;
+    for (i = 0; i < vadBuf.length; i++) { s = (vadBuf[i] - 128) / 128; sum += s * s; }
+    var rms = Math.sqrt(sum / vadBuf.length);
+
+    lastLevel = lastLevel * 0.7 + rms * 0.3;
+    levelEl.style.width = Math.min(100, lastLevel * 900) + '%';
+
+    if (mode === 'nomic') return;
+    if (mode === 'busy' || mode === 'speaking') { speechMs = 0; silenceMs = 0; return; }
+
+    var loud = rms > Math.max(noiseFloor * SPEECH_MARGIN, ABS_MIN_RMS);
+    if (loud) {
+      speechMs += VAD_TICK_MS; silenceMs = 0;
+    } else {
+      silenceMs += VAD_TICK_MS; speechMs = 0;
+      var a = (mode === 'boot') ? WARM_ALPHA : FLOOR_ALPHA;
+      noiseFloor += a * (rms - noiseFloor);
+      if (noiseFloor < FLOOR_MIN) noiseFloor = FLOOR_MIN;
+      if (noiseFloor > FLOOR_MAX) noiseFloor = FLOOR_MAX;
+    }
+    var voice = speechMs >= SPEECH_MIN_MS;
+
+    if (mode === 'boot') return;         // still calibrating the room
+
+    if (mode === 'idle') {
+      // Real speech only. Ambient noise never reaches the backend.
+      if (voice) beginCapture('scan', true);
+      return;
+    }
+
+    // scan | command
+    if (voice) { capHeard = true; capWaited = 0; }
+    else if (!capHeard) { capWaited += VAD_TICK_MS; }
+
+    var ms = (capLen / srcRate) * 1000;
+    var hang = (mode === 'scan') ? SCAN_HANG_MS : CMD_HANG_MS;
+    var max = (mode === 'scan') ? SCAN_MAX_MS : CMD_MAX_MS;
+    if ((capHeard && silenceMs >= hang) || ms >= max) { endCapture(); return; }
+    if (!capHeard && capWaited >= ((mode === 'command') ? CMD_WAIT_MS : 1200)) goIdle();
+  }
+
+  // ---------------------------------------------------------------- boot
+  function teardownMic() {
+    // "Enable mic" can be pressed repeatedly; never stack graphs or devices.
+    try { if (vadTimer) clearInterval(vadTimer); } catch (e) {}
+    try { if (proc) proc.onaudioprocess = null; } catch (e) {}
+    try { if (srcNode) srcNode.disconnect(); } catch (e) {}
+    try { if (analyser) analyser.disconnect(); } catch (e) {}
+    try { if (proc) proc.disconnect(); } catch (e) {}
+    try { if (sink) sink.disconnect(); } catch (e) {}
+    try { if (stream) stream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) {}
+    try { if (ctx) ctx.close(); } catch (e) {}
+    vadTimer = null; analyser = null; vadBuf = null;
+    ctx = srcNode = proc = sink = stream = null;
+    noiseFloor = 0.004; speechMs = 0; silenceMs = 0;
+    ring = []; ringLen = 0; cap = null; capLen = 0;
+  }
+
+  async function startMic() {
+    teardownMic();
+    micOk = false;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+      });
+    } catch (err) {
+      mode = 'nomic';
+      setDead('MIC BLOCKED — ' + (err && err.name ? err.name : 'error'));
+      retryBtn.classList.add('show');
+      return;
+    }
+    retryBtn.classList.remove('show');
+    micOk = true;
+
+    var AC = window.AudioContext || window.webkitAudioContext;
+    ctx = new AC();
+    srcRate = ctx.sampleRate;
+    srcNode = ctx.createMediaStreamSource(stream);
+    proc = ctx.createScriptProcessor(4096, 1, 1);
+    ringCap = Math.ceil((PREROLL_MS / 1000) * srcRate);
+    proc.onaudioprocess = onAudio;
+    // ScriptProcessor only ticks when connected to the destination; a muted
+    // gain node keeps the mic out of the speakers.
+    sink = ctx.createGain(); sink.gain.value = 0;
+    srcNode.connect(proc); proc.connect(sink); sink.connect(ctx.destination);
+
+    // AnalyserNode drives the VAD. It is a passive tap — no output path needed.
+    analyser = ctx.createAnalyser();
+    analyser.fftSize = VAD_FFT;
+    analyser.smoothingTimeConstant = 0;
+    vadBuf = new Uint8Array(analyser.fftSize);
+    srcNode.connect(analyser);
+    vadTimer = setInterval(vadTick, VAD_TICK_MS);
+
+    try { await ctx.resume(); } catch (e) {}
+    if (ctx.state !== 'running') unlockBtn.classList.add('show');
+
+    // Losing the device (unplug, OS steal) must not wedge the state machine.
+    stream.getAudioTracks().forEach(function (t) {
+      t.onended = function () {
+        micOk = false; mode = 'nomic';
+        setDead('MIC LOST — CLICK ENABLE MIC'); retryBtn.classList.add('show');
+      };
+    });
+
+    mode = 'boot';
+    setState('idle', 'CALIBRATING…');
+    setTimeout(function () { if (mode === 'boot') goIdle(); }, CALIBRATE_MS);
+  }
+
+  unlockBtn.onclick = async function () {
+    if (ctx) { try { await ctx.resume(); } catch (e) {} }
+    // The playback analyser has its own context; it must be unlocked too or the
+    // TTS routed through it would play silent after a gesture-gated autoplay.
+    if (ampCtx) { try { await ampCtx.resume(); } catch (e) {} }
+    try { await new Audio('data:audio/mp3;base64,//uQx' + 'A'.repeat(20)).play(); } catch (e) {}
+    audioUnlocked = true;
+    unlockBtn.classList.remove('show');
+  };
+  retryBtn.onclick = function () { retryBtn.classList.remove('show'); mode = 'boot'; startMic(); };
+
+  // Watchdog: nothing may stay stuck, ever.
+  setInterval(function () {
+    if (mode === 'busy' && Date.now() - busySince > BUSY_TIMEOUT) {
+      goIdle();
+      notice('TIMED OUT — STANDBY');
+    }
+    if (ctx && ctx.state === 'suspended' && micOk) unlockBtn.classList.add('show');
+  }, 1000);
+
+  setHudSpeed(1);
+  connect();
+  startMic();
+})();
+</script>
+</body>
+</html>

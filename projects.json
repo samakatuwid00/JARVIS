@@ -1,0 +1,30 @@
+{
+  "my-app": {
+    "path": "C:/Users/deped/Documents/Portfolio/my-app",
+    "dev_cmd": "npm run dev",
+    "url": "http://localhost:5173"
+  },
+  "new-my-app": {
+    "path": "C:/Users/deped/Documents/Portfolio/new-my-app",
+    "dev_cmd": "npm run dev",
+    "url": "http://localhost:5173"
+  },
+  "lrmis-main": {
+    "path": "C:/Users/deped/Documents/lrmis-main",
+    "dev_cmd": "vite",
+    "url": "http://localhost:5173"
+  },
+  "sticky-brain": {
+    "path": "C:/Users/deped/Documents/sticky-brain",
+    "dev_cmd": "npm run dev",
+    "url": "",
+    "note": "Electron app (npm run dev launches the desktop window, not a localhost URL). JARVIS starts it; no browser tab to open."
+  },
+  "irimsv": {
+    "path": "C:/Users/deped/Documents/irims-v library backup/June 25, 2026/irimsv-library-system",
+    "dev_cmd": "",
+    "url": "https://srv1766366.hstgr.cloud/",
+    "vault_secret": "iRIMS-V",
+    "note": "No live Vite repo found on disk (only backups). 'path' points at the backup folder so the entry validates. JARVIS opens the cloud dev server and auto-logs in with the vault creds (wiki/secrets/iRIMS-V). Set 'path' to the real repo once cloned; remove 'vault_secret' if you'd rather sign in by hand."
+  }
+}

@@ -1,0 +1,19 @@
+# JARVIS - Just A Rather Very Intelligent System
+Voice-activated AI assistant with local STT/TTS and Google Gemini brain.
+
+# Voice
+sounddevice>=0.4.6
+soundfile>=0.12.1
+numpy>=1.24.0
+faster-whisper>=0.10.0
+edge-tts>=6.1.0
+
+# AI Brain - Google Gemini (FREE tier)
+google-generativeai>=0.8.0
+
+# Browser automation (ask_chatgpt)
+playwright>=1.40.0
+
+# Utilities
+python-dotenv>=1.0.0
+rich>=13.0.0

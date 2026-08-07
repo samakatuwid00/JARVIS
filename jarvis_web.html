@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>JARVIS - Voice Visual Interface</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #0a0a0a;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      overflow: hidden;
+      font-family: 'Courier New', monospace;
+    }
+    #jarvis-container {
+      position: relative;
+      width: 400px;
+      height: 400px;
+    }
+    #orb {
+      position: absolute;
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: radial-gradient(circle, #00ffff, #0099ff);
+      box-shadow: 0 0 30px #00ffff, 0 0 50px #0099ff;
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+      transition: all 0.3s ease;
+    }
+    #orb.listening {
+      background: radial-gradient(circle, #ff6600, #ff3300);
+      box-shadow: 0 0 30px #ff6600, 0 0 50px #ff3300;
+      animation: pulse 1s infinite;
+    }
+    #orb.speaking {
+      background: radial-gradient(circle, #ff00ff, #cc00cc);
+      box-shadow: 0 0 30px #ff00ff, 0 0 50px #cc00cc;
+    }
+    @keyframes pulse {
+      0%, 100% { transform: translate(-50%, -50%) scale(1); }
+      50% { transform: translate(-50%, -50%) scale(1.2); }
+    }
+    #status {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: #00ff00;
+      font-size: 14px;
+      text-align: center;
+      pointer-events: none;
+    }
+    #connection-indicator {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: #ff0000;
+      animation: blink 2s infinite;
+    }
+    @keyframes blink {
+      0%, 50% { opacity: 1; }
+      51%, 100% { opacity: 0; }
+    }
+    #connection-indicator.connected {
+      background: #00ff00;
+    }
+  </style>
+</head>
+<body>
+  <div id="jarvis-container">
+    <div id="orb"></div>
+    <div id="status">Jarvis AI Ready</div>
+    <div id="connection-indicator"></div>
+  </div>
+
+  <script>
+    const socket = new WebSocket(window.location.origin.replace('http', 'ws') + '/ws');
+    const orb = document.getElementById('orb');
+    const status = document.getElementById('status');
+    const indicator = document.getElementById('connection-indicator');
+
+    let audioContext;
+    let mediaStreamSource;
+    let audioProcessor;
+    let isRecording = false;
+    let orbAnimationId;
+    
+    // Orb animation
+    function animateOrb() {
+      const orbState = window.orbState;
+      orbState.pulse = (orbState.pulse || 0) + 0.02;
+      
+      let x = orbState.x;
+      let y = orbState.y;
+      x += orbState.vx;
+      y += orbState.vy;
+      
+      // Bounce off edges
+      if (x - 20 < 0 || x + 20 > 400) orbState.vx *= -1;
+      if (y - 20 < 0 || y + 20 > 400) orbState.vy *= -1;
+      
+      orbState.x = x;
+      orbState.y = y;
+      
+      orb.style.left = orbState.x + 'px';
+      orb.style.top = orbState.y + 'px';
+      
+      orb.style.transform = `translate(-50%, -50%) scale(${1 + Math.sin(orbState.pulse) * 0.1})`;
+      
+      requestAnimationFrame(animateOrb);
+    }
+    
+    // Audio recording setup
+    async function setupAudio() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        audioContext = new AudioContext();
+        mediaStreamSource = audioContext.createMediaStreamSource(stream);
+        
+        // Create audio processor for voice activity detection
+        audioProcessor = audioContext.createScriptProcessor(4096, 1, 1);
+        
+        audioProcessor.onaudioprocess = function(event) {
+          const input = event.inputBuffer.getChannelData(0);
+          // Simple VAD - check for audio activity
+          const volume = Math.max(...Array.from(input, Math.abs));
+          if (volume > 0.01 && !isRecording) {
+            isRecording = true;
+            orb.classList.add('listening');
+            sendAudioToServer(event.inputBuffer);
+          }
+        };
+        
+        mediaStreamSource.connect(audioProcessor);
+        audioProcessor.connect(audioContext.destination);
+        
+        status.textContent = "Jarvis Ready - Listening";
+        
+      } catch (error) {
+        console.error('Audio setup error:', error);
+        status.textContent = "Audio access denied";n      }
+    }
+    
+    function sendAudioToServer(buffer) {
+      // Convert audio buffer to base64
+      const array = new Float32Array(buffer.length);
+      for (let i = 0; i < buffer.length; i++) {
+        array[i] = buffer[i];
+      }
+      const blob = new Blob([array], { type: 'audio/wav' });
+      
+      socket.send(JSON.stringify({
+        type: 'audio',
+        data: await audioToBase64(blob)
+      }));
+    }
+    
+    async function audioToBase64(blob) {
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result.split(',')[1]);
+        reader.readAsDataURL(blob);
+      });
+    }
+    
+    socket.onopen = function() {
+      console.log('WebSocket connected');
+      indicator.classList.add('connected');
+      setupAudio();
+      animateOrb();
+    };
+    
+    socket.onmessage = function(event) {
+      const data = JSON.parse(event.data);
+      
+      if (data.type === 'response') {
+        status.textContent = data.text;
+        orb.classList.add('speaking');
+        setTimeout(() => {
+          orb.classList.remove('speaking');
+        }, 2000);
+      }
+      
+      if (data.type === 'wake_word_result') {
+        if (data.detected) {
+          status.textContent = "Wake word detected!";
+        }
+      }
+    };
+    
+    socket.onclose = function() {
+      console.log('WebSocket disconnected');
+      indicator.classList.remove('connected');
+      status.textContent = "Connection lost - reconnecting...";
+      setTimeout(() => window.location.reload(), 3000);
+    };
+    
+    // Send orb updates periodically
+    setInterval(() => {
+      socket.send(JSON.stringify({
+        type: 'orb_update',
+        state: window.orbState
+      }));
+    }, 100);
+    
+    // Wake word button
+    let isListening = false;
+    setInterval(() => {
+      if (!isListening) {
+        socket.send(JSON.stringify({
+          type: 'wake_word',
+          data: null
+        }));
+        isListening = true;
+        setTimeout(() => isListening = false, 5000);
+      }
+    }, 10000);
+  </script>
+</body>
+</html>
