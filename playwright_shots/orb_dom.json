@@ -1,0 +1,157 @@
+{
+  "canvas": {
+    "tag": "canvas",
+    "cls": "",
+    "style": "position: absolute; inset: 0px; width: 100%; height: 100%;",
+    "bg": "rgba(0, 0, 0, 0)",
+    "opacity": "1",
+    "zIndex": "auto",
+    "transform": "none",
+    "overflow": "clip",
+    "pos": "absolute",
+    "box": [
+      410,
+      114,
+      620,
+      620
+    ]
+  },
+  "host": {
+    "tag": "div",
+    "cls": "",
+    "style": "position: relative; width: min(92%, 100% - 24px, -280px + 100vh); max-height: calc(100% - 150px); margin-bottom: 52px; aspect-ratio: 1 / 1; animation: flick calc(9s/var(--spd,1)) linear infinite; tran",
+    "bg": "rgba(0, 0, 0, 0)",
+    "opacity": "1",
+    "zIndex": "auto",
+    "transform": "matrix(1, 0, 0, 1, 159, 0)",
+    "overflow": "visible",
+    "pos": "relative",
+    "box": [
+      410,
+      114,
+      620,
+      620
+    ]
+  },
+  "stage": {
+    "tag": "main",
+    "cls": "",
+    "style": "position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; border-left: 2px solid color-mix(in srgb,var(--holo,#ffb454) 45%,transparent);",
+    "bg": "rgba(0, 0, 0, 0)",
+    "opacity": "1",
+    "zIndex": "auto",
+    "transform": "none",
+    "overflow": "hidden",
+    "pos": "relative",
+    "box": [
+      0,
+      64,
+      1120,
+      772
+    ]
+  },
+  "mainChildren": [
+    {
+      "tag": "div",
+      "cls": "",
+      "style": "position: absolute; left: 14px; top: 0px; bottom: 0px; width: 10px; background: repeating-linear-gradient(0deg,color-mix(in srgb,var(--holo,#ffb454) 35%,transparent) 0 1px,transparent 1px 14px); opaci",
+      "bg": "rgba(0, 0, 0, 0)",
+      "opacity": "0.5",
+      "zIndex": "auto",
+      "transform": "none",
+      "overflow": "visible",
+      "pos": "absolute",
+      "box": [
+        16,
+        64,
+        10,
+        772
+      ]
+    },
+    {
+      "tag": "div",
+      "cls": "",
+      "style": "position: absolute; right: 14px; top: 0px; bottom: 0px; width: 10px; background: repeating-linear-gradient(0deg,color-mix(in srgb,var(--holo,#ffb454) 35%,transparent) 0 1px,transparent 1px 14px); opac",
+      "bg": "rgba(0, 0, 0, 0)",
+      "opacity": "0.5",
+      "zIndex": "auto",
+      "transform": "none",
+      "overflow": "visible",
+      "pos": "absolute",
+      "box": [
+        1096,
+        64,
+        10,
+        772
+      ]
+    },
+    {
+      "tag": "div",
+      "cls": "",
+      "style": "position: absolute; left: 36px; right: 36px; top: 16px; display: flex; justify-content: space-between; align-items: baseline; gap: 16px; pointer-events: none; font-size: 10px; font-weight: 600; letter",
+      "bg": "rgba(0, 0, 0, 0)",
+      "opacity": "1",
+      "zIndex": "auto",
+      "transform": "none",
+      "overflow": "visible",
+      "pos": "absolute",
+      "box": [
+        38,
+        80,
+        1046,
+        16
+      ]
+    },
+    {
+      "tag": "div",
+      "cls": "",
+      "style": "position: relative; width: min(92%, 100% - 24px, -280px + 100vh); max-height: calc(100% - 150px); margin-bottom: 52px; aspect-ratio: 1 / 1; animation: flick calc(9s/var(--spd,1)) linear infinite; tran",
+      "bg": "rgba(0, 0, 0, 0)",
+      "opacity": "1",
+      "zIndex": "auto",
+      "transform": "matrix(1, 0, 0, 1, 159, 0)",
+      "overflow": "visible",
+      "pos": "relative",
+      "box": [
+        410,
+        114,
+        620,
+        620
+      ]
+    },
+    {
+      "tag": "div",
+      "cls": "",
+      "style": "position: absolute; left: 50%; bottom: 40px; transform: translateX(-50%); width: min(640px, 88%); display: flex; flex-direction: column; gap: 9px; z-index: 5;",
+      "bg": "rgba(0, 0, 0, 0)",
+      "opacity": "1",
+      "zIndex": "5",
+      "transform": "matrix(1, 0, 0, 1, -320, 0)",
+      "overflow": "visible",
+      "pos": "absolute",
+      "box": [
+        241,
+        706,
+        640,
+        90
+      ]
+    },
+    {
+      "tag": "div",
+      "cls": "",
+      "style": "position: absolute; left: 36px; right: 36px; bottom: 16px; display: flex; justify-content: space-between; align-items: baseline; gap: 16px; pointer-events: none; font-size: 10px; font-weight: 600; let",
+      "bg": "rgba(0, 0, 0, 0)",
+      "opacity": "1",
+      "zIndex": "auto",
+      "transform": "none",
+      "overflow": "visible",
+      "pos": "absolute",
+      "box": [
+        38,
+        805,
+        1046,
+        16
+      ]
+    }
+  ]
+}

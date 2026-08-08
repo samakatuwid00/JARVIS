@@ -1,0 +1,45 @@
+JARVIS ORB "BLACK BOX" — IDENTIFICATION (identify-only, no code change)
+=====================================================================
+
+SYMPTOM REPORTED:
+  1. A solid black square/box overlapping the central orb.
+  2. A horizontal black bar beneath the orb.
+
+METHOD (Playwright + DOM/canvas probing, 1440x900, live server localhost:8000):
+  - Pixel profile of the orb canvas: centerDarkFraction = 0; no solid-black
+    run inside the canvas (only circular ring corners are dark bg).
+  - 40x40 brightness ASCII map of the canvas: clean glowing circular orb on
+    dark #0b0805 square background. NO rectangular dark region inset from the
+    edges, NO horizontal dark bar across the bottom.
+  - elementFromPoint() over orb center/upper/left/right/lower and over the bar
+    region (y~769): every hit element has background rgba(0,0,0,0) (transparent).
+    The only opaque-black element is the ROOT div (rgb(11,8,5)) = the page
+    background BEHIND everything; it is only "hit" because the orb canvas and
+    the z-index:5 caption panel are transparent.
+
+CONCLUSION:
+  In the CURRENT LIVE RENDER there is NO actual black box element and NO black
+  bar element, in either the DOM or the orb canvas. The orb is centered
+  (screen x=720, canvas 620x620) and unclipped.
+
+WHAT THE USER LIKELY SEES (not a bug in code):
+  - The orb canvas itself is a 620x620 DARK SQUARE (#0b0805) with the glowing
+    rings inset toward the center. The dark square + the dark strip below the
+    rings can read as "black boxes", but this is the intended holographic-
+    console aesthetic, not a defect.
+  - OR a STALE SCREENSHOT / CACHED PRE-FIX BUILD (the orb had a real clipping
+    defect before Claude's translateX fix). Hard-refresh (Ctrl+Shift+R) before
+    judging, per project rule.
+
+EVIDENCE FILES (playwright_shots/):
+  orb_ascii.txt        - 40x40 brightness map of the live orb canvas
+  orb_dom.json         - computed styles of orb host / main / main children
+  orb_profile.json     - per-row/col near-black band analysis
+  blackbox_probe.json  - elementFromPoint results over orb + bar region
+  jarvis_orb_crop.png  - tight crop of the orb region
+  jarvis_full.png      - full page
+
+NEXT STEP (only if user still sees a real black rectangle after hard-refresh):
+  Re-run identification at the user's EXACT window size and capture a screenshot
+  they can point at; if a real opaque-black element appears, it will show in
+  blackbox_probe.json with its exact style. Do not modify hud_artifact.html yet.

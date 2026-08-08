@@ -1,0 +1,12 @@
+{
+  "W": 1240,
+  "H": 1240,
+  "nearBlackCount": 735856,
+  "nearBlackBBox": {
+    "minX": 0,
+    "maxX": 1239,
+    "minY": 0,
+    "maxY": 1239
+  },
+  "totalPx": 1537600
+}

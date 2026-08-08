@@ -1,0 +1,11 @@
+# Local JARVIS brain: qwen3:4b-instruct with a context window big enough for
+# JARVIS's 21 tool schemas (~2.2k tokens) plus real conversation history.
+# The stock 4096 window leaves ~1.3k tokens after tools + system prompt, so
+# Ollama silently drops the oldest turns partway through a conversation.
+#
+# Build:  ollama create jarvis-qwen3 -f Modelfile.jarvis
+FROM qwen3:4b-instruct
+
+PARAMETER num_ctx 8192
+PARAMETER temperature 0.6
+PARAMETER top_p 0.95

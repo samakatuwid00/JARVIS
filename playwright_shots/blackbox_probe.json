@@ -1,0 +1,620 @@
+{
+  "vw": 1440,
+  "vh": 900,
+  "orbCx": 720,
+  "orbCy": 424,
+  "crateSrc": "uploads/pasted-1785974777742-0.png",
+  "points": [
+    {
+      "label": "orb-center",
+      "x": 720,
+      "y": 424,
+      "topMost": {
+        "tag": "canvas",
+        "bg": "rgba(0, 0, 0, 0)",
+        "opacity": "1",
+        "zIndex": "auto",
+        "pos": "absolute",
+        "style": "position: absolute; inset: 0px; width: 100%; height: 100%;"
+      },
+      "chain": [
+        {
+          "tag": "canvas",
+          "bg": "rgba(0, 0, 0, 0)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "absolute",
+          "style": "position: absolute; inset: 0px; width: 100%; height: 100%;"
+        },
+        {
+          "tag": "div",
+          "bg": "rgba(0, 0, 0, 0)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "relative",
+          "style": "position: relative; width: min(92%, 100% - 24px, -280px + 100vh); max-height: calc(100% - 150px); margin-bottom: 52px; aspect-ratio: 1 / 1; "
+        },
+        {
+          "tag": "main",
+          "bg": "rgba(0, 0, 0, 0)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "relative",
+          "style": "position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; border-left: 2px solid color-mix(in srgb,"
+        },
+        {
+          "tag": "div",
+          "bg": "rgb(11, 8, 5)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "relative",
+          "style": "position: relative; height: 100vh; display: grid; grid-template-rows: 64px minmax(0px, 1fr) 64px; grid-template-columns: minmax(0px, 1fr) cl"
+        }
+      ]
+    },
+    {
+      "label": "orb-upper",
+      "x": 720,
+      "y": 269,
+      "topMost": {
+        "tag": "canvas",
+        "bg": "rgba(0, 0, 0, 0)",
+        "opacity": "1",
+        "zIndex": "auto",
+        "pos": "absolute",
+        "style": "position: absolute; inset: 0px; width: 100%; height: 100%;"
+      },
+      "chain": [
+        {
+          "tag": "canvas",
+          "bg": "rgba(0, 0, 0, 0)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "absolute",
+          "style": "position: absolute; inset: 0px; width: 100%; height: 100%;"
+        },
+        {
+          "tag": "div",
+          "bg": "rgba(0, 0, 0, 0)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "relative",
+          "style": "position: relative; width: min(92%, 100% - 24px, -280px + 100vh); max-height: calc(100% - 150px); margin-bottom: 52px; aspect-ratio: 1 / 1; "
+        },
+        {
+          "tag": "main",
+          "bg": "rgba(0, 0, 0, 0)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "relative",
+          "style": "position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; border-left: 2px solid color-mix(in srgb,"
+        },
+        {
+          "tag": "div",
+          "bg": "rgb(11, 8, 5)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "relative",
+          "style": "position: relative; height: 100vh; display: grid; grid-template-rows: 64px minmax(0px, 1fr) 64px; grid-template-columns: minmax(0px, 1fr) cl"
+        }
+      ]
+    },
+    {
+      "label": "orb-left",
+      "x": 565,
+      "y": 424,
+      "topMost": {
+        "tag": "canvas",
+        "bg": "rgba(0, 0, 0, 0)",
+        "opacity": "1",
+        "zIndex": "auto",
+        "pos": "absolute",
+        "style": "position: absolute; inset: 0px; width: 100%; height: 100%;"
+      },
+      "chain": [
+        {
+          "tag": "canvas",
+          "bg": "rgba(0, 0, 0, 0)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "absolute",
+          "style": "position: absolute; inset: 0px; width: 100%; height: 100%;"
+        },
+        {
+          "tag": "div",
+          "bg": "rgba(0, 0, 0, 0)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "relative",
+          "style": "position: relative; width: min(92%, 100% - 24px, -280px + 100vh); max-height: calc(100% - 150px); margin-bottom: 52px; aspect-ratio: 1 / 1; "
+        },
+        {
+          "tag": "main",
+          "bg": "rgba(0, 0, 0, 0)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "relative",
+          "style": "position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; border-left: 2px solid color-mix(in srgb,"
+        },
+        {
+          "tag": "div",
+          "bg": "rgb(11, 8, 5)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "relative",
+          "style": "position: relative; height: 100vh; display: grid; grid-template-rows: 64px minmax(0px, 1fr) 64px; grid-template-columns: minmax(0px, 1fr) cl"
+        }
+      ]
+    },
+    {
+      "label": "orb-right",
+      "x": 875,
+      "y": 424,
+      "topMost": {
+        "tag": "canvas",
+        "bg": "rgba(0, 0, 0, 0)",
+        "opacity": "1",
+        "zIndex": "auto",
+        "pos": "absolute",
+        "style": "position: absolute; inset: 0px; width: 100%; height: 100%;"
+      },
+      "chain": [
+        {
+          "tag": "canvas",
+          "bg": "rgba(0, 0, 0, 0)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "absolute",
+          "style": "position: absolute; inset: 0px; width: 100%; height: 100%;"
+        },
+        {
+          "tag": "div",
+          "bg": "rgba(0, 0, 0, 0)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "relative",
+          "style": "position: relative; width: min(92%, 100% - 24px, -280px + 100vh); max-height: calc(100% - 150px); margin-bottom: 52px; aspect-ratio: 1 / 1; "
+        },
+        {
+          "tag": "main",
+          "bg": "rgba(0, 0, 0, 0)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "relative",
+          "style": "position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; border-left: 2px solid color-mix(in srgb,"
+        },
+        {
+          "tag": "div",
+          "bg": "rgb(11, 8, 5)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "relative",
+          "style": "position: relative; height: 100vh; display: grid; grid-template-rows: 64px minmax(0px, 1fr) 64px; grid-template-columns: minmax(0px, 1fr) cl"
+        }
+      ]
+    },
+    {
+      "label": "orb-lower",
+      "x": 720,
+      "y": 660,
+      "topMost": {
+        "tag": "canvas",
+        "bg": "rgba(0, 0, 0, 0)",
+        "opacity": "1",
+        "zIndex": "auto",
+        "pos": "absolute",
+        "style": "position: absolute; inset: 0px; width: 100%; height: 100%;"
+      },
+      "chain": [
+        {
+          "tag": "canvas",
+          "bg": "rgba(0, 0, 0, 0)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "absolute",
+          "style": "position: absolute; inset: 0px; width: 100%; height: 100%;"
+        },
+        {
+          "tag": "div",
+          "bg": "rgba(0, 0, 0, 0)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "relative",
+          "style": "position: relative; width: min(92%, 100% - 24px, -280px + 100vh); max-height: calc(100% - 150px); margin-bottom: 52px; aspect-ratio: 1 / 1; "
+        },
+        {
+          "tag": "main",
+          "bg": "rgba(0, 0, 0, 0)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "relative",
+          "style": "position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; border-left: 2px solid color-mix(in srgb,"
+        },
+        {
+          "tag": "div",
+          "bg": "rgb(11, 8, 5)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "relative",
+          "style": "position: relative; height: 100vh; display: grid; grid-template-rows: 64px minmax(0px, 1fr) 64px; grid-template-columns: minmax(0px, 1fr) cl"
+        }
+      ]
+    },
+    {
+      "label": "bar-x30",
+      "x": 596,
+      "y": 769,
+      "topMost": {
+        "tag": "div",
+        "bg": "rgba(0, 0, 0, 0)",
+        "opacity": "1",
+        "zIndex": "5",
+        "pos": "absolute",
+        "style": "position: absolute; left: 50%; bottom: 40px; transform: translateX(-50%); width: min(640px, 88%); display: flex; flex-direction: column; gap"
+      },
+      "chain": [
+        {
+          "tag": "div",
+          "bg": "rgba(0, 0, 0, 0)",
+          "opacity": "1",
+          "zIndex": "5",
+          "pos": "absolute",
+          "style": "position: absolute; left: 50%; bottom: 40px; transform: translateX(-50%); width: min(640px, 88%); display: flex; flex-direction: column; gap"
+        },
+        {
+          "tag": "main",
+          "bg": "rgba(0, 0, 0, 0)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "relative",
+          "style": "position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; border-left: 2px solid color-mix(in srgb,"
+        },
+        {
+          "tag": "div",
+          "bg": "rgb(11, 8, 5)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "relative",
+          "style": "position: relative; height: 100vh; display: grid; grid-template-rows: 64px minmax(0px, 1fr) 64px; grid-template-columns: minmax(0px, 1fr) cl"
+        },
+        {
+          "tag": "div.sc-host",
+          "bg": "rgba(0, 0, 0, 0)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "static",
+          "style": ""
+        }
+      ]
+    },
+    {
+      "label": "bar-x40",
+      "x": 658,
+      "y": 769,
+      "topMost": {
+        "tag": "div",
+        "bg": "rgba(0, 0, 0, 0)",
+        "opacity": "1",
+        "zIndex": "5",
+        "pos": "absolute",
+        "style": "position: absolute; left: 50%; bottom: 40px; transform: translateX(-50%); width: min(640px, 88%); display: flex; flex-direction: column; gap"
+      },
+      "chain": [
+        {
+          "tag": "div",
+          "bg": "rgba(0, 0, 0, 0)",
+          "opacity": "1",
+          "zIndex": "5",
+          "pos": "absolute",
+          "style": "position: absolute; left: 50%; bottom: 40px; transform: translateX(-50%); width: min(640px, 88%); display: flex; flex-direction: column; gap"
+        },
+        {
+          "tag": "main",
+          "bg": "rgba(0, 0, 0, 0)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "relative",
+          "style": "position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; border-left: 2px solid color-mix(in srgb,"
+        },
+        {
+          "tag": "div",
+          "bg": "rgb(11, 8, 5)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "relative",
+          "style": "position: relative; height: 100vh; display: grid; grid-template-rows: 64px minmax(0px, 1fr) 64px; grid-template-columns: minmax(0px, 1fr) cl"
+        },
+        {
+          "tag": "div.sc-host",
+          "bg": "rgba(0, 0, 0, 0)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "static",
+          "style": ""
+        }
+      ]
+    },
+    {
+      "label": "bar-x50",
+      "x": 720,
+      "y": 769,
+      "topMost": {
+        "tag": "div",
+        "bg": "rgba(0, 0, 0, 0)",
+        "opacity": "1",
+        "zIndex": "5",
+        "pos": "absolute",
+        "style": "position: absolute; left: 50%; bottom: 40px; transform: translateX(-50%); width: min(640px, 88%); display: flex; flex-direction: column; gap"
+      },
+      "chain": [
+        {
+          "tag": "div",
+          "bg": "rgba(0, 0, 0, 0)",
+          "opacity": "1",
+          "zIndex": "5",
+          "pos": "absolute",
+          "style": "position: absolute; left: 50%; bottom: 40px; transform: translateX(-50%); width: min(640px, 88%); display: flex; flex-direction: column; gap"
+        },
+        {
+          "tag": "main",
+          "bg": "rgba(0, 0, 0, 0)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "relative",
+          "style": "position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; border-left: 2px solid color-mix(in srgb,"
+        },
+        {
+          "tag": "div",
+          "bg": "rgb(11, 8, 5)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "relative",
+          "style": "position: relative; height: 100vh; display: grid; grid-template-rows: 64px minmax(0px, 1fr) 64px; grid-template-columns: minmax(0px, 1fr) cl"
+        },
+        {
+          "tag": "div.sc-host",
+          "bg": "rgba(0, 0, 0, 0)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "static",
+          "style": ""
+        }
+      ]
+    },
+    {
+      "label": "bar-x60",
+      "x": 782,
+      "y": 769,
+      "topMost": {
+        "tag": "div",
+        "bg": "rgba(0, 0, 0, 0)",
+        "opacity": "1",
+        "zIndex": "5",
+        "pos": "absolute",
+        "style": "position: absolute; left: 50%; bottom: 40px; transform: translateX(-50%); width: min(640px, 88%); display: flex; flex-direction: column; gap"
+      },
+      "chain": [
+        {
+          "tag": "div",
+          "bg": "rgba(0, 0, 0, 0)",
+          "opacity": "1",
+          "zIndex": "5",
+          "pos": "absolute",
+          "style": "position: absolute; left: 50%; bottom: 40px; transform: translateX(-50%); width: min(640px, 88%); display: flex; flex-direction: column; gap"
+        },
+        {
+          "tag": "main",
+          "bg": "rgba(0, 0, 0, 0)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "relative",
+          "style": "position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; border-left: 2px solid color-mix(in srgb,"
+        },
+        {
+          "tag": "div",
+          "bg": "rgb(11, 8, 5)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "relative",
+          "style": "position: relative; height: 100vh; display: grid; grid-template-rows: 64px minmax(0px, 1fr) 64px; grid-template-columns: minmax(0px, 1fr) cl"
+        },
+        {
+          "tag": "div.sc-host",
+          "bg": "rgba(0, 0, 0, 0)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "static",
+          "style": ""
+        }
+      ]
+    },
+    {
+      "label": "bar-x70",
+      "x": 844,
+      "y": 769,
+      "topMost": {
+        "tag": "div",
+        "bg": "rgba(0, 0, 0, 0)",
+        "opacity": "1",
+        "zIndex": "5",
+        "pos": "absolute",
+        "style": "position: absolute; left: 50%; bottom: 40px; transform: translateX(-50%); width: min(640px, 88%); display: flex; flex-direction: column; gap"
+      },
+      "chain": [
+        {
+          "tag": "div",
+          "bg": "rgba(0, 0, 0, 0)",
+          "opacity": "1",
+          "zIndex": "5",
+          "pos": "absolute",
+          "style": "position: absolute; left: 50%; bottom: 40px; transform: translateX(-50%); width: min(640px, 88%); display: flex; flex-direction: column; gap"
+        },
+        {
+          "tag": "main",
+          "bg": "rgba(0, 0, 0, 0)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "relative",
+          "style": "position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; border-left: 2px solid color-mix(in srgb,"
+        },
+        {
+          "tag": "div",
+          "bg": "rgb(11, 8, 5)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "relative",
+          "style": "position: relative; height: 100vh; display: grid; grid-template-rows: 64px minmax(0px, 1fr) 64px; grid-template-columns: minmax(0px, 1fr) cl"
+        },
+        {
+          "tag": "div.sc-host",
+          "bg": "rgba(0, 0, 0, 0)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "static",
+          "style": ""
+        }
+      ]
+    },
+    {
+      "label": "bar-x80",
+      "x": 906,
+      "y": 769,
+      "topMost": {
+        "tag": "main",
+        "bg": "rgba(0, 0, 0, 0)",
+        "opacity": "1",
+        "zIndex": "auto",
+        "pos": "relative",
+        "style": "position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; border-left: 2px solid color-mix(in srgb,"
+      },
+      "chain": [
+        {
+          "tag": "main",
+          "bg": "rgba(0, 0, 0, 0)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "relative",
+          "style": "position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; border-left: 2px solid color-mix(in srgb,"
+        },
+        {
+          "tag": "div",
+          "bg": "rgb(11, 8, 5)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "relative",
+          "style": "position: relative; height: 100vh; display: grid; grid-template-rows: 64px minmax(0px, 1fr) 64px; grid-template-columns: minmax(0px, 1fr) cl"
+        },
+        {
+          "tag": "div.sc-host",
+          "bg": "rgba(0, 0, 0, 0)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "static",
+          "style": ""
+        },
+        {
+          "tag": "div",
+          "bg": "rgba(0, 0, 0, 0)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "static",
+          "style": ""
+        }
+      ]
+    },
+    {
+      "label": "bar-x90",
+      "x": 968,
+      "y": 769,
+      "topMost": {
+        "tag": "main",
+        "bg": "rgba(0, 0, 0, 0)",
+        "opacity": "1",
+        "zIndex": "auto",
+        "pos": "relative",
+        "style": "position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; border-left: 2px solid color-mix(in srgb,"
+      },
+      "chain": [
+        {
+          "tag": "main",
+          "bg": "rgba(0, 0, 0, 0)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "relative",
+          "style": "position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; border-left: 2px solid color-mix(in srgb,"
+        },
+        {
+          "tag": "div",
+          "bg": "rgb(11, 8, 5)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "relative",
+          "style": "position: relative; height: 100vh; display: grid; grid-template-rows: 64px minmax(0px, 1fr) 64px; grid-template-columns: minmax(0px, 1fr) cl"
+        },
+        {
+          "tag": "div.sc-host",
+          "bg": "rgba(0, 0, 0, 0)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "static",
+          "style": ""
+        },
+        {
+          "tag": "div",
+          "bg": "rgba(0, 0, 0, 0)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "static",
+          "style": ""
+        }
+      ]
+    },
+    {
+      "label": "below-bar",
+      "x": 720,
+      "y": 814,
+      "topMost": {
+        "tag": "main",
+        "bg": "rgba(0, 0, 0, 0)",
+        "opacity": "1",
+        "zIndex": "auto",
+        "pos": "relative",
+        "style": "position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; border-left: 2px solid color-mix(in srgb,"
+      },
+      "chain": [
+        {
+          "tag": "main",
+          "bg": "rgba(0, 0, 0, 0)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "relative",
+          "style": "position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; border-left: 2px solid color-mix(in srgb,"
+        },
+        {
+          "tag": "div",
+          "bg": "rgb(11, 8, 5)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "relative",
+          "style": "position: relative; height: 100vh; display: grid; grid-template-rows: 64px minmax(0px, 1fr) 64px; grid-template-columns: minmax(0px, 1fr) cl"
+        },
+        {
+          "tag": "div.sc-host",
+          "bg": "rgba(0, 0, 0, 0)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "static",
+          "style": ""
+        },
+        {
+          "tag": "div",
+          "bg": "rgba(0, 0, 0, 0)",
+          "opacity": "1",
+          "zIndex": "auto",
+          "pos": "static",
+          "style": ""
+        }
+      ]
+    }
+  ]
+}
