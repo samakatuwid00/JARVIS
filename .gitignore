@@ -7,6 +7,8 @@ __pycache__/
 .env
 .env.local
 *.env
+.env.bak.*
+*.env.bak*
 
 # Generated report artifacts
 Documents/
