@@ -388,6 +388,9 @@ def _load_turbovec_index(vault_root: Path):
     # Try the in-memory rebuild approach (works around the load() bug)
     emb_path = vault_root / "turbovec_embeddings.npy"
     notes_path = vault_root / "turbovec_notes.txt"
+    # Also check .automation/ subdirectory (where deploy script writes it)
+    if not notes_path.exists():
+        notes_path = vault_root / ".automation" / "turbovec_notes.txt"
     meta_path = vault_root / "turbovec_meta.json"
 
     if not emb_path.exists() or not notes_path.exists():
@@ -497,6 +500,9 @@ def search_vault_semantic(query: str, limit: int = 10) -> str:
 
         # Build note list from saved paths (must match how index was built)
         notes_path = VAULT_ROOT / "turbovec_notes.txt"
+        # Also check .automation/ subdirectory
+        if not notes_path.exists():
+            notes_path = VAULT_ROOT / ".automation" / "turbovec_notes.txt"
         if notes_path.exists():
             note_rels = notes_path.read_text(encoding="utf-8").strip().split("\n")
             notes = [(rel, VAULT_ROOT / rel.replace("/", "\\")) for rel in note_rels]
