@@ -64,8 +64,40 @@ def _add_body(doc, text: str):
             doc.add_paragraph(line)
 
 
-def compose_report(topic: str, output_path: str = None) -> str:
-    """Write an accomplishment report on `topic` as a .docx and return its path.
+def _add_verbatim(doc, sources, used):
+    """Write the conversations out word for word, no rewriting.
+
+    The synthesised report is the brain's paraphrase, which is wrong when the
+    point is evidence: a quote has to be the words that were actually said. Each
+    conversation becomes a heading and its messages are copied through unchanged.
+    """
+    speaker = re.compile(r"^\s*(you|user|assistant|chatgpt)\s*[:\-]\s*(.*)$", re.I)
+    for title, body in zip(used, sources):
+        doc.add_heading(title, level=1)
+        for raw in str(body).splitlines():
+            line = raw.rstrip()
+            if not line.strip():
+                continue
+            m = speaker.match(line)
+            if m:
+                # "You: what indexes..." is a label AND a message. Heading the
+                # whole line turned every message into a heading and made the
+                # document unreadable, so split them.
+                doc.add_heading(m.group(1).strip().title(), level=3)
+                rest = m.group(2).strip()
+                if rest:
+                    doc.add_paragraph(rest)
+            else:
+                doc.add_paragraph(line)
+
+
+def compose_report(topic: str, output_path: str = None, verbatim: bool = False) -> str:
+    """Write a report on `topic` as a .docx and return its path.
+
+    verbatim=False (default) has the brain synthesise an accomplishment report.
+    verbatim=True copies the conversation text through word for word instead —
+    use it when the document has to quote what was actually said rather than
+    summarise it.
 
     Requires the automation browser to be signed in to ChatGPT; when it is not,
     this returns the one-time sign-in instruction and does nothing else.
@@ -103,6 +135,29 @@ def compose_report(topic: str, output_path: str = None) -> str:
             return (f"I found {len(titles)} conversations about '{topic}' but could "
                     "not read any of them back, so I have written nothing.")
 
+        # Verbatim mode never reaches the brain: no paraphrase, and no truncation
+        # to a prompt budget, so the document holds what was actually said.
+        if verbatim:
+            from docx import Document as _Document
+            today_v = datetime.date.today().isoformat()
+            if output_path:
+                try:
+                    from tools import _resolve_write_path
+                    out_v = _resolve_write_path(output_path)
+                except Exception:
+                    out_v = Path(output_path).expanduser()
+            else:
+                out_v = DEFAULT_DIR / f"ChatGPT Transcript {_safe_filename(topic)} {today_v}.docx"
+            out_v.parent.mkdir(parents=True, exist_ok=True)
+            doc_v = _Document()
+            doc_v.add_heading(f"ChatGPT Transcript: {topic}", level=0)
+            doc_v.add_paragraph(f"Copied verbatim on {today_v}")
+            doc_v.add_paragraph("Conversations: " + "; ".join(used))
+            _add_verbatim(doc_v, sources, used)
+            doc_v.save(str(out_v))
+            return (f"Saved a verbatim transcript on {topic} to {out_v}, copied word "
+                    f"for word from {len(used)} conversation(s).")
+
         material = "\n\n".join(sources)[:12000]
         import brain_gemini
 
@@ -120,7 +175,14 @@ def compose_report(topic: str, output_path: str = None) -> str:
 
         today = datetime.date.today().isoformat()
         if output_path:
-            out = Path(output_path).expanduser()
+            # Same rule write_file uses: a bare or relative name must not resolve
+            # against the server's working directory, or the .docx lands among the
+            # source files while JARVIS reports it saved to Documents.
+            try:
+                from tools import _resolve_write_path
+                out = _resolve_write_path(output_path)
+            except Exception:
+                out = Path(output_path).expanduser()
         else:
             out = DEFAULT_DIR / f"Accomplishment Report {_safe_filename(topic)} {today}.docx"
         out.parent.mkdir(parents=True, exist_ok=True)

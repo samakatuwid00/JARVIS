@@ -132,11 +132,12 @@ class VoiceEngine:
         """Transcribe audio to text using Whisper."""
         # Convert to float32 for Whisper
         audio_float = audio.astype(np.float32) / 32768.0
+        audio_float = self._normalize(audio_float)
 
         segments, info = self.whisper.transcribe(
             audio_float,
             language="en",
-            beam_size=1,
+            beam_size=5,
             vad_filter=True,
             vad_parameters=VAD_PARAMETERS,
             initial_prompt=WHISPER_INITIAL_PROMPT,
@@ -207,7 +208,7 @@ class VoiceEngine:
         segments, info = self.whisper.transcribe(
             audio_float,
             language="en",
-            beam_size=1,
+            beam_size=5,
             vad_filter=True,
             vad_parameters=VAD_PARAMETERS,
             initial_prompt=WHISPER_INITIAL_PROMPT,

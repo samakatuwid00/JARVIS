@@ -14,7 +14,10 @@ except ImportError:
 from config import (GEMINI_API_KEY, GEMINI_MODEL, JARVIS_USE_9ROUTER, ROUTER_BASE_URL,
                    ROUTER_MODEL, ROUTER_API_KEY, JARVIS_USE_GROQ, GROQ_API_KEY,
                    GROQ_BASE_URL, GROQ_MODEL, JARVIS_USE_CEREBRAS, CEREBRAS_API_KEY,
-                   CEREBRAS_BASE_URL, CEREBRAS_MODEL)
+                   CEREBRAS_BASE_URL, CEREBRAS_MODEL, JARVIS_USE_OLLAMA,
+                   JARVIS_PREFER_LOCAL, OLLAMA_BASE_URL, OLLAMA_MODEL,
+                   OLLAMA_API_KEY, OLLAMA_MAX_TOKENS, OLLAMA_TIMEOUT,
+                   OLLAMA_KEEP_WARM, OLLAMA_WARM_INTERVAL, JARVIS_LOCAL_ONLY)
 
 MAX_HISTORY = 20
 
@@ -46,6 +49,32 @@ How you speak:
   figure or single token; wrap the answer in a short spoken sentence, e.g. "That's twenty-five."
 - Address the user respectfully, and reference your capabilities only when it is relevant
 - Keep responses concise for voice output (avoid long lists)
+
+TOOL DISCIPLINE — NON-NEGOTIABLE:
+Facts about THIS machine, the weather, files, or anything live must come from a tool call,
+never from memory. You do not know this computer's operating system, its files, or the
+weather unless a tool returned that to you in this conversation. If you are asked and have
+no tool result for it, call the tool. Never guess an operating system — never say Linux or
+macOS from assumption.
+
+Anything involving ChatGPT goes through ask_chatgpt (to prompt it),
+search_chatgpt_history (to find past conversations) or open_chatgpt_conversation (to read
+one). Those tools open and drive the browser themselves. Never use open_application or a
+URL for ChatGPT — that opens a tab you cannot control, so the user gets nothing. You do not
+need to call browser_status first.
+
+MUSIC IS AN ACTION, NOT A PROMISE:
+If the user asks you to play, queue, or put on any music — a song, an artist, a genre, a
+playlist, "some lo-fi", anything at all — you must call the play_music tool with the query.
+Saying "I will play music for you", "playing music for you", "here is your music", "I'll put
+that on" or "now playing" WITHOUT calling play_music is a failure; the user hears you promise
+music and nothing ever starts. Words like "I'll play" or "now playing" are permitted only
+AFTER play_music has returned a success. Never describe music as playing unless play_music
+was just called in this turn and came back with a Playing result. If play_music returns an
+error, say plainly what it reported, for instance "I tried to start it but playback didn't
+begin — you may need to press play in the Brave window." This holds for every backend, and
+it matters most on the local model, which has a habit of narrating an action instead of
+performing it.
 
 When using tools:
 - Execute commands carefully
@@ -140,6 +169,15 @@ TOOL_DECLARATIONS = [
             "query": {"type": "STRING", "description": "Search query"}
         }, "required": ["query"]}),
 
+    _make_tool("write_to_notepad",
+        "Put text into a Notepad window for the user to read or keep. Use this for any "
+        "request to write something in Notepad, jot a note, or show text in Notepad. "
+        "The text is saved to a .txt file and opened in Notepad.",
+        {"type": "object", "properties": {
+            "content": {"type": "STRING", "description": "The text to put in Notepad"},
+            "filename": {"type": "STRING", "description": "Optional file name; defaults to a timestamped note in Documents"}
+        }, "required": ["content"]}),
+
     _make_tool("open_application", "Open an application by name or path.",
         {"type": "object", "properties": {
             "app": {"type": "STRING", "description": "Application name or executable path"}
@@ -191,6 +229,17 @@ TOOL_DECLARATIONS = [
         "it never changes the vault.",
         {"type": "object", "properties": {
             "query": {"type": "STRING", "description": "Text to search the vault for"},
+            "limit": {"type": "INTEGER", "description": "Maximum notes to return (default 10)"}
+        }, "required": ["query"]}),
+
+    _make_tool("search_vault_semantic",
+        "Search the Second Brain vault semantically using turbovec vector index. "
+        "Matches by meaning, not just keywords — finds notes that are conceptually "
+        "relevant even if they don't contain the query's words. Falls back to "
+        "search_vault (substring search) if no turbovec index exists. "
+        "Strictly read-only; never changes the vault.",
+        {"type": "object", "properties": {
+            "query": {"type": "STRING", "description": "Semantic search query — describe what you are looking for, not just keywords"},
             "limit": {"type": "INTEGER", "description": "Maximum notes to return (default 10)"}
         }, "required": ["query"]}),
 
@@ -246,8 +295,21 @@ TOOL_DECLARATIONS = [
         "and never sends anything. Requires the browser to be signed in.",
         {"type": "object", "properties": {
             "topic": {"type": "STRING", "description": "What the report is about"},
-            "output_path": {"type": "STRING", "description": "Where to save the .docx (optional)"}
-        }, "required": ["topic"]})
+            "output_path": {"type": "STRING", "description": "Where to save the .docx (optional)"},
+            "verbatim": {"type": "BOOLEAN", "description":
+                "True to copy the conversations word for word instead of summarising. "
+                "Use when the user says quote, copy, paste, exact or word for word."}
+        }, "required": ["topic"]}),
+
+    _make_tool("delegate_task",
+        "Hand a task to a CLI coding agent (claude or hermes) when it is beyond your "
+        "own tools — multi-file code changes, debugging, or work needing a full agent "
+        "session. This is slow because the agent runs its own session, so use it only "
+        "when no other tool can do the job.",
+        {"type": "object", "properties": {
+            "task": {"type": "STRING", "description": "The task to hand over, in full"},
+            "agent": {"type": "STRING", "description": "claude (default) or hermes"}
+        }, "required": ["task"]})
 ]
 
 TOOLS = types.Tool(function_declarations=TOOL_DECLARATIONS)
@@ -368,18 +430,61 @@ class JarvisBrain:
         self.model = GEMINI_MODEL
         self.conversation = []
         self._use_mock = False
-        self._use_router = JARVIS_USE_9ROUTER
-        self._use_groq = JARVIS_USE_GROQ and bool(GROQ_API_KEY)
-        self._use_cerebras = JARVIS_USE_CEREBRAS and bool(CEREBRAS_API_KEY)
+        self._use_router = (not JARVIS_LOCAL_ONLY) and (JARVIS_USE_9ROUTER)
+        self._use_groq = (not JARVIS_LOCAL_ONLY) and (JARVIS_USE_GROQ and bool(GROQ_API_KEY))
+        self._use_cerebras = (not JARVIS_LOCAL_ONLY) and (JARVIS_USE_CEREBRAS and bool(CEREBRAS_API_KEY))
+        self._use_ollama = JARVIS_USE_OLLAMA
+        self._prefer_local = JARVIS_PREFER_LOCAL and JARVIS_USE_OLLAMA
+        # Local-only: no cloud tier is even attempted, and Gemini (which the
+        # chain otherwise always falls through to) is skipped as well.
+        self._local_only = JARVIS_LOCAL_ONLY and JARVIS_USE_OLLAMA
+        if self._local_only:
+            self._prefer_local = True
+        # Counter, NOT a mutex. This only tells the keep-warm pinger to skip its
+        # tick while a real turn is generating. It was a Lock, and a turn that
+        # hung inside a tool (a wedged browser call) held it forever, so every
+        # later turn blocked on acquire and JARVIS stopped answering anything at
+        # all — including questions that never touch the local model. A counter
+        # cannot deadlock: nobody ever waits on it.
+        self._ollama_active = 0
+        if self._use_ollama:
+            where = ("LOCAL ONLY - no cloud fallback" if self._local_only
+                     else ("primary" if self._prefer_local else "last resort before demo mode"))
+            print(f"[JARVIS] Ollama backend enabled ({OLLAMA_MODEL}, {where}).", flush=True)
+            self._preload_ollama()
         if self._use_groq:
             print(f"[JARVIS] Groq backend enabled ({GROQ_MODEL}).", flush=True)
         if self._use_cerebras:
             print(f"[JARVIS] Cerebras backend enabled ({CEREBRAS_MODEL}).", flush=True)
         self.last_backend = None
+        # Per-turn telemetry for the HUD. Only fields the answering backend
+        # actually reported are set, so the panel can leave a row blank instead
+        # of inventing a number.
+        self.last_stats = {}
 
     def think(self, user_input: str) -> str:
         """Route to 9router (mimo) first; then Groq (free tier); then Gemini; then mock."""
         self.conversation.append({"role": "user", "content": user_input})
+
+        # Each turn reports its own telemetry; clear last turn's so a backend that
+        # records nothing cannot leave stale numbers on the HUD.
+        self.last_stats = {}
+
+        # 0) Local first, only when explicitly preferred (offline / on-device).
+        if self._prefer_local:
+            try:
+                result = self._think_ollama(user_input)
+                if result:
+                    self.last_backend = "ollama"
+                    self.last_stats["backend"] = "ollama"
+                    return result
+            except Exception as e:
+                # Do not claim a cloud fallback that local-only mode forbids —
+                # the log was the main reason it looked like JARVIS was still
+                # reaching for Claude or Gemini.
+                print(f"[JARVIS] Ollama unavailable ({e})"
+                      + ("; local-only, not falling back." if self._local_only
+                         else "; falling back to cloud..."))
 
         # 1) Primary: 9router / mimo
         if self._use_router:
@@ -387,6 +492,7 @@ class JarvisBrain:
                 result = self._think_router(user_input)
                 if result:
                     self.last_backend = "router"
+                    self.last_stats["backend"] = "router"
                     return result
             except Exception as e:
                 print(f"[JARVIS] 9router/mimo unavailable ({e}); falling back...")
@@ -397,6 +503,7 @@ class JarvisBrain:
                 result = self._think_groq(user_input)
                 if result:
                     self.last_backend = "groq"
+                    self.last_stats["backend"] = "groq"
                     return result
             except Exception as e:
                 err = str(e)
@@ -411,6 +518,7 @@ class JarvisBrain:
                 result = self._think_cerebras(user_input)
                 if result:
                     self.last_backend = "cerebras"
+                    self.last_stats["backend"] = "cerebras"
                     return result
             except Exception as e:
                 err = str(e)
@@ -419,22 +527,44 @@ class JarvisBrain:
                 else:
                     print(f"[JARVIS] Cerebras unavailable ({e}); falling back to Gemini...")
 
-        # 3) Fallback: Gemini
+        # 3) Fallback: Gemini — skipped entirely in local-only mode, which is the
+        #    difference between "prefer local" and "never leave this machine".
+        gemini_err = None
+        if self._local_only:
+            return ("I could not get an answer from the local model, and local-only "
+                    "mode is on, so I did not fall back to a cloud service.")
         try:
             result = self._think_gemini(user_input)
             if result:
                 self.last_backend = "gemini"
                 return result
         except Exception as e:
-            err = str(e)
-            if "429" in err or "RESOURCE_EXHAUSTED" in err or "quota" in err.lower():
-                print("[JARVIS] Gemini quota exceeded, switching to demo mode...")
-                self._use_mock = True
-                self._mock_brain = MockJarvisBrain()
-                self._mock_brain.conversation = self.conversation.copy()
-                self.last_backend = "mock"
-                return self._mock_brain.think(user_input)
-            return f"I encountered an error: {err}"
+            gemini_err = str(e)
+            print(f"[JARVIS] Gemini unavailable ({gemini_err}); trying local Ollama...")
+
+        # 4) Local Ollama — the last backend that can produce a real answer.
+        #    Everything past this point is canned demo text, so a small local
+        #    model beats it even though it is well below the cloud tiers.
+        if self._use_ollama and not self._prefer_local:
+            try:
+                result = self._think_ollama(user_input)
+                if result:
+                    self.last_backend = "ollama"
+                    return result
+            except Exception as e:
+                print(f"[JARVIS] Ollama unavailable ({e}); switching to demo mode...")
+
+        # 5) Demo mode, or surface a non-quota Gemini error as before
+        if gemini_err:
+            if not ("429" in gemini_err or "RESOURCE_EXHAUSTED" in gemini_err
+                    or "quota" in gemini_err.lower()):
+                return f"I encountered an error: {gemini_err}"
+            print("[JARVIS] Gemini quota exceeded, switching to demo mode...")
+            self._use_mock = True
+            self._mock_brain = MockJarvisBrain()
+            self._mock_brain.conversation = self.conversation.copy()
+            self.last_backend = "mock"
+            return self._mock_brain.think(user_input)
 
         return "I apologize, but I encountered an issue processing that request."
 
@@ -468,11 +598,26 @@ class JarvisBrain:
                     messages.append({"role": "assistant", "content": msg["content"]})
             elif msg["role"] == "tool":
                 for tr in msg["content"]:
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tr["tool_call_id"],
-                        "content": tr["content"]
-                    })
+                    # The Gemini path records tool results with no tool_call_id and
+                    # no matching assistant tool_calls entry. Replaying one as a
+                    # tool-role message raised KeyError('tool_call_id'), which this
+                    # loop reported as "backend unavailable" — so ONE Gemini tool
+                    # turn poisoned the history and every later turn failed on all
+                    # four OpenAI-compatible backends straight through to demo
+                    # mode. Fold those into plain assistant text instead: the
+                    # context survives and the protocol stays valid.
+                    tcid = tr.get("tool_call_id")
+                    if tcid:
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tcid,
+                            "content": tr.get("content", "")
+                        })
+                    else:
+                        messages.append({
+                            "role": "assistant",
+                            "content": f"[{tr.get('name', 'tool')} result] {tr.get('content', '')}"
+                        })
 
         pending = []
         for _ in range(10):
@@ -537,6 +682,223 @@ class JarvisBrain:
 
         return None
 
+    def _preload_ollama(self):
+        """Load the local model into RAM in the background at startup.
+
+        A cold turn costs ~47s measured; warm turns are ~4-7s. Doing it on a
+        daemon thread means JARVIS boots immediately and the model is hot by
+        the time a cloud tier fails over to it.
+
+        This must issue the *same shape* of call the real path uses — chat, with
+        the tool schemas attached. Preloading via /api/generate makes /api/ps
+        report the model resident, but the first /v1 chat+tools request then
+        reloads anyway and still pays the full ~47s (measured twice). Sending
+        the real shape also leaves the ~2.7k-token tool prefix in Ollama's
+        prompt cache, which is most of the warm-up win.
+        """
+        import threading
+        import time
+
+        def _warm_once():
+            from openai import OpenAI
+            OpenAI(base_url=OLLAMA_BASE_URL, api_key=OLLAMA_API_KEY) \
+                .chat.completions.create(
+                    model=OLLAMA_MODEL,
+                    messages=[{"role": "system", "content": JARVIS_SYSTEM},
+                              {"role": "user", "content": "ready"}],
+                    tools=_openai_tools(),
+                    tool_choice="auto",
+                    max_tokens=1,
+                    timeout=300,
+                )
+
+        def _load():
+            try:
+                _warm_once()
+            except Exception as e:
+                print(f"[JARVIS] Ollama preload skipped ({e}).", flush=True)
+                return
+
+            if not OLLAMA_KEEP_WARM:
+                return
+            # Re-ping inside Ollama's eviction window so an idle gap never costs
+            # the user a cold rebuild. _ollama_active keeps this off the CPU while
+            # a real turn is generating — the ping is cheap but not free, and
+            # contending for the same 8 cores would slow the live answer.
+            while True:
+                time.sleep(OLLAMA_WARM_INTERVAL)
+                if self._ollama_active:
+                    continue
+                try:
+                    _warm_once()
+                except Exception:
+                    pass  # transient: the next tick tries again
+
+        threading.Thread(target=_load, daemon=True).start()
+
+    def _think_ollama(self, user_input: str) -> str:
+        """Call local Ollama (OpenAI-compatible) with tool loop."""
+        # try/finally, never a blocking acquire: a wedged turn must not be able
+        # to stop the next one from running.
+        self._ollama_active += 1
+        try:
+            return self._think_openai_compat(
+                user_input,
+                base_url=OLLAMA_BASE_URL,
+                api_key=OLLAMA_API_KEY,
+                model=OLLAMA_MODEL,
+                max_tokens=OLLAMA_MAX_TOKENS,
+                timeout=OLLAMA_TIMEOUT,
+            )
+        finally:
+            self._ollama_active = max(0, self._ollama_active - 1)
+
+    def _think_openai_compat(self, user_input: str, base_url: str, api_key: str,
+                             model: str, max_tokens: int = 1024,
+                             timeout: int = 45) -> str:
+        """Generic OpenAI-compatible chat+tool loop.
+
+        The router/Groq/Cerebras methods below are three near-identical copies of
+        this loop; they are left alone rather than migrated, so adding a backend
+        cannot regress a working one. New backends should call this.
+        """
+        from openai import OpenAI
+
+        client = OpenAI(base_url=base_url, api_key=api_key)
+        otools = _openai_tools()
+
+        messages = [{"role": "system", "content": JARVIS_SYSTEM}]
+        for msg in self.conversation:
+            if msg["role"] == "user":
+                messages.append({"role": "user", "content": msg["content"]})
+            elif msg["role"] == "assistant":
+                if msg.get("tool_calls"):
+                    messages.append({
+                        "role": "assistant",
+                        "content": msg.get("content") or "",
+                        "tool_calls": [
+                            {
+                                "id": tc["id"],
+                                "type": "function",
+                                "function": {"name": tc["name"], "arguments": json.dumps(tc["arguments"])}
+                            } for tc in msg["tool_calls"]
+                        ]
+                    })
+                else:
+                    messages.append({"role": "assistant", "content": msg["content"]})
+            elif msg["role"] == "tool":
+                for tr in msg["content"]:
+                    # The Gemini path records tool results with no tool_call_id and
+                    # no matching assistant tool_calls entry. Replaying one as a
+                    # tool-role message raised KeyError('tool_call_id'), which this
+                    # loop reported as "backend unavailable" — so ONE Gemini tool
+                    # turn poisoned the history and every later turn failed on all
+                    # four OpenAI-compatible backends straight through to demo
+                    # mode. Fold those into plain assistant text instead: the
+                    # context survives and the protocol stays valid.
+                    tcid = tr.get("tool_call_id")
+                    if tcid:
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tcid,
+                            "content": tr.get("content", "")
+                        })
+                    else:
+                        messages.append({
+                            "role": "assistant",
+                            "content": f"[{tr.get('name', 'tool')} result] {tr.get('content', '')}"
+                        })
+
+        pending = []
+        # Telemetry for the HUD. Tokens accumulate across the loop because a turn
+        # that calls a tool makes several round trips, and the interesting number
+        # is what the whole turn cost, not the last leg.
+        import time as _time
+        _t0 = _time.time()
+        _prompt_tok = _eval_tok = 0
+        _gen_secs = 0.0
+        _tools_used = []
+
+        for _ in range(10):
+            _leg = _time.time()
+            response = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                tools=otools,
+                tool_choice="auto",
+                max_tokens=max_tokens,
+                timeout=timeout,
+            )
+            _gen_secs += _time.time() - _leg
+            _usage = getattr(response, "usage", None)
+            if _usage:
+                _prompt_tok = getattr(_usage, "prompt_tokens", 0) or _prompt_tok
+                _eval_tok += getattr(_usage, "completion_tokens", 0) or 0
+
+            if not response.choices:
+                return None
+            message = response.choices[0].message
+
+            if message.tool_calls:
+                pending.append({
+                    "role": "assistant",
+                    "content": message.content or "",
+                    "tool_calls": [{
+                        "id": tc.id,
+                        "name": tc.function.name,
+                        "arguments": _safe_json(tc.function.arguments)
+                    } for tc in message.tool_calls]
+                })
+                messages.append({
+                    "role": "assistant",
+                    "content": message.content or "",
+                    "tool_calls": [{
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {"name": tc.function.name, "arguments": tc.function.arguments}
+                    } for tc in message.tool_calls]
+                })
+
+                for tc in message.tool_calls:
+                    _tool_t0 = _time.time()
+                    result = execute_tool(tc.function.name, _safe_json(tc.function.arguments),
+                                          user_input)
+                    _tools_used.append({"name": tc.function.name,
+                                        "ms": int((_time.time() - _tool_t0) * 1000)})
+                    pending.append({
+                        "role": "tool",
+                        "content": [{
+                            "name": tc.function.name,
+                            "content": result,
+                            "tool_call_id": tc.id
+                        }]
+                    })
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": result
+                    })
+                continue
+
+            text = _clean_for_speech((message.content or "").strip())
+            if not text:
+                return None
+            pending.append({"role": "assistant", "content": text})
+            self.conversation.extend(pending)
+            self.last_stats = {
+                "model": model,
+                "prompt_tokens": _prompt_tok,
+                "eval_tokens": _eval_tok,
+                # Generation rate only: wall-clock would be diluted by tool
+                # time and understate what the model is actually doing.
+                "tok_per_sec": round(_eval_tok / _gen_secs, 1) if _gen_secs > 0 else None,
+                "latency_ms": int((_time.time() - _t0) * 1000),
+                "tools": _tools_used,
+            }
+            return text
+
+        return None
+
     def _think_groq(self, user_input: str) -> str:
         """Call Groq (OpenAI-compatible) with tool loop. Same wiring as the
         9router path, just a different base_url/key/model."""
@@ -570,11 +932,26 @@ class JarvisBrain:
                     messages.append({"role": "assistant", "content": msg["content"]})
             elif msg["role"] == "tool":
                 for tr in msg["content"]:
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tr["tool_call_id"],
-                        "content": tr["content"]
-                    })
+                    # The Gemini path records tool results with no tool_call_id and
+                    # no matching assistant tool_calls entry. Replaying one as a
+                    # tool-role message raised KeyError('tool_call_id'), which this
+                    # loop reported as "backend unavailable" — so ONE Gemini tool
+                    # turn poisoned the history and every later turn failed on all
+                    # four OpenAI-compatible backends straight through to demo
+                    # mode. Fold those into plain assistant text instead: the
+                    # context survives and the protocol stays valid.
+                    tcid = tr.get("tool_call_id")
+                    if tcid:
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tcid,
+                            "content": tr.get("content", "")
+                        })
+                    else:
+                        messages.append({
+                            "role": "assistant",
+                            "content": f"[{tr.get('name', 'tool')} result] {tr.get('content', '')}"
+                        })
 
         pending = []
         for _ in range(10):
@@ -672,11 +1049,26 @@ class JarvisBrain:
                     messages.append({"role": "assistant", "content": msg["content"]})
             elif msg["role"] == "tool":
                 for tr in msg["content"]:
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tr["tool_call_id"],
-                        "content": tr["content"]
-                    })
+                    # The Gemini path records tool results with no tool_call_id and
+                    # no matching assistant tool_calls entry. Replaying one as a
+                    # tool-role message raised KeyError('tool_call_id'), which this
+                    # loop reported as "backend unavailable" — so ONE Gemini tool
+                    # turn poisoned the history and every later turn failed on all
+                    # four OpenAI-compatible backends straight through to demo
+                    # mode. Fold those into plain assistant text instead: the
+                    # context survives and the protocol stays valid.
+                    tcid = tr.get("tool_call_id")
+                    if tcid:
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tcid,
+                            "content": tr.get("content", "")
+                        })
+                    else:
+                        messages.append({
+                            "role": "assistant",
+                            "content": f"[{tr.get('name', 'tool')} result] {tr.get('content', '')}"
+                        })
 
         pending = []
         for _ in range(10):
@@ -788,6 +1180,12 @@ class JarvisBrain:
                         tool_results = []
                         for fc in function_calls:
                             result = execute_tool(fc.name, dict(fc.args), user_input)
+                            # Deliberately no tool_call_id: Gemini records the
+                            # assistant turn without a matching tool_calls entry,
+                            # so an id here would make the replayed pair invalid
+                            # for the OpenAI-compatible backends rather than just
+                            # unparseable. The replay folds id-less results into
+                            # assistant text instead, which is protocol-safe.
                             tool_results.append({
                                 "name": fc.name,
                                 "content": result
@@ -817,11 +1215,15 @@ class JarvisBrain:
         return "I apologize, but I encountered an issue processing that request."
 
     def reset(self):
-        """Clear conversation history."""
+        """Clear conversation history and the per-turn telemetry."""
         self.conversation = []
         self._use_mock = False
-        self._use_router = JARVIS_USE_9ROUTER
+        # Re-enabling the router unconditionally here would have quietly undone
+        # local-only mode the first time the context was cleared, putting the
+        # cloud back in the chain without anything on screen saying so.
+        self._use_router = (not JARVIS_LOCAL_ONLY) and JARVIS_USE_9ROUTER
         self.last_backend = None
+        self.last_stats = {}
         if hasattr(self, '_mock_brain'):
             self._mock_brain.reset()
         return "Memory cleared. Ready for new commands."

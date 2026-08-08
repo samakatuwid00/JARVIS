@@ -17,6 +17,7 @@ once and the session survives restarts. JARVIS never handles your credentials.
 
 import os
 import queue
+import re
 import threading
 import traceback
 from pathlib import Path
@@ -314,12 +315,79 @@ def _goto_chatgpt(page):
         page.wait_for_timeout(1200)
 
 
-def search_chatgpt_history(query: str, limit: int = 10) -> str:
-    """Search past ChatGPT conversation titles read off the sidebar links.
+# Words that carry no signal in a spoken request like "find my past
+# conversations about the school hiring accomplishments".
+_SEARCH_STOPWORDS = {
+    "the", "a", "an", "of", "and", "or", "for", "to", "in", "on", "at", "by",
+    "my", "me", "our", "your", "is", "are", "was", "were", "be", "about",
+    "from", "with", "that", "this", "it", "any", "all", "some", "get", "give",
+    "find", "search", "look", "show", "tell", "past", "previous", "old",
+    "history", "conversation", "conversations", "chat", "chats", "chatgpt",
+}
 
-    Deliberately does not touch the site's own search box: it does not reliably
-    filter the sidebar, so results came back flaky. Reading the loaded sidebar
-    titles and filtering them here is boring and repeatable.
+
+def _query_terms(query: str):
+    """Split a natural-language query into the words worth matching on."""
+    words = re.findall(r"[a-z0-9]+", (query or "").lower())
+    terms = [w for w in words if len(w) > 2 and w not in _SEARCH_STOPWORDS]
+    return terms or words
+
+
+def _collect_convo_titles(page):
+    titles = []
+    for link in page.locator(CONVO_LINK).all():
+        try:
+            title = " ".join((link.inner_text() or "").split())
+        except Exception:
+            continue
+        if title and title not in titles:
+            titles.append(title)
+    return titles
+
+
+def _titles_via_site_search(page, term: str):
+    """Widen the candidate set using ChatGPT's own search box.
+
+    The sidebar renders only ~10 recent chats and has no scroll container, so
+    sidebar-only search can never see older conversations. The search box does
+    reach further back. Best effort: any failure falls back to the sidebar.
+    """
+    try:
+        btn = page.locator("[aria-label*='Search' i]").first
+        if not btn.is_visible(timeout=2000):
+            return []
+        btn.click()
+        page.wait_for_timeout(1200)
+        fields = page.locator("input[type='text'], input:not([type]), textarea, [contenteditable='true']")
+        box = None
+        for i in range(min(fields.count(), 10)):
+            if fields.nth(i).is_visible():
+                box = fields.nth(i)
+                break
+        if box is None:
+            return []
+        box.fill(term)
+        page.wait_for_timeout(2500)
+        found = _collect_convo_titles(page)
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(400)
+        return found
+    except Exception:
+        try:
+            page.keyboard.press("Escape")
+        except Exception:
+            pass
+        return []
+
+
+def search_chatgpt_history(query: str, limit: int = 10) -> str:
+    """Search past ChatGPT conversation titles.
+
+    Matching is per-word, not whole-phrase: a spoken query like "history of
+    hiring school accomplishments" will never appear verbatim in a title, so the
+    old substring test reported "no conversations matched" for every
+    natural-language request. Titles are scored by how many query terms they
+    contain and the best are returned.
     """
 
     def job(page):
@@ -327,22 +395,42 @@ def search_chatgpt_history(query: str, limit: int = 10) -> str:
         if _logged_out(page):
             return "[Error] Not signed in to ChatGPT. Sign in to the open Chrome window first."
 
-        titles = []
-        for link in page.locator(CONVO_LINK).all():
-            try:
-                title = " ".join((link.inner_text() or "").split())
-            except Exception:
-                continue
-            if title and title not in titles:
-                titles.append(title)
+        terms = _query_terms(query)
+        titles = _collect_convo_titles(page)
+        if terms:
+            # Drive the site search with the most distinctive term.
+            for extra in _titles_via_site_search(page, max(terms, key=len)):
+                if extra not in titles:
+                    titles.append(extra)
+        searched = len(titles)
 
-        needle = query.lower()
-        hits = [t for t in titles if needle in t.lower()][:limit]
+        needle = (query or "").lower().strip()
+        scored = []
+        for t in titles:
+            tl = t.lower()
+            if needle and needle in tl:
+                score = 1.0
+            elif terms:
+                score = sum(1 for w in terms if w in tl) / len(terms)
+            else:
+                score = 0.0
+            if score > 0:
+                scored.append((score, t))
+        scored.sort(key=lambda p: (-p[0], p[1]))
+        strong = [t for s, t in scored if s >= 0.5]
+        hits = (strong or [t for _, t in scored])[:limit]
 
         if not hits:
-            return f"No past ChatGPT conversations matched '{query}'."
+            # Say what was actually searched. ChatGPT exposes only recent chats
+            # plus whatever its search box returns, so an empty result is NOT
+            # evidence that the conversation does not exist.
+            return (f"No conversation titles matched '{query}'. Searched {searched} "
+                    f"conversation title(s) — ChatGPT only exposes recent chats plus "
+                    f"its search results, so older conversations may exist but be "
+                    f"unreachable from the sidebar.")
         listed = "; ".join(f"{i}. {t[:110]}" for i, t in enumerate(hits, 1))
-        return f"Found {len(hits)} conversation(s) matching '{query}': {listed}"
+        return (f"Found {len(hits)} of {searched} conversation title(s) matching "
+                f"'{query}': {listed}")
 
     return _worker.call(job, timeout=150)
 
@@ -421,8 +509,13 @@ def browser_status() -> str:
         # The signed-in check only means anything on chatgpt.com itself - on a blank
         # tab the login markers are simply absent, which is not the same as signed in.
         if "chatgpt.com" not in page.url:
-            return (f"Browser is open at {page.url}, not on ChatGPT, "
-                    "so I cannot tell yet whether the session is signed in.")
+            # Reporting "I cannot tell yet" read as a dead end: the model gave up
+            # and fell back to open_application with a bare URL, which opens a
+            # tab it cannot drive. ask_chatgpt and search_chatgpt_history both
+            # navigate on their own, so say that instead of stopping here.
+            return (f"Browser is ready (currently at {page.url}). It is not on ChatGPT yet, "
+                    "which is normal — ask_chatgpt and search_chatgpt_history navigate there "
+                    "themselves. Go ahead and call the tool you need; do not open a URL.")
         return f"Browser open at {page.url}. Signed in: {not _logged_out(page)}"
 
     return _worker.call(job, timeout=60)
@@ -452,6 +545,12 @@ def open_for_login() -> str:
         _goto_chatgpt(page)
         page.wait_for_timeout(1500)
         page.bring_to_front()
+        # Absent login markers only mean "signed in" ON chatgpt.com. On a blank
+        # or still-loading tab they are absent too, and reporting "signed in
+        # already" there sent the user away without ever signing in.
+        if "chatgpt.com" not in page.url:
+            return (f"could not reach ChatGPT (still at {page.url}) - "
+                    "sign-in state unknown")
         return ("signed in already" if not _logged_out(page)
                 else "waiting for you to sign in")
 

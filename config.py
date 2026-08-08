@@ -61,19 +61,54 @@ if not CEREBRAS_API_KEY:
         except Exception:
             CEREBRAS_API_KEY = ""
 
+# --- Ollama (local, OpenAI-compatible) --------------------------------------
+# Last real backend before demo mode: runs on this machine, so it answers when
+# every cloud tier is quota-walled or the network is down. Measured 14.1 tok/s
+# on qwen3:4b-instruct (CPU only — Ollama has no ROCm path for this iGPU).
+# Set JARVIS_PREFER_LOCAL=true to try it FIRST instead of last (offline work,
+# battery, or keeping a conversation entirely on-device).
+JARVIS_USE_OLLAMA = os.getenv("JARVIS_USE_OLLAMA", "true").lower() == "true"
+JARVIS_PREFER_LOCAL = os.getenv("JARVIS_PREFER_LOCAL", "false").lower() == "true"
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+# jarvis-qwen3 is qwen3:4b-instruct rebuilt with num_ctx 8192 (Modelfile.jarvis).
+# The stock 4096 window is ~2.8k spent before the first user turn — 21 tool
+# schemas cost ~2.2k tokens — so history silently truncates mid-conversation.
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "jarvis-qwen3")
+# Ollama ignores the key, but the OpenAI client requires a non-empty string.
+OLLAMA_API_KEY = os.getenv("OLLAMA_API_KEY", "ollama")
+# 512 tokens at 14 tok/s is ~36s worst case; voice replies are far shorter.
+# The 45s timeout the cloud paths use would cut local replies off mid-sentence.
+OLLAMA_MAX_TOKENS = int(os.getenv("OLLAMA_MAX_TOKENS", "512"))
+OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "180"))
+# Ollama evicts an idle model after ~5 minutes, and the /v1 endpoint ignores
+# keep_alive, so the next turn pays a full cold prefix eval: measured 28.9s vs
+# 2.4s warm on the same request. A cheap 1-token ping on the real call shape
+# keeps the model resident AND the ~2.9k-token tool prefix in the prompt cache.
+# 240s stays comfortably inside the 5-minute eviction window.
+# Hard local-only switch. JARVIS_PREFER_LOCAL only reorders the chain — the
+# cloud tiers are still there and still answer when the local model errors, so
+# "local first" is not the same as "local only". This disables every cloud
+# backend AND the Gemini fallback, so nothing ever leaves the machine.
+JARVIS_LOCAL_ONLY = os.getenv("JARVIS_LOCAL_ONLY", "false").lower() == "true"
+OLLAMA_KEEP_WARM = os.getenv("OLLAMA_KEEP_WARM", "true").lower() == "true"
+OLLAMA_WARM_INTERVAL = int(os.getenv("OLLAMA_WARM_INTERVAL", "240"))
+
 # Audio
 SAMPLE_RATE = 16000
 CHANNELS = 1
 CHUNK_SIZE = 1024
 WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "cpu")
 WHISPER_COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "int8")
-WHISPER_MODEL = os.getenv("WHISPER_MODEL", "small.en")
+WHISPER_MODEL = os.getenv("WHISPER_MODEL", "medium.en")
 # Half of the 16 available cores; leaves headroom for TTS/server work.
 WHISPER_CPU_THREADS = int(os.getenv("WHISPER_CPU_THREADS", "8"))
 # Vocabulary bias so the wake word and domain terms decode cleanly.
 WHISPER_INITIAL_PROMPT = os.getenv(
     "WHISPER_INITIAL_PROMPT",
-    "Jarvis, Stark, workshop, archive, crate, analysis, system, online."
+    "JARVIS, Jarvis, Stark, DepEd, Department of Education, iRIMS-V, iRIMS, "
+    "LRMIS, IRIMS, Haristay, Two Goals, Manila, Philippines, Philippine, "
+    "dashboard, report, project, vault, compose, play music, YouTube Music, "
+    "Brave, analysis, system, online, open, search, weather."
 )
 
 # Wake Word
@@ -83,7 +118,9 @@ PORCUPINE_ACCESS_KEY = os.getenv("PORCUPINE_ACCESS_KEY", "")
 
 # TTS
 TTS_VOICE = os.getenv("TTS_VOICE", "en-GB-RyanNeural")
-TTS_RATE = os.getenv("TTS_RATE", "+0%")
+# +20% measured at 1.20x faster speech (8.93s -> 7.44s on a sample reply) while
+# still sounding natural on the Ryan neural voice.
+TTS_RATE = os.getenv("TTS_RATE", "+20%")
 TTS_VOLUME = os.getenv("TTS_VOLUME", "+0%")
 
 # Conversation

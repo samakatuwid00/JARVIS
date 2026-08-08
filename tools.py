@@ -1,5 +1,6 @@
 # System Tools - File ops, shell commands, web search
 import os
+import shutil
 import subprocess
 import json
 import platform
@@ -76,14 +77,53 @@ def read_file(path: str) -> str:
         return f"[Error] {str(e)}"
 
 
+# A bare filename used to resolve against the server's working directory, which
+# is the JARVIS source folder — "save my notes as notes.txt" buried the file
+# among the .py files where nobody would look for it. Spoken requests almost
+# never carry a directory, so an unqualified name belongs somewhere the user
+# actually opens.
+DEFAULT_WRITE_DIR = Path.home() / "Documents"
+
+
+# Folder names the model commonly prefixes ("Documents/notes.txt"). These are
+# meant relative to the user's home, never to the server's working directory.
+_USER_FOLDERS = {"documents", "desktop", "downloads", "pictures", "music",
+                 "videos", "onedrive"}
+
+
+def _resolve_write_path(path: str) -> Path:
+    """Expand `path`, keeping relative writes out of the JARVIS source folder.
+
+    Absolute paths are honoured as given. Everything else is anchored to the
+    user's own folders: a bare name goes to Documents, and a path that already
+    starts with a known user folder ("Documents/notes.txt") is joined onto the
+    home directory. Resolving those against the CWD produced files nested at
+    jarvis-demo\\Documents\\ while JARVIS told the user they were in Documents.
+    """
+    p = Path(str(path)).expanduser()
+    if p.is_absolute():
+        return p
+    parts = [q for q in p.parts if q not in (".", "")]
+    if not parts:
+        return DEFAULT_WRITE_DIR
+    if parts[0].lower() in _USER_FOLDERS:
+        return Path.home().joinpath(*parts)
+    if len(parts) > 1:
+        return DEFAULT_WRITE_DIR.joinpath(*parts)
+    return DEFAULT_WRITE_DIR / parts[0]
+
+
 def write_file(path: str, content: str, overwrite: bool = False) -> str:
     """Write content to a file. Refuses to clobber an existing file unless told to.
 
     JARVIS is driven by speech, and a misheard filename should not silently
     destroy an existing file, so replacing one is an explicit opt-in.
+
+    A filename with no directory lands in Documents (see _resolve_write_path),
+    not in whatever directory the server happens to be running from.
     """
     try:
-        p = Path(path).expanduser()
+        p = _resolve_write_path(path)
         if p.exists() and not overwrite:
             size = p.stat().st_size
             return (f"[Blocked] {p.name} already exists ({size:,} bytes) and I did not "
@@ -92,7 +132,8 @@ def write_file(path: str, content: str, overwrite: bool = False) -> str:
         existed = p.exists()
         p.write_text(content, encoding="utf-8")
         verb = "Replaced" if existed else "Written to"
-        return f"{verb} {path} ({len(content)} chars)"
+        # Report the resolved path: saying "notes.txt" leaves the user hunting.
+        return f"{verb} {p} ({len(content)} chars)"
     except Exception as e:
         return f"[Error] {str(e)}"
 
@@ -268,6 +309,231 @@ def search_vault(query: str, limit: int = 10) -> str:
                 + " | ".join(hits))
     except Exception as e:
         return f"[Error] {str(e)}"
+
+
+# --- turbovec semantic search ------------------------------------------------
+# The embedding model is loaded ONCE at import time. Loading it per query cost
+# 3-8s and was the reason semantic search took ~1:45s on a cache miss.
+_DEFAULT_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+
+try:
+    from sentence_transformers import SentenceTransformer
+    _EMBEDDING_MODEL = SentenceTransformer(_DEFAULT_EMBEDDING_MODEL)
+    _EMBEDDING_DIM = 384
+except Exception:
+    _EMBEDDING_MODEL = None
+    _EMBEDDING_DIM = None
+
+# Any non-default model named in turbovec_meta.json is loaded at most once.
+_extra_models = {}
+
+
+def _normalize_model_name(name: str) -> str:
+    """turbovec_meta.json may store the short name ('all-MiniLM-L6-v2')."""
+    return name.split("/")[-1] if name else ""
+
+
+def _get_embedding_model(name: str = None):
+    """Return a cached SentenceTransformer. Never loads the same model twice."""
+    if _EMBEDDING_MODEL is None:
+        return None
+    if not name or _normalize_model_name(name) == _normalize_model_name(_DEFAULT_EMBEDDING_MODEL):
+        return _EMBEDDING_MODEL
+    if name not in _extra_models:
+        try:
+            _extra_models[name] = SentenceTransformer(name)
+        except Exception:
+            _extra_models[name] = None
+    return _extra_models[name] or _EMBEDDING_MODEL
+
+
+# Module-level cache for turbovec index + model (avoids reload on every search)
+_turbovec_cache = None
+_turbovec_cache_vault = None
+
+
+def _load_turbovec_index(vault_root: Path):
+    """Load the persisted turbovec index and embedding model if available.
+
+    Returns (index, model, dim) or None if not available.
+    Never mutates the vault — read-only.
+
+    Uses module-level cache so the model + index are only loaded once per
+    process. Subsequent calls return the cached tuple instantly.
+
+    NOTE: turbovec 0.8.0's load() has a bug where search() returns empty
+    results after loading from disk. We work around this by rebuilding the
+    in-memory index from saved embeddings (.npy) — which is just a fast
+    prepare()+add() call, no re-embedding needed.
+    """
+    global _turbovec_cache, _turbovec_cache_vault
+
+    # Return cached result if same vault
+    if _turbovec_cache is not None and _turbovec_cache_vault == vault_root:
+        return _turbovec_cache
+
+    try:
+        import turbovec as tv
+        import numpy as np
+    except ImportError:
+        return None
+
+    if _EMBEDDING_MODEL is None:
+        return None
+
+    index_path = vault_root / "turbovec_index.tv"
+    if not index_path.exists():
+        return None
+
+    # Try the in-memory rebuild approach (works around the load() bug)
+    emb_path = vault_root / "turbovec_embeddings.npy"
+    notes_path = vault_root / "turbovec_notes.txt"
+    meta_path = vault_root / "turbovec_meta.json"
+
+    if not emb_path.exists() or not notes_path.exists():
+        # Fallback: try the broken load() — may return empty search results
+        try:
+            import struct
+            with open(index_path, "rb") as f:
+                header = f.read(16)
+                if len(header) >= 8 and header[:4] == b"TVPI":
+                    dim = struct.unpack("<H", header[6:8])[0]
+                else:
+                    dim = 384
+        except Exception:
+            dim = 384
+
+        model = _get_embedding_model()
+        if model is None:
+            return None
+
+        try:
+            index = tv.TurboQuantIndex(dim)
+            try:
+                index.prepare()
+            except TypeError:
+                pass
+            index.load(str(index_path))
+            _turbovec_cache = (index, model, dim)
+            _turbovec_cache_vault = vault_root
+            return index, model, dim
+        except Exception:
+            return None
+
+    # Primary path: rebuild from saved embeddings (works)
+    try:
+        import struct
+        with open(index_path, "rb") as f:
+            header = f.read(16)
+            if len(header) >= 8 and header[:4] == b"TVPI":
+                dim = struct.unpack("<H", header[6:8])[0]
+            else:
+                dim = 384
+    except Exception:
+        dim = 384
+
+    # Read metadata for model name
+    model_name = _DEFAULT_EMBEDDING_MODEL
+    if meta_path.exists():
+        import json as _json
+        try:
+            meta = _json.loads(meta_path.read_text(encoding="utf-8"))
+            model_name = meta.get("model", model_name)
+            dim = meta.get("dim", dim)
+        except Exception:
+            pass
+
+    # Embedding model comes from the module-level cache — no per-query load.
+    model = _get_embedding_model(model_name)
+    if model is None:
+        return None
+
+    # Load saved embeddings and rebuild index in-memory
+    try:
+        embeddings = np.load(str(emb_path))
+        if embeddings.shape[1] != dim:
+            dim = embeddings.shape[1]
+    except Exception:
+        return None
+
+    index = tv.TurboQuantIndex(dim)
+    try:
+        index.prepare()
+    except TypeError:
+        pass
+    index.add(embeddings)
+
+    result = (index, model, dim)
+    _turbovec_cache = result
+    _turbovec_cache_vault = vault_root
+    return result
+
+
+def search_vault_semantic(query: str, limit: int = 10) -> str:
+    """Search the vault semantically using turbovec vector index (READ-ONLY).
+
+    Uses the persisted turboquant index (turbovec_index.tv) if it exists in the
+    vault root. Embeds the query with sentence-transformers, then performs a
+    SIMD-accelerated nearest-neighbor search — returns results in sub-50ms.
+
+    Falls back to search_vault() if no index is available.
+    """
+    try:
+        if not VAULT_ROOT.exists():
+            return f"[Error] Vault not found at {VAULT_ROOT}"
+
+        result = _load_turbovec_index(VAULT_ROOT)
+        if result is None:
+            # Fallback to substring search
+            return search_vault(query, limit=limit)
+
+        index, model, dim = result
+
+        # Embed the query
+        q_vec = model.encode([query], normalize_embeddings=True).astype("float32")
+
+        # Vector search
+        scores, indices = index.search(q_vec, k=limit)
+
+        # Build note list from saved paths (must match how index was built)
+        notes_path = VAULT_ROOT / "turbovec_notes.txt"
+        if notes_path.exists():
+            note_rels = notes_path.read_text(encoding="utf-8").strip().split("\n")
+            notes = [(rel, VAULT_ROOT / rel.replace("/", "\\")) for rel in note_rels]
+        else:
+            notes = list(_vault_notes())
+
+        hits = []
+        for rank, (score, idx) in enumerate(zip(scores[0], indices[0])):
+            if idx >= len(notes):
+                continue
+            # Handle both tuple (rel, path) and bare Path
+            entry = notes[idx]
+            if isinstance(entry, tuple):
+                rel = entry[0]
+                note = entry[1]
+            else:
+                note = entry
+                rel = note.relative_to(VAULT_ROOT).as_posix()
+
+            text = _vault_text(note)
+            snippet = ""
+            for line in text.splitlines():
+                clean = line.strip()
+                if len(clean) > 10:
+                    snippet = _redact(clean[:120])
+                    break
+            hits.append(f"{rel} (score={float(score):.4f}): {snippet}")
+
+        if not hits:
+            return search_vault(query, limit=limit)
+
+        return (f"Semantic search found {len(hits)} results for '{query}': "
+                + " | ".join(hits))
+
+    except Exception as e:
+        # Graceful fallback to substring search on any error
+        return search_vault(query, limit=limit)
 
 
 def read_vault_note(name: str) -> str:
@@ -489,19 +755,135 @@ def search_web(query: str) -> str:
     return f"Opened search: {query}"
 
 
+# Agents JARVIS can hand a job to when it cannot do it itself. Resolved through
+# the PATH entry, not a hardcoded location, so a reinstall does not break this.
+DELEGATE_AGENTS = {
+    "claude": ["claude", "-p"],
+    "hermes": ["hermes", "-p"],
+}
+# A delegated agent runs a whole session of its own. Long, but bounded: a voice
+# turn that never returns is worse than one that reports a timeout.
+DELEGATE_TIMEOUT = int(os.getenv("JARVIS_DELEGATE_TIMEOUT", "300"))
+
+
+def delegate_task(task: str, agent: str = "claude") -> str:
+    """Hand a task to a CLI coding agent and return what it reports back.
+
+    For work beyond JARVIS's own tools — multi-file edits, debugging, anything
+    needing a full agent loop. It is deliberately NOT the fast path: the agent
+    runs a complete session, so this costs far more than a normal reply.
+    """
+    key = str(agent or "claude").strip().lower()
+    if key not in DELEGATE_AGENTS:
+        return (f"[Error] I can delegate to {' or '.join(sorted(DELEGATE_AGENTS))}, "
+                f"not '{agent}'.")
+    if not str(task).strip():
+        return "[Error] No task given to delegate."
+
+    exe = shutil.which(DELEGATE_AGENTS[key][0])
+    if not exe:
+        return (f"[Error] The {key} CLI is not on PATH, so I cannot delegate to it.")
+
+    cmd = [exe] + DELEGATE_AGENTS[key][1:] + [str(task)]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              timeout=DELEGATE_TIMEOUT, encoding="utf-8",
+                              errors="replace")
+    except subprocess.TimeoutExpired:
+        return (f"[Error] {key} did not finish within {DELEGATE_TIMEOUT}s. "
+                "The task may be too large to delegate from a voice turn.")
+    except Exception as e:
+        return f"[Error] Could not run {key}: {type(e).__name__}: {e}"
+
+    out = (proc.stdout or "").strip() or (proc.stderr or "").strip()
+    if proc.returncode != 0 and not out:
+        return f"[Error] {key} exited with code {proc.returncode} and said nothing."
+    if not out:
+        return f"{key} finished but returned no output."
+    # Spoken aloud, so hand back a readable slice rather than a wall of text.
+    return f"{key} reports: {out[:1500]}"
+
+
+def write_to_notepad(content: str, filename: str = "") -> str:
+    """Put text into a Notepad window and show it to the user.
+
+    Deliberately file-backed rather than keystroke-driven: JARVIS is a voice
+    assistant, so a SendKeys approach would type into whatever window happened
+    to have focus when the user spoke, mangle any character needing a modifier,
+    and silently lose the text if Notepad was slow to appear. Writing the file
+    first and handing it to Notepad is atomic, survives a crash, and leaves the
+    user with something they can actually save.
+    """
+    try:
+        if filename and str(filename).strip():
+            p = _resolve_write_path(str(filename).strip())
+            if p.suffix == "":
+                p = p.with_suffix(".txt")
+        else:
+            stamp = datetime.datetime.now().strftime("%Y-%m-%d %H%M")
+            p = DEFAULT_WRITE_DIR / f"JARVIS Note {stamp}.txt"
+
+        p.parent.mkdir(parents=True, exist_ok=True)
+        # Notepad on older Windows builds only renders CRLF correctly.
+        text = str(content).replace("\r\n", "\n").replace("\n", "\r\n")
+        p.write_text(text, encoding="utf-8")
+
+        if platform.system() == "Windows":
+            subprocess.Popen(["notepad.exe", str(p)])
+        else:
+            os.startfile(str(p))  # pragma: no cover - non-Windows dev only
+        return f"Opened Notepad with {len(str(content))} characters, saved as {p}"
+    except Exception as e:
+        return f"[Error] Could not write to Notepad: {str(e)}"
+
+
+# Spoken name -> what Windows can actually launch. A user says "open Microsoft
+# Word"; ShellExecute needs "winword". Without this the model passes the human
+# name through verbatim and every Office app fails to open.
+APP_ALIASES = {
+    "word": "winword", "microsoft word": "winword", "ms word": "winword",
+    "excel": "excel", "microsoft excel": "excel", "ms excel": "excel",
+    "powerpoint": "powerpnt", "microsoft powerpoint": "powerpnt",
+    "power point": "powerpnt", "ms powerpoint": "powerpnt",
+    "outlook": "outlook", "microsoft outlook": "outlook",
+    "notepad": "notepad.exe", "note pad": "notepad.exe",
+    "calculator": "calc", "calc": "calc",
+    "paint": "mspaint", "ms paint": "mspaint",
+    "file explorer": "explorer", "explorer": "explorer", "files": "explorer",
+    "command prompt": "cmd", "cmd": "cmd", "terminal": "cmd",
+    "task manager": "taskmgr",
+    "edge": "msedge", "microsoft edge": "msedge",
+    "chrome": "chrome", "google chrome": "chrome",
+    "brave": "brave", "brave browser": "brave",
+    "settings": "ms-settings:",
+}
+
+
 def open_application(app: str) -> str:
-    """Open an application."""
+    """Open an application, resolving spoken names like "Microsoft Word"."""
     system = platform.system()
+    requested = str(app).strip()
+    target = APP_ALIASES.get(requested.lower(), requested)
     try:
         if system == "Windows":
-            os.startfile(app)
+            os.startfile(target)
         elif system == "Darwin":
-            subprocess.run(["open", "-a", app])
+            subprocess.run(["open", "-a", target])
         else:
-            subprocess.run(["xdg-open", app])
-        return f"Opened {app}"
+            subprocess.run(["xdg-open", target])
+        return f"Opened {requested}"
     except Exception as e:
-        return f"[Error] Could not open {app}: {str(e)}"
+        # Last chance: strip a trailing .exe (or add one) before giving up, so a
+        # near-miss name does not become a flat "not installed" to the user.
+        alt = target[:-4] if target.lower().endswith(".exe") else target + ".exe"
+        try:
+            if system == "Windows":
+                os.startfile(alt)
+                return f"Opened {requested}"
+        except Exception:
+            pass
+        return (f"[Error] Could not open {requested} (tried '{target}'): {str(e)}. "
+                "It may not be installed under that name.")
 
 
 def get_weather(city: str = "Manila") -> str:
@@ -609,6 +991,25 @@ TOOLS = [
                 }
             },
             "required": ["query"]
+        }
+    },
+    {
+        "name": "write_to_notepad",
+        "description": (
+            "Put text into a Notepad window for the user to read or keep. Use this "
+            "for any request to write something in Notepad, jot a note, or show text "
+            "in Notepad. The text is saved to a .txt file and opened in Notepad."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "content": {"type": "string", "description": "The text to put in Notepad"},
+                "filename": {
+                    "type": "string",
+                    "description": "Optional file name; defaults to a timestamped note in Documents"
+                }
+            },
+            "required": ["content"]
         }
     },
     {
@@ -815,9 +1216,32 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "topic": {"type": "string", "description": "What the report is about"},
-                "output_path": {"type": "string", "description": "Where to save the .docx (optional)"}
+                "output_path": {"type": "string", "description": "Where to save the .docx (optional)"},
+                "verbatim": {
+                    "type": "boolean",
+                    "description": ("True to copy the conversations word for word instead of "
+                                    "summarising them. Use when the user asks to quote, copy, "
+                                    "paste or keep the exact wording.")
+                }
             },
             "required": ["topic"]
+        }
+    },
+    {
+        "name": "delegate_task",
+        "description": (
+            "Hand a task to a CLI coding agent (claude or hermes) when it is beyond "
+            "JARVIS's own tools — multi-file code changes, debugging, or work needing "
+            "a full agent session. Slow: the agent runs its own session, so only use "
+            "this when no other tool can do the job."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task": {"type": "string", "description": "The task to hand over, in full"},
+                "agent": {"type": "string", "description": "claude (default) or hermes"}
+            },
+            "required": ["task"]
         }
     }
 ]
@@ -850,6 +1274,7 @@ TOOL_MAP = {
     "read_file": lambda **kw: read_file(kw["path"]),
     "write_file": lambda **kw: write_file(kw["path"], kw["content"],
                                           _truthy(kw.get("overwrite", False))),
+    "write_to_notepad": lambda **kw: write_to_notepad(kw["content"], kw.get("filename", "")),
     "list_directory": lambda **kw: list_directory(kw.get("path", ".")),
     "search_files": lambda **kw: search_files(kw["query"], kw.get("path", "."),
                                               int(kw.get("max_results", 20) or 20)),
@@ -864,6 +1289,7 @@ TOOL_MAP = {
     "ask_chatgpt": _ask_chatgpt,
     "browser_status": lambda **kw: __import__("browser_agent").browser_status(),
     "search_vault": lambda **kw: search_vault(kw["query"], int(kw.get("limit", 10) or 10)),
+    "search_vault_semantic": lambda **kw: search_vault_semantic(kw["query"], int(kw.get("limit", 10) or 10)),
     "read_vault_note": lambda **kw: read_vault_note(kw["name"]),
     "open_file": lambda **kw: open_file(kw["name"]),
     "play_music": lambda **kw: __import__("music_agent").play_music(kw["query"]),
@@ -871,7 +1297,8 @@ TOOL_MAP = {
     "get_credentials": _get_credentials_tool,
     "launch_project": lambda **kw: __import__("project_agent").launch_project(kw["name"]),
     "compose_report": lambda **kw: __import__("report_agent").compose_report(
-        kw["topic"], kw.get("output_path")),
+        kw["topic"], kw.get("output_path"), _truthy(kw.get("verbatim", False))),
+    "delegate_task": lambda **kw: delegate_task(kw["task"], kw.get("agent", "claude")),
 }
 
 

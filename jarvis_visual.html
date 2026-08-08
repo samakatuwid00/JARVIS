@@ -125,12 +125,112 @@
   .jv-line::before { content: '> '; opacity: .5; }
   .jv-line-user { align-self: flex-end; text-align: right;
     color: color-mix(in srgb, var(--holo) 70%, #fff); }
-  .jv-line-jarvis { align-self: flex-start;
+  /* The HUD line shows the reply currently being spoken; this panel is the
+     scrollback. Hiding these outright (to kill the duplicate display) left the
+     transcript showing only the user's own prompts, so every past reply
+     vanished and the history looked frozen on one answer. Dimmed instead:
+     the live line reads from the HUD, the record stays here. */
+  .jv-line-jarvis { align-self: flex-start; opacity: .62;
     color: color-mix(in srgb, var(--holo) 92%, #fff); }
   /* Block caret, alive only while the typewriter is still revealing the line. */
   .jv-line-jarvis.jv-typing .jv-text::after { content: '▌'; margin-left: 1px;
     animation: jvCaret .7s step-end infinite; }
   @keyframes jvCaret { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+
+  /* JARVIS's real reply, drawn OVER the HUD's own scripted line. The HUD cycles
+     canned dialogue ("THE SCAN IS ARCHIVED TO THE MALIBU SERVER, SIR.") from
+     its own timers and re-renders that subtree constantly, so writing into it
+     is a fight we lose. This overlay lives in the wrapper document instead —
+     React cannot touch it — and is positioned over the HUD line each frame. */
+  #jv-hudline { position: absolute; display: none; z-index: 40;
+    align-items: center; justify-content: center; text-align: center;
+    font: 600 13px/20.15px Archivo, system-ui, sans-serif; letter-spacing: 1.69px;
+    color: rgb(255, 225, 187); pointer-events: none; padding: 0 6px;
+    background: #0b0a08; }
+  #jv-hudline.show { display: flex; }
+  #jv-hudline .jv-hl-label { color: rgb(255, 225, 187); opacity: .85; margin-right: 7px;
+    white-space: nowrap; }
+  #jv-hudline.jv-typing .jv-hl-text::after { content: '▌'; margin-left: 1px;
+    animation: jvCaret .7s step-end infinite; }
+
+  /* Left column: replaces ARCHIVE CRATE 07 / MASS / COMPOSITION / INTEGRITY,
+     which are pure set dressing, with the local model's real figures. */
+  #jv-left { position: absolute; display: none; z-index: 46; flex-direction: column;
+    gap: 6px; pointer-events: none; background: #0b0a08;
+    font-family: Archivo, system-ui, sans-serif; padding-top: 2px; }
+  #jv-left.show { display: flex; }
+  #jv-left .jv-lf-label { font: 600 10.5px/1.3 Archivo, system-ui; letter-spacing: .18em;
+    text-transform: uppercase; color: color-mix(in srgb, var(--holo) 55%, #fff); opacity: .72; }
+  #jv-left .jv-lf-model { font: 800 21px/1.15 Archivo, system-ui; letter-spacing: .01em;
+    color: color-mix(in srgb, var(--holo) 96%, #fff); }
+  #jv-left .jv-lf-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 1px; }
+  #jv-left .jv-lf-chip { font: 700 9.5px/1 Archivo, system-ui; letter-spacing: .14em;
+    text-transform: uppercase; padding: 4px 7px; border-radius: 3px;
+    border: 1px solid color-mix(in srgb, var(--holo) 34%, transparent);
+    color: color-mix(in srgb, var(--holo) 88%, #fff); }
+  #jv-left .jv-lf-chip.ok { border-color: color-mix(in srgb, #9dff8a 45%, transparent); color: #9dff8a; }
+  #jv-left .jv-lf-row { display: flex; justify-content: space-between; align-items: baseline;
+    gap: 8px; font: 600 11.5px/1.5 Archivo, system-ui; letter-spacing: .05em; }
+  #jv-left .jv-lf-k { color: color-mix(in srgb, var(--holo) 60%, #fff); opacity: .76;
+    text-transform: uppercase; white-space: nowrap; }
+  #jv-left .jv-lf-v { color: color-mix(in srgb, var(--holo) 95%, #fff); white-space: nowrap; }
+  #jv-left .jv-lf-sec { font: 700 10.5px/1.3 Archivo, system-ui; letter-spacing: .18em;
+    text-transform: uppercase; color: color-mix(in srgb, var(--holo) 62%, #fff);
+    opacity: .8; margin-top: 6px;
+    border-top: 1px solid color-mix(in srgb, var(--holo) 18%, transparent); padding-top: 7px; }
+  /* Context budget: prompt / output / headroom as a share of the real window. */
+  #jv-left .jv-lf-bar { height: 5px; border-radius: 3px; overflow: hidden; display: flex;
+    background: color-mix(in srgb, var(--holo) 14%, transparent); margin-top: 3px; }
+  #jv-left .jv-lf-bar i { display: block; height: 100%; width: 0%; transition: width .3s; }
+  #jv-left .jv-lf-bar i.p { background: var(--holo); }
+  #jv-left .jv-lf-bar i.o { background: #9dff8a; }
+
+  /* Live telemetry, drawn over the HUD's fake THREAT ASSESSMENT block. Same
+     overlay approach as the transcript: the HUD re-renders that subtree from
+     React state, so anything written into it is wiped within the second. */
+  #jv-stats { position: absolute; display: none; z-index: 46; flex-direction: column;
+    gap: 5px; pointer-events: none; padding: 2px 0 0 0;
+    background: #0b0a08; font-family: Archivo, system-ui, sans-serif; }
+  #jv-stats.show { display: flex; }
+  #jv-stats .jv-st-title { font: 700 11px/1.4 Archivo, system-ui; letter-spacing: .2em;
+    text-transform: uppercase; color: color-mix(in srgb, var(--holo) 78%, #fff);
+    opacity: .9; margin-bottom: 3px; }
+  #jv-stats .jv-st-row { display: flex; align-items: baseline; justify-content: space-between;
+    gap: 8px; font: 600 11.5px/1.5 Archivo, system-ui; letter-spacing: .06em; }
+  #jv-stats .jv-st-k { color: color-mix(in srgb, var(--holo) 62%, #fff); opacity: .78;
+    text-transform: uppercase; white-space: nowrap; }
+  #jv-stats .jv-st-v { color: color-mix(in srgb, var(--holo) 95%, #fff);
+    text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #jv-stats .jv-st-v.ok   { color: #9dff8a; }
+  #jv-stats .jv-st-v.warn { color: #ffb454; }
+  #jv-stats .jv-st-v.bad  { color: #ec6a4c; }
+  /* Mic/TTS amplitude — the one genuinely live signal the client already has. */
+  #jv-stats .jv-st-meter { height: 4px; border-radius: 3px; overflow: hidden; margin-top: 2px;
+    background: color-mix(in srgb, var(--holo) 16%, transparent); }
+  #jv-stats .jv-st-meter i { display: block; height: 100%; width: 0%;
+    background: var(--holo); transition: width .08s linear; }
+
+  /* Conversation transcript, parked in the HUD's empty right column (verified
+     310x505 of nothing under the PROTOCOL row). Lives in the wrapper document
+     and is positioned over the iframe, so the HUD's own React re-renders cannot
+     disturb it. The typed input stays where it is at the bottom. */
+  #jv-side { position: absolute; display: none; z-index: 45; flex-direction: column;
+    pointer-events: none; padding: 2px 2px 0 2px; }
+  #jv-side.show { display: flex; }
+  #jv-side-head { flex: 0 0 auto; font: 700 11px/1.4 Archivo, system-ui;
+    letter-spacing: .2em; text-transform: uppercase;
+    color: color-mix(in srgb, var(--holo) 78%, #fff); opacity: .9;
+    padding-bottom: 6px; margin-bottom: 8px;
+    border-bottom: 1px solid color-mix(in srgb, var(--holo) 22%, transparent); }
+  #jv-side-log { flex: 1 1 auto; overflow-y: auto; pointer-events: auto;
+    display: flex; flex-direction: column; gap: 7px; padding-right: 4px;
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--holo) 35%, transparent) transparent; }
+  #jv-side-log::-webkit-scrollbar { width: 4px; }
+  #jv-side-log::-webkit-scrollbar-thumb { border-radius: 3px;
+    background: color-mix(in srgb, var(--holo) 35%, transparent); }
+  /* The old bottom transcript is superseded by the side panel; the input stays. */
+  #jv-log { display: none; }
 
   #jv-input-wrap { pointer-events: auto; display: flex; align-items: center; gap: 9px;
     padding: 9px 15px; border-radius: 999px;
@@ -157,6 +257,56 @@
   </div>
   <div id="jv-glow"></div>
   <div id="jv-rings"></div><!-- filled by spawnPeak() while speaking -->
+
+  <!-- Sits over the HUD's scripted J.A.R.V.I.S. line and shows the real reply. -->
+  <!-- Blank by design: masks the HUD's scripted dialogue line. The reply is
+       shown in the transcript panel, never here. -->
+  <div id="jv-hudline">
+    <span class="jv-hl-label"></span><span class="jv-hl-text"></span>
+  </div>
+
+  <!-- Left column: the local model's real figures, over the set dressing. -->
+  <div id="jv-left">
+    <div class="jv-lf-label">Language Model</div>
+    <div class="jv-lf-model" id="lf-model">—</div>
+    <div class="jv-lf-chips">
+      <span class="jv-lf-chip ok" id="lf-mode">LOCAL</span>
+      <span class="jv-lf-chip" id="lf-quant">—</span>
+      <span class="jv-lf-chip" id="lf-size">—</span>
+    </div>
+    <div class="jv-lf-row"><span class="jv-lf-k">Parameters</span><span class="jv-lf-v" id="lf-params">—</span></div>
+    <div class="jv-lf-row"><span class="jv-lf-k">Context window</span><span class="jv-lf-v" id="lf-ctxwin">—</span></div>
+    <div class="jv-lf-row"><span class="jv-lf-k">Turns</span><span class="jv-lf-v" id="lf-turns">—</span></div>
+    <div class="jv-lf-row"><span class="jv-lf-k">History</span><span class="jv-lf-v" id="lf-hist">—</span></div>
+
+    <div class="jv-lf-sec">Context Budget</div>
+    <div class="jv-lf-bar"><i class="p" id="lf-bar-p"></i><i class="o" id="lf-bar-o"></i></div>
+    <div class="jv-lf-row"><span class="jv-lf-k">Prompt</span><span class="jv-lf-v" id="lf-prompt">—</span></div>
+    <div class="jv-lf-row"><span class="jv-lf-k">Output</span><span class="jv-lf-v" id="lf-output">—</span></div>
+    <div class="jv-lf-row"><span class="jv-lf-k">Headroom</span><span class="jv-lf-v" id="lf-head">—</span></div>
+  </div>
+
+  <!-- Live telemetry, over the HUD's static THREAT ASSESSMENT block. -->
+  <div id="jv-stats">
+    <div class="jv-st-title">System Analysis</div>
+    <div class="jv-st-row"><span class="jv-st-k">Brain</span><span class="jv-st-v" id="st-brain">—</span></div>
+    <div class="jv-st-row"><span class="jv-st-k">Answered by</span><span class="jv-st-v" id="st-backend">—</span></div>
+    <div class="jv-st-row"><span class="jv-st-k">Route</span><span class="jv-st-v" id="st-route">—</span></div>
+    <div class="jv-st-row"><span class="jv-st-k">Voice in</span><span class="jv-st-v" id="st-mic">—</span></div>
+    <div class="jv-st-row"><span class="jv-st-k">Link</span><span class="jv-st-v" id="st-link">—</span></div>
+    <div class="jv-st-row"><span class="jv-st-k">State</span><span class="jv-st-v" id="st-state">—</span></div>
+    <div class="jv-st-row"><span class="jv-st-k">Speed</span><span class="jv-st-v" id="st-speed">—</span></div>
+    <div class="jv-st-row"><span class="jv-st-k">Turn</span><span class="jv-st-v" id="st-latency">—</span></div>
+    <div class="jv-st-row"><span class="jv-st-k">Context</span><span class="jv-st-v" id="st-ctx">—</span></div>
+    <div class="jv-st-row"><span class="jv-st-k">Last tool</span><span class="jv-st-v" id="st-tool">—</span></div>
+    <div class="jv-st-meter"><i id="st-amp"></i></div>
+  </div>
+
+  <!-- Conversation transcript, parked in the HUD's unused right column. -->
+  <div id="jv-side">
+    <div id="jv-side-head">Transcript</div>
+    <div id="jv-side-log"></div>
+  </div>
 
   <!-- Typed path. Lives in the WRAPPER document, never inside the HUD iframe, so
        it always owns focus and talks to the real backend over the same socket. -->
@@ -189,10 +339,17 @@
   var PREROLL_MS    = 900;     // audio kept before speech onset so the wake word is never clipped
   var SCAN_HANG_MS  = 600;     // silence that ends a wake-word scan clip
   var SCAN_MAX_MS   = 4000;
-  var CMD_HANG_MS   = 800;     // silence that ends a command clip (a touch longer: sentences breathe)
-  var CMD_MAX_MS    = 9000;
+  var CMD_HANG_MS   = 1000;    // silence that ends a command clip (sentences breathe; 800 clipped mid-thought)
+  var CMD_MAX_MS    = 12000;   // room for a long command rather than truncating it
   var CMD_WAIT_MS   = 7000;    // no speech after wake word -> back to idle
-  var BUSY_TIMEOUT  = 45000;   // server watchdog, nothing can get stuck
+  // Server watchdog. 45s was shorter than a real local-model turn: a ChatGPT
+  // search measured 36.8s inside the tool alone, with jarvis-qwen3 generating
+  // on both sides of it — 55.7s end to end. The client gave up while the server
+  // was still working, so JARVIS looked like it had timed out and the answer
+  // landed late. Ceiling now sits above the backend's own limits
+  // (OLLAMA_TIMEOUT 180s, browser worker 150s) so the server always loses first
+  // and can report a real error.
+  var BUSY_TIMEOUT  = 190000;
   var MIN_CLIP_MS   = 350;     // ignore coughs/clicks
 
   // ---- VAD (AnalyserNode, adaptive noise floor) -------------------------
@@ -205,7 +362,11 @@
   var FLOOR_ALPHA   = 0.05;    // slow EMA of rms during silence
   var WARM_ALPHA    = 0.30;    // faster convergence during the boot calibration
   var FLOOR_MIN     = 0.0015;  // clamps: a dead-silent room must not make the
-  var FLOOR_MAX     = 0.0600;  // threshold collapse, a loud one must not deafen us
+  // FLOOR_MAX was 0.0600, which let a noisy room drive the speech threshold to
+  // 0.0600*1.8 = 0.108 RMS — louder than ordinary speaking, so JARVIS went deaf
+  // exactly when the room got busy. Capping the floor at 0.0300 holds the
+  // threshold at 0.054 and keeps normal speech above it.
+  var FLOOR_MAX     = 0.0300;  // threshold collapse, a loud one must not deafen us
   var ABS_MIN_RMS   = 0.0060;  // absolute gate under the adaptive one
   var CALIBRATE_MS  = 1800;
 
@@ -218,7 +379,10 @@
   var retryBtn = document.getElementById('jv-retry');
   var unlockBtn = document.getElementById('jv-unlock');
   var hud = document.getElementById('hud');
-  var chatLog = document.getElementById('jv-log');
+  // Transcript now renders in the HUD's right column; #jv-log is kept in the
+  // DOM (hidden) so nothing that references it breaks.
+  var chatLog = document.getElementById('jv-side-log')
+               || document.getElementById('jv-log');
   var chatInput = document.getElementById('jv-input');
   var chatWrap = document.getElementById('jv-input-wrap');
   var rootStyle = document.documentElement.style;
@@ -282,10 +446,310 @@
                                 // before speech stays ~6s instead of unbounded
   var twTimer = 0, twSpan = null, twLine = null, twAudio = null;
 
+  // ---------------------------------------------------------------- hud line
+  // The HUD owns a scripted J.A.R.V.I.S. line that it retypes from its own
+  // timers ("THE SCAN IS ARCHIVED TO THE MALIBU SERVER, SIR."), re-rendering
+  // that subtree as it goes. Writing the real reply into it loses that race —
+  // and observing the node fails too, because React replaces the element and
+  // the observer is left watching a detached parent. So the reply is drawn in
+  // a wrapper-owned overlay parked on top of the HUD line instead.
+  var hudLineEl  = document.getElementById('jv-hudline');
+  var hudTextEl  = hudLineEl ? hudLineEl.querySelector('.jv-hl-text') : null;
+  var JARVIS_LABEL = /J\.A\.R\.V\.I\.S\.\s*\/\//;
+
+  // Of the eight span.sc-interp nodes the HUD renders (energy readout, scan
+  // percent, the VOICE toggle...), the speech line is the only one whose parent
+  // carries the "J.A.R.V.I.S. //" label. Position, not text, is what we want.
+  function hudLineBox() {
+    try {
+      var d = hud.contentDocument || (hud.contentWindow && hud.contentWindow.document);
+      if (!d) return null;
+      var all = d.querySelectorAll('span.sc-interp');
+      for (var i = 0; i < all.length; i++) {
+        var par = all[i].parentElement;
+        if (par && JARVIS_LABEL.test(par.textContent || '')) return par;
+      }
+      return null;
+    } catch (e) { return null; }   // iframe not ready
+  }
+
+  function positionHudLine() {
+    if (!hudLineEl || !hudLineEl.classList.contains('show')) return;
+    var box = hudLineBox();
+    if (!box) return;
+    var r = box.getBoundingClientRect();
+    var f = hud.getBoundingClientRect();
+    hudLineEl.style.left   = (f.left + r.left) + 'px';
+    hudLineEl.style.top    = (f.top + r.top) + 'px';
+    hudLineEl.style.width  = r.width + 'px';
+    hudLineEl.style.height = r.height + 'px';
+  }
+
+  // The reply no longer appears under the orb — it lives only in the transcript
+  // panel. This overlay stays, blank, purely as a mask: remove it and the HUD's
+  // own scripted dialogue ("GOOD EVENING, SIR. ARCHIVE CRATE 07 IS ON THE
+  // PLATFORM") shows through again, which is worse than nothing since it is
+  // fake text that looks like JARVIS speaking.
+  function hudSay(text, typing) {
+    if (!hudLineEl) return false;
+    if (hudTextEl) hudTextEl.textContent = '';
+    var lbl = hudLineEl.querySelector('.jv-hl-label');
+    if (lbl) lbl.textContent = '';
+    hudLineEl.classList.add('show');
+    hudLineEl.classList.remove('jv-typing');
+    positionHudLine();
+    return true;
+  }
+
+  // ------------------------------------------------------------- side panel
+  // The HUD's right column ends after the PROTOCOL row and leaves the rest of
+  // the aside empty (measured 310x505 with zero elements in it). Anchor to the
+  // bottom of that column's real content rather than to fixed pixels, so the
+  // panel keeps its place if the HUD reflows at another window size.
+  var sideEl = document.getElementById('jv-side');
+
+  // The HUD's right column. Found by the text it contains, not by index, so it
+  // survives the artifact reordering its own markup.
+  function hudAside() {
+    try {
+      var d = hud.contentDocument || (hud.contentWindow && hud.contentWindow.document);
+      if (!d) return null;
+      var asides = d.querySelectorAll('aside');
+      for (var i = 0; i < asides.length; i++) {
+        if (/THREAT ASSESSMENT/i.test(asides[i].textContent || '')) return asides[i];
+      }
+      return null;
+    } catch (e) { return null; }
+  }
+
+  function hudRightBand() {
+    try {
+      var aside = hudAside();
+      if (!aside) return null;
+      var ar = aside.getBoundingClientRect();
+      var bottom = ar.top, kids = aside.querySelectorAll('*');
+      for (var j = 0; j < kids.length; j++) {
+        if (kids[j].children.length) continue;
+        if (!(kids[j].textContent || '').trim()) continue;
+        var kr = kids[j].getBoundingClientRect();
+        if (kr.height > 0 && kr.bottom > bottom) bottom = kr.bottom;
+      }
+      var top = bottom + 16, height = ar.bottom - top - 12;
+      if (height < 90) return null;          // no usable room at this size
+      return { left: ar.left + 10, top: top, width: ar.width - 20, height: height };
+    } catch (e) { return null; }
+  }
+
+  function positionSidePanel() {
+    if (!sideEl) return;
+    var band = hudRightBand();
+    if (!band) { sideEl.classList.remove('show'); return; }
+    var f = hud.getBoundingClientRect();
+    // Start below the telemetry panel, whose height depends on how many rows
+    // have data. Clamping it the other way round is what caused the overlap.
+    var top = f.top + band.top;
+    var sb = statsBottom();
+    if (sb !== null && sb + 10 > top) top = sb + 10;
+    var bottom = f.top + band.top + band.height;
+    var height = bottom - top;
+    if (height < 80) { sideEl.classList.remove('show'); return; }
+    sideEl.style.left   = (f.left + band.left) + 'px';
+    sideEl.style.top    = top + 'px';
+    sideEl.style.width  = band.width + 'px';
+    sideEl.style.height = height + 'px';
+    sideEl.classList.add('show');
+  }
+
+  // ---------------------------------------------------------------- telemetry
+  // Phase 1: only signals that already exist client-side or on /status. Nothing
+  // here is invented — a panel that lies is worse than one that is obviously
+  // decorative, which is the whole point of replacing the fake THREAT
+  // ASSESSMENT block.
+  var statsEl = document.getElementById('jv-stats');
+  var stBrain = document.getElementById('st-brain');
+  var stBackend = document.getElementById('st-backend');
+  var stRoute = document.getElementById('st-route');
+  var stMic = document.getElementById('st-mic');
+  var stLink = document.getElementById('st-link');
+  var stState = document.getElementById('st-state');
+  var stAmp = document.getElementById('st-amp');
+
+  function setVal(el, text, cls) {
+    if (!el) return;
+    el.textContent = text;
+    el.className = 'jv-st-v' + (cls ? ' ' + cls : '');
+  }
+
+  // Covers the static rows only: from the THREAT ASSESSMENT label down to the
+  // bottom of the column's real content (the PROTOCOL row). The transcript
+  // panel already owns everything below that.
+  function positionStats() {
+    if (!statsEl) return;
+    var aside = hudAside();
+    if (!aside) { statsEl.classList.remove('show'); return; }
+    var label = null, kids = aside.querySelectorAll('*');
+    for (var i = 0; i < kids.length; i++) {
+      if (kids[i].children.length) continue;
+      if (/THREAT ASSESSMENT/i.test(kids[i].textContent || '')) { label = kids[i]; break; }
+    }
+    var band = hudRightBand();
+    if (!label || !band) { statsEl.classList.remove('show'); return; }
+    var lr = label.getBoundingClientRect(), ar = aside.getBoundingClientRect();
+    var f = hud.getBoundingClientRect();
+    // Height is NOT clamped to the gap above the transcript: the panel grew when
+    // the telemetry rows were added and simply overflowed, drawing on top of the
+    // transcript. It sizes to its own content instead, and the transcript starts
+    // below whatever height that turns out to be.
+    statsEl.style.left   = (f.left + ar.left + 10) + 'px';
+    statsEl.style.top    = (f.top + lr.top - 8) + 'px';
+    statsEl.style.width  = (ar.width - 20) + 'px';
+    statsEl.style.height = 'auto';
+    statsEl.classList.add('show');
+  }
+
+  function statsBottom() {
+    if (!statsEl || !statsEl.classList.contains('show')) return null;
+    var r = statsEl.getBoundingClientRect();
+    return r.height ? r.bottom : null;
+  }
+
+  var stSpeed = document.getElementById('st-speed');
+  var stLatency = document.getElementById('st-latency');
+  var stCtx = document.getElementById('st-ctx');
+  var stTool = document.getElementById('st-tool');
+
+  // Server telemetry, one message per turn. Absent fields stay blank on purpose:
+  // a HUD that pads with plausible numbers is the fake panel we just replaced.
+  function applyTelemetry(s) {
+    if (!s) return;
+    setVal(stSpeed, s.tok_per_sec ? s.tok_per_sec + ' tok/s' : '—');
+    if (s.latency_ms) {
+      var secs = (s.latency_ms / 1000).toFixed(1) + 's';
+      setVal(stLatency, s.p50_ms ? secs + '  (p50 ' + (s.p50_ms / 1000).toFixed(1) + 's)' : secs,
+             s.latency_ms > 20000 ? 'warn' : '');
+    }
+    if (s.prompt_tokens) {
+      var used = s.prompt_tokens + (s.eval_tokens || 0);
+      var pct = s.context_limit ? Math.round(used / s.context_limit * 100) : null;
+      setVal(stCtx, s.context_limit
+        ? used.toLocaleString() + ' / ' + s.context_limit.toLocaleString() + ' (' + pct + '%)'
+        : used.toLocaleString() + ' tok',
+        pct !== null && pct > 80 ? 'bad' : (pct !== null && pct > 60 ? 'warn' : ''));
+    }
+    var tools = s.tools || [];
+    setVal(stTool, tools.length
+      ? tools[tools.length - 1].name + ' (' + (tools[tools.length - 1].ms / 1000).toFixed(1) + 's)'
+      : 'none this turn');
+  }
+
+  // ------------------------------------------------------------- left column
+  // The HUD's left OBJECT ANALYSIS aside was deleted (2026-08-08), so the panel
+  // now anchors to the center <main> visualization instead. It sits in the
+  // top-left interior of <main> and sizes to its own content (height:auto).
+  var leftEl = document.getElementById('jv-left');
+
+  function hudLeftAside() {
+    try {
+      var d = hud.contentDocument || (hud.contentWindow && hud.contentWindow.document);
+      if (!d) return null;
+      var m = d.querySelector('main');
+      if (!m) return null;
+      var r = m.getBoundingClientRect();
+      if (r.width < 80 || r.height < 80) return null;
+      return m;
+    } catch (e) { return null; }
+  }
+
+  function positionLeft() {
+    if (!leftEl) return;
+    var box = hudLeftAside();
+    if (!box) { leftEl.classList.remove('show'); return; }
+    var r = box.getBoundingClientRect(), f = hud.getBoundingClientRect();
+    // Anchor inside the top-left corner of <main>; size to content.
+    var top = r.top + 16;
+    if (r.height < 200) { leftEl.classList.remove('show'); return; }
+    var w = Math.min(r.width * 0.5, 300) - 24;
+    if (w < 160) w = 160;
+    leftEl.style.left   = (f.left + r.left + 16) + 'px';
+    leftEl.style.top    = (f.top + top) + 'px';
+    leftEl.style.width  = w + 'px';
+    leftEl.style.height = 'auto';
+    leftEl.classList.add('show');
+  }
+
+  function applyLeft(s) {
+    if (!s) return;
+    var meta = s.model_meta || {};
+    var set = function (id, v) { var e = document.getElementById(id); if (e) e.textContent = v; };
+    set('lf-model', (s.model || '—').toUpperCase());
+    set('lf-mode', s.local_only ? 'LOCAL ONLY' : 'LOCAL FIRST');
+    set('lf-quant', meta.quant || '—');
+    set('lf-size', meta.size_gb ? meta.size_gb + ' GB' : '—');
+    set('lf-params', meta.params || '—');
+    set('lf-ctxwin', s.context_limit ? s.context_limit.toLocaleString() + ' tok' : '—');
+    set('lf-turns', s.turns != null ? String(s.turns) : '—');
+    set('lf-hist', s.history_msgs != null ? s.history_msgs + ' msgs' : '—');
+
+    var lim = s.context_limit, pt = s.prompt_tokens || 0, ot = s.eval_tokens || 0;
+    if (lim) {
+      var pp = Math.min(100, pt / lim * 100), op = Math.min(100 - pp, ot / lim * 100);
+      var bp = document.getElementById('lf-bar-p'), bo = document.getElementById('lf-bar-o');
+      if (bp) bp.style.width = pp + '%';
+      if (bo) bo.style.width = op + '%';
+      set('lf-prompt', pt.toLocaleString() + ' (' + Math.round(pp) + '%)');
+      set('lf-output', ot.toLocaleString() + ' (' + Math.round(op) + '%)');
+      var head = Math.max(0, lim - pt - ot);
+      set('lf-head', head.toLocaleString() + ' (' + Math.round(head / lim * 100) + '%)');
+    }
+  }
+
+  var STATE_LABEL = { idle: 'Idle', scan: 'Wake word', command: 'Listening',
+                      busy: 'Working', speaking: 'Speaking', nomic: 'No mic', boot: 'Calibrating' };
+
+  function refreshLocalStats() {
+    setVal(stLink, ws && ws.readyState === 1 ? 'Stable' : 'Reconnecting',
+           ws && ws.readyState === 1 ? 'ok' : 'bad');
+    setVal(stMic, micOk ? 'Live' : 'Blocked', micOk ? 'ok' : 'bad');
+    setVal(stState, STATE_LABEL[mode] || mode || '—');
+    if (stAmp) stAmp.style.width = Math.min(100, lastLevel * 900) + '%';
+  }
+
+  function refreshServerStats() {
+    // Same endpoint the status bar already exposes; no new server work.
+    fetch('/status', { cache: 'no-store' }).then(function (r) { return r.json(); })
+      .then(function (s) {
+        setVal(stBrain, s.brain || '—');
+        var b = s.last_backend;
+        setVal(stBackend, b ? b : 'awaiting first turn',
+               b === 'mock' ? 'bad' : (b === 'ollama' ? 'ok' : (b ? 'warn' : '')));
+        // Route comes from the server's live flags now. It was hardcoded, so it
+        // kept advertising groq/cerebras/gemini after local-only disabled them.
+        setVal(stRoute, s.route || '—', s.local_only ? 'ok' : '');
+      })
+      .catch(function () { setVal(stBrain, 'unreachable', 'bad'); });
+  }
+
+  window.addEventListener('resize', function () {
+    positionHudLine(); positionLeft(); positionStats(); positionSidePanel();
+  });
+  // One pass for every overlay: separate timers would each cost a layout read
+  // against the iframe.
+  setInterval(function () {
+    positionHudLine(); positionLeft(); positionStats(); positionSidePanel(); refreshLocalStats();
+  }, 1000);
+  setInterval(refreshServerStats, 3000);
+  positionLeft(); positionStats(); positionSidePanel(); refreshLocalStats(); refreshServerStats();
+  // Mask the HUD's scripted line from the first frame, not only once a reply
+  // arrives — otherwise its canned dialogue is on screen until then.
+  hudSay('');
+  setTimeout(function () { hudSay(''); }, 2500);   // iframe may still be loading
+
   function cancelTypewriter() {
     if (twTimer) { clearTimeout(twTimer); twTimer = 0; }
     if (twSpan && twLine) {                     // leave the text fully revealed
-      twSpan.textContent = twSpan.getAttribute('data-full') || twSpan.textContent;
+      var whole = twSpan.getAttribute('data-full') || twSpan.textContent;
+      twSpan.textContent = whole;
+      hudSay(whole, false);                     // HUD must not keep a half line
       twLine.classList.remove('jv-typing');
     }
     twSpan = null; twLine = null; twAudio = null;
@@ -307,31 +771,60 @@
       return;
     }
 
-    cancelTypewriter();                         // never two reveals at once
+    // Reply lands whole, no character-by-character reveal. The typewriter used
+    // to gate playback — speech only started once the last character had been
+    // drawn, which cost up to 6s of silence on a long answer (TYPE_MAX_TICKS 200
+    // x TYPE_MS 30). Showing the text at once and speaking immediately removes
+    // that delay entirely; the audio release below is the same call the reveal
+    // used to make at its end.
+    cancelTypewriter();                         // clear any in-flight reveal
     span.setAttribute('data-full', full);
-    line.classList.add('jv-typing');
-    twSpan = span; twLine = line; twAudio = audio || null;
-
-    var step = Math.max(1, Math.ceil(full.length / TYPE_MAX_TICKS));
-    var i = 0;
-    (function tick() {
-      if (twSpan !== span) return;              // superseded by a newer reply
-      i = Math.min(full.length, i + step);
-      span.textContent = full.slice(0, i);
-      chatLog.scrollTop = chatLog.scrollHeight;
-      if (i < full.length) { twTimer = setTimeout(tick, TYPE_MS); return; }
-      // Reveal complete: release the queued speech (or stand down if silent).
-      var pendingAudio = twAudio;
-      twTimer = 0; twSpan = null; twLine = null; twAudio = null;
-      line.classList.remove('jv-typing');
-      if (pendingAudio) speak(pendingAudio); else if (mode !== 'speaking') goIdle();
-    })();
+    span.textContent = full;
+    hudSay(full, false);
+    chatLog.scrollTop = chatLog.scrollHeight;
+    if (audio) speak(audio); else if (mode !== 'speaking') goIdle();
   }
 
   // ---------------------------------------------------------------- chat input
+  // Slash commands are handled here, never sent as a prompt: on the local model
+  // a turn costs seconds, and the model would try to *answer* "/clear" rather
+  // than clear anything.
+  function runCommand(name) {
+    if (!send({ type: 'command', name: name })) {
+      notice('NOT CONNECTED — COMMAND NOT SENT');
+      return true;
+    }
+    if (name === 'clear') {
+      cancelTypewriter();
+      if (chatLog) chatLog.innerHTML = '';        // wipe the visible transcript too
+      hudSay('');
+      setVal(stBackend, 'awaiting first turn');
+      ['st-speed', 'st-latency', 'st-ctx', 'st-tool'].forEach(function (id) {
+        var e = document.getElementById(id);
+        if (e) { e.textContent = '—'; e.className = 'jv-st-v'; }
+      });
+      ['lf-turns', 'lf-hist', 'lf-prompt', 'lf-output', 'lf-head'].forEach(function (id) {
+        var e = document.getElementById(id); if (e) e.textContent = '—';
+      });
+      var bp = document.getElementById('lf-bar-p'), bo = document.getElementById('lf-bar-o');
+      if (bp) bp.style.width = '0%';
+      if (bo) bo.style.width = '0%';
+    }
+    chatInput.value = '';
+    chatInput.focus();
+    return true;
+  }
+
   function sendTyped() {
     var value = chatInput.value.trim();
     if (!value) return;
+    if (value.charAt(0) === '/') {
+      var cmd = value.slice(1).trim().toLowerCase();
+      if (cmd === 'clear' || cmd === 'reset') { runCommand('clear'); return; }
+      notice('UNKNOWN COMMAND: ' + value);
+      chatInput.value = '';
+      return;
+    }
     if (!send({ type: 'text', text: value, speak: true })) {
       // WS down: keep the typed text, say so, log nothing as a reply.
       notice('NOT CONNECTED — MESSAGE NOT SENT');
@@ -383,6 +876,24 @@
   function onMessage(ev) {
     var m;
     try { m = JSON.parse(ev.data); } catch (e) { return; }
+
+    // Any word from the server means the turn is alive, so the watchdog measures
+    // silence rather than total elapsed time. A slow-but-progressing turn
+    // (transcribing -> thinking -> speaking) no longer trips it.
+    if (mode === 'busy') busySince = Date.now();
+
+    if (m.type === 'telemetry') {
+      applyTelemetry(m.stats);
+      applyLeft(m.stats);
+      return;
+    }
+
+    if (m.type === 'cleared') {
+      pendingReply = false;
+      notice(m.text || 'CONTEXT CLEARED');
+      if (mode !== 'speaking') goIdle();
+      return;
+    }
 
     if (m.type === 'scan') {
       onScanResult(m.text || '');
@@ -644,6 +1155,30 @@
     while (ringLen - ring[0].length > ringCap) { ringLen -= ring[0].length; ring.shift(); }
   }
 
+  // ---------------------------------------------------------------- earcon
+  // A short blip the instant the command window opens, so "is it listening?"
+  // is never a guess. Played on the mic's own AudioContext, and deliberately
+  // BEFORE capture starts: the recorder must not swallow the tick and count it
+  // as speech. Returns how long to wait before opening the mic, 0 if silent.
+  var TICK_MS = 90;
+
+  function playTick(freq, ms, vol) {
+    if (!ctx || ctx.state !== 'running') return 0;
+    try {
+      var t0 = ctx.currentTime, dur = (ms || TICK_MS) / 1000;
+      var osc = ctx.createOscillator(), g = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq || 880, t0);
+      // Ramped envelope: gating a raw oscillator clicks audibly.
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(vol || 0.18, t0 + 0.012);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+      osc.connect(g); g.connect(ctx.destination);
+      osc.start(t0); osc.stop(t0 + dur + 0.02);
+      return (ms || TICK_MS);
+    } catch (e) { return 0; }
+  }
+
   function beginCapture(kind, seed) {
     mode = kind;                       // 'scan' or 'command'
     cap = []; capLen = 0; capWaited = 0;
@@ -691,8 +1226,16 @@
       setState('thinking', 'THINKING…');
       if (!send({ type: 'text', text: rest, speak: true })) goIdle();
     } else {
-      // Bare "Jarvis" — open the command window and capture the next utterance.
-      beginCapture('command', false);
+      // Bare "Jarvis" — blip first, then open the command window once the tick
+      // has finished sounding. mode is still 'busy' here (endCapture set it), so
+      // the recorder stays shut for the whole tick and never records it.
+      var wait = playTick(880, TICK_MS, 0.18);
+      busySince = Date.now();          // keep the watchdog off our back
+      setState('listening', 'LISTENING…');
+      setTimeout(function () {
+        if (mode !== 'busy') return;   // disconnected or reset while ticking
+        beginCapture('command', false);
+      }, wait + 60);
     }
   }
 
