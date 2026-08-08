@@ -116,6 +116,18 @@ _JS_PROBE = """
 """
 
 
+def _is_closed_error(e):
+    # A closed/dead browser, context, or page. Playwright reports these in
+    # several ways; match the class and the common message strings.
+    if getattr(type(e), "__name__", "") == "TargetClosedError":
+        return True
+    msg = " ".join(str(e).split()).lower()
+    return any(k in msg for k in ("target closed", "target page",
+                                  "context or browser has been closed",
+                                  "browser has been closed", "page closed",
+                                  "connection closed"))
+
+
 class BraveMusicWorker:
     """Single thread owning the Brave Playwright context; all calls funnel through it."""
 
@@ -150,6 +162,18 @@ class BraveMusicWorker:
                 page = self._ensure_page()
                 reply.put((True, fn(page)))
             except Exception as e:
+                if _is_closed_error(e):
+                    # The Brave context/page died (closed or zombie). Drop it and
+                    # re-run the SAME job once on a rebuilt context so playback
+                    # actually starts instead of silently falling back to a URL open.
+                    try:
+                        self._teardown()
+                        page = self._ensure_page()
+                        reply.put((True, fn(page)))
+                    except Exception as e2:
+                        traceback.print_exc()
+                        reply.put((False, f"{type(e2).__name__}: {e2}"))
+                    continue
                 traceback.print_exc()
                 reply.put((False, f"{type(e).__name__}: {e}"))
 
