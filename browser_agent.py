@@ -18,8 +18,11 @@ once and the session survives restarts. JARVIS never handles your credentials.
 import os
 import queue
 import re
+import subprocess
 import threading
+import time
 import traceback
+import urllib.request
 from pathlib import Path
 
 # Dedicated profile: the default Chrome profile is locked while Chrome runs,
@@ -31,6 +34,20 @@ CHATGPT_URL = "https://chatgpt.com/"
 # on the profile directory lock. Chrome 151 on this machine silently refuses to
 # bind 9222 (works on 9223); the launcher shortcut uses 9223 too.
 DEBUG_PORT = int(os.getenv("JARVIS_BROWSER_PORT", "9223"))
+
+# The everyday Chrome profile the "Chrome (JARVIS)" shortcut opens — the one
+# that is already signed in to ChatGPT. Same value as make_shortcut.ps1 writes.
+CHROME_USER_DATA = os.getenv(
+    "JARVIS_CHROME_USER_DATA",
+    str(Path.home() / "AppData" / "Local" / "Google" / "Chrome" / "User Data"),
+)
+# Relaunching the daily Chrome opens a real window, so it stays switchable.
+CHROME_AUTOLAUNCH = os.getenv("JARVIS_CHROME_AUTOLAUNCH", "true").lower() == "true"
+CHROME_LAUNCH_WAIT = int(os.getenv("JARVIS_CHROME_LAUNCH_WAIT", "30"))
+CHROME_PATHS = (
+    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+)
 
 # chatgpt.com markup moves around; try each in order and report if all miss.
 COMPOSER_SELECTORS = [
@@ -55,6 +72,76 @@ LOGIN_MARKERS = ["button[data-testid='login-button']", "a[href*='/auth/login']"]
 # box was tried and abandoned - it does not reliably filter the sidebar, so the
 # titles are read straight off these links and filtered in Python instead.
 CONVO_LINK = "a[href*='/c/']"
+
+
+def _chrome_exe():
+    for p in CHROME_PATHS:
+        if Path(p).exists():
+            return p
+    return None
+
+
+def _debug_port_alive(timeout: float = 1.5) -> bool:
+    """True when something is answering CDP on DEBUG_PORT."""
+    try:
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{DEBUG_PORT}/json/version", timeout=timeout
+        ) as r:
+            return r.status == 200
+    except Exception:
+        return False
+
+
+def _launch_debug_chrome() -> bool:
+    """Start the signed-in Chrome with the debug port, if it is not already up.
+
+    This is the whole reason the ChatGPT tools stop working mid-session: they
+    drive the user's daily Chrome over CDP, and when that Chrome exits, every
+    call failed and JARVIS told the user to go do it themselves. Relaunching it
+    is the recovery — the dedicated ~/.jarvis-chrome-profile fallback is a
+    DIFFERENT profile and is not signed in, so falling through to it just
+    produces "not signed in" instead.
+
+    Returns True once the port answers. Returns False if a Chrome is already
+    running on that profile WITHOUT the debug port: our launch then merely hands
+    the arguments to that instance and exits, so the port never opens and the
+    only fix is the user closing that window. Nothing is force-killed here.
+    """
+    if _debug_port_alive():
+        return True
+    if not CHROME_AUTOLAUNCH:
+        return False
+    exe = _chrome_exe()
+    if exe is None:
+        return False
+    try:
+        subprocess.Popen(
+            [exe, f"--user-data-dir={CHROME_USER_DATA}",
+             f"--remote-debugging-port={DEBUG_PORT}"],
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except Exception:
+        traceback.print_exc()
+        return False
+
+    deadline = time.time() + CHROME_LAUNCH_WAIT
+    while time.time() < deadline:
+        if _debug_port_alive():
+            print(f"[browser] relaunched Chrome on debug port {DEBUG_PORT}", flush=True)
+            return True
+        time.sleep(1.0)
+    return False
+
+
+def _is_closed_error(e) -> bool:
+    """A dead browser/context/page, however Playwright chose to word it."""
+    if getattr(type(e), "__name__", "") == "TargetClosedError":
+        return True
+    msg = " ".join(str(e).split()).lower()
+    return any(k in msg for k in ("target closed", "target page",
+                                  "context or browser has been closed",
+                                  "browser has been closed", "page closed",
+                                  "connection closed", "websocket"))
 
 
 class _BrowserWorker:
@@ -93,14 +180,63 @@ class _BrowserWorker:
                 page = self._ensure_page()
                 reply.put((True, fn(page)))
             except Exception as e:
+                if _is_closed_error(e):
+                    # Chrome went away mid-call. Drop the stale handles and run
+                    # the SAME job once more against a relaunched browser, so a
+                    # closed window costs a retry instead of an answer that
+                    # tells the user to go do it themselves.
+                    try:
+                        self._drop_handles()
+                        page = self._ensure_page()
+                        reply.put((True, fn(page)))
+                    except Exception as e2:
+                        traceback.print_exc()
+                        reply.put((False, f"{type(e2).__name__}: {e2}"))
+                    continue
                 traceback.print_exc()
                 reply.put((False, f"{type(e).__name__}: {e}"))
+
+    def _drop_handles(self):
+        """Forget the page/context/browser without touching Playwright itself.
+
+        Kept separate from shutdown(): the driver (_pw) is still healthy and
+        reusable, and stopping it would cost a fresh driver process on every
+        recovery. Deliberately closes NOTHING — on the attach path the browser
+        is the user's daily Chrome, and a recovery that closed their windows
+        would be far worse than the failure it is recovering from.
+        """
+        self._browser = self._ctx = self._page = None
+        self._owns = False
+
+    def _live_page(self):
+        """The cached page, but only if the browser behind it is still there.
+
+        page.is_closed() alone is not enough on the CDP path: when the daily
+        Chrome exits, the handle keeps reporting "open" and every call on it
+        raises TargetClosedError instead.
+        """
+        if self._page is None:
+            return None
+        try:
+            if self._page.is_closed():
+                return None
+        except Exception:
+            return None
+        if self._browser is not None and not self._owns:
+            try:
+                if not self._browser.is_connected():
+                    return None
+            except Exception:
+                return None
+        return self._page
 
     def _ensure_page(self):
         from playwright.sync_api import sync_playwright
 
-        if self._page is not None and not self._page.is_closed():
-            return self._page
+        page = self._live_page()
+        if page is not None:
+            return page
+        self._drop_handles()
 
         if self._pw is None:
             self._pw = sync_playwright().start()
@@ -112,6 +248,14 @@ class _BrowserWorker:
         page = self._attach()
         if page is not None:
             return page
+
+        # Nothing on the debug port. Before dropping to the dedicated profile —
+        # which is a different, signed-OUT profile — put the signed-in Chrome
+        # back up and attach to that.
+        if _launch_debug_chrome():
+            page = self._attach()
+            if page is not None:
+                return page
 
         PROFILE_DIR.mkdir(parents=True, exist_ok=True)
         try:
@@ -208,11 +352,7 @@ def _pick_page(ctx):
 
 
 def _has_chrome() -> bool:
-    for p in (r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-              r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"):
-        if Path(p).exists():
-            return True
-    return False
+    return _chrome_exe() is not None
 
 
 _worker = _BrowserWorker()

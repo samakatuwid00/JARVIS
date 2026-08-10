@@ -16,8 +16,10 @@ tools fall back to opening the YouTube Music search URL in Brave via the OS and 
 so plainly rather than pretending playback started.
 """
 
+import difflib
 import os
 import queue
+import re
 import subprocess
 import threading
 import traceback
@@ -64,6 +66,38 @@ PLAY_BUTTON_SELECTORS = [
     "button[aria-label*='Play']",
     ".ytp-play-button",
 ]
+# Read the track that is ACTUALLY playing. The tab title is tried first (a
+# /watch page titles itself "Song - Artist - YouTube Music"); these player-bar
+# nodes are the fallback when it is unreadable. Most specific first.
+PLAYING_TITLE_SELECTORS = [
+    "ytmusic-player-bar .title",
+    "ytmusic-player-bar yt-formatted-string.title",
+    "ytmusic-player-bar .content-info-wrapper yt-formatted-string",
+]
+_TITLE_STOPWORDS = {"the", "a", "an", "and", "or", "for", "in", "on", "of", "to", "by",
+                    "with", "my", "your", "me"}
+
+# Release metadata a genuine track title carries that says nothing about WHICH
+# song it is. Ignored on the title side of the video-vs-song test so
+# "Bohemian Rhapsody (Official Video Remastered)" is not scored as junk-heavy.
+_TITLE_NOISE = {"official", "video", "audio", "lyric", "lyrics", "remaster",
+                "remastered", "version", "edit", "mix", "radio", "live",
+                "album", "full", "feat", "ft", "hd", "hq", "mv", "topic",
+                "visualizer", "extended", "soundtrack"}
+
+# A title is treated as "a video ABOUT the song" - not the song - when it
+# carries at least this many content words the query never asked for AND the
+# query explains less than this fraction of its content words. Tuned on the
+# live false accept: "The most INSANE Bohemian Rhapsody Flashmob you will ever
+# see!!" scores 7 unmatched / 0.22 coverage, while the tightest true match
+# ("Deep Focus - Calm Instrumental Mix") scores 2 unmatched / 0.50 coverage.
+_VIDEO_JUNK_WORDS = 4
+_VIDEO_COVERAGE_MIN = 0.35
+
+# Whole-string floor for titles that share no meaningful text with the query.
+# The tightest true match ("lofi hip hop radio - beats to relax/study to" vs
+# "lofi study beats") sits at 0.414; unrelated titles land under 0.2.
+_TITLE_SIMILARITY_MIN = 0.35
 
 # Kick playback off inside the page. Returning a dict (never throwing) matters:
 # an exception here would surface as a worker error and be mistaken for a
@@ -128,6 +162,64 @@ def _is_closed_error(e):
                                   "connection closed"))
 
 
+def _is_dead_browser_message(text: str) -> bool:
+    """Same test as _is_closed_error, but against the [Error] string call() returns.
+
+    The worker turns exceptions into text before play_music ever sees them, so
+    the recovery decision has to be made on the message.
+    """
+    low = " ".join((text or "").split()).lower()
+    return any(k in low for k in ("targetclosederror", "target closed", "target page",
+                                  "context or browser has been closed",
+                                  "browser has been closed", "page closed",
+                                  "connection closed", "browser closed",
+                                  "call timed out", "browser.newpage",
+                                  "browsercontext.new_page"))
+
+
+def _kill_profile_brave():
+    """Kill Brave processes launched against JARVIS's OWN music profile.
+
+    Scoped by --user-data-dir deliberately: the user's everyday Brave must never
+    be killed by a music retry. A half-dead Brave that still holds the profile
+    is what makes launch_persistent_context fail on the rebuild, so it has to go
+    before a relaunch can succeed.
+    """
+    marker = str(PROFILE_DIR).replace("'", "''")
+    ps = ("Get-CimInstance Win32_Process -Filter \"Name='brave.exe'\" | "
+          "Where-Object { $_.CommandLine -like '*" + marker + "*' } | "
+          "ForEach-Object { Stop-Process -Id $_.ProcessId -Force "
+          "-ErrorAction SilentlyContinue }")
+    try:
+        subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+            timeout=25, capture_output=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except Exception:
+        pass
+
+
+def _clear_singleton_locks():
+    """Remove the profile lock files a crashed Chromium leaves behind.
+
+    Only safe once no Brave owns the profile, so this is always called straight
+    after _kill_profile_brave().
+    """
+    for name in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
+        p = PROFILE_DIR / name
+        try:
+            if p.is_symlink() or p.exists():
+                p.unlink()
+        except Exception:
+            pass
+
+
+# Sentinel job: tells the worker thread to tear its Playwright handles down and
+# exit. Playwright objects are thread-affine, so only that thread may close them.
+_STOP = object()
+
+
 class BraveMusicWorker:
     """Single thread owning the Brave Playwright context; all calls funnel through it."""
 
@@ -138,15 +230,38 @@ class BraveMusicWorker:
         self._pw = None
         self._ctx = None
         self._page = None
+        # Bumped by _hard_reset. A worker thread whose generation is stale must
+        # not touch the shared handles again — otherwise a thread that was
+        # wedged past the reset could wake up and rebuild a context underneath
+        # its replacement, leaving two Braves and one of them unreachable.
+        self._gen = 0
 
     def call(self, fn, timeout=180):
-        """Run fn(page) on the worker thread and return its result."""
+        """Run fn(page) on the worker thread, relaunching Brave if it died.
+
+        Two levels of recovery, because they fail for different reasons. The
+        in-thread retry in _loop covers a context/page that closed while the
+        Brave PROCESS is still alive. When the process itself is gone, that
+        retry cannot help: the Playwright driver and its sync dispatcher belong
+        to the worker thread and the dead Brave may still hold the profile lock,
+        so the whole worker is retired and rebuilt here instead.
+        """
+        out = self._call_once(fn, timeout)
+        if isinstance(out, str) and out.startswith("[Error]") and _is_dead_browser_message(out):
+            print(f"[music] Brave looks dead ({out[:120]}); relaunching...", flush=True)
+            self._hard_reset()
+            out = self._call_once(fn, timeout)
+        return out
+
+    def _call_once(self, fn, timeout):
         with self._lock:
             if self._thread is None or not self._thread.is_alive():
-                self._thread = threading.Thread(target=self._loop, daemon=True)
+                self._thread = threading.Thread(target=self._loop, args=(self._jobs,),
+                                                daemon=True)
                 self._thread.start()
+            jobs = self._jobs
         reply = queue.Queue(maxsize=1)
-        self._jobs.put((fn, reply))
+        jobs.put((fn, reply))
         try:
             ok, value = reply.get(timeout=timeout)
         except queue.Empty:
@@ -155,9 +270,44 @@ class BraveMusicWorker:
             return f"[Error] {value}"
         return value
 
-    def _loop(self):
+    def _hard_reset(self):
+        """Retire the worker thread and relaunch Brave from nothing.
+
+        The thread is given its own queue generation so a wedged old thread can
+        never steal a job from the new one, and it does its own teardown because
+        Playwright handles may only be touched by the thread that made them.
+        """
+        with self._lock:
+            thread, jobs = self._thread, self._jobs
+            self._thread = None
+            self._jobs = queue.Queue()
+
+        if thread is not None and thread.is_alive():
+            reply = queue.Queue(maxsize=1)
+            jobs.put((_STOP, reply))
+            try:
+                reply.get(timeout=20)
+            except queue.Empty:
+                pass  # Wedged in a dead driver call; it starves on the old queue.
+            thread.join(timeout=10)
+
+        # Drop the handles even if the thread never got to: they point at a
+        # browser that no longer exists.
+        self._ctx = self._page = self._pw = None
+        _kill_profile_brave()
+        _clear_singleton_locks()
+
+    def _loop(self, jobs):
         while True:
-            fn, reply = self._jobs.get()
+            fn, reply = jobs.get()
+            if fn is _STOP:
+                try:
+                    self._teardown()
+                except Exception:
+                    pass
+                if reply is not None:
+                    reply.put((True, "stopped"))
+                return
             try:
                 page = self._ensure_page()
                 reply.put((True, fn(page)))
@@ -259,13 +409,25 @@ class BraveMusicWorker:
             # the tool reports an honest [Error] instead of a silent no-op.
             traceback.print_exc()
             self._teardown()
+            # A Brave that crashed with the profile still checked out makes the
+            # relaunch fail the same way forever; clear the corpse first.
+            _kill_profile_brave()
+            _clear_singleton_locks()
             return self._build_page()
 
     def is_open(self) -> bool:
-        return self._page is not None and not self._page.is_closed()
+        try:
+            return self._page is not None and not self._page.is_closed()
+        except Exception:
+            return False
 
     def shutdown(self):
-        self._teardown()
+        # Through _hard_reset, not _teardown directly: Playwright handles may
+        # only be closed by the thread that created them, and close_music() is
+        # called from the WebSocket/tool thread. The direct call raised there,
+        # got swallowed, and left an orphan Brave running with JARVIS no longer
+        # holding a handle to it.
+        self._hard_reset()
 
 
 _worker = BraveMusicWorker()
@@ -441,6 +603,180 @@ def _click_play_button(page):
     return False
 
 
+def _clean_tab_title(raw: str) -> str:
+    """"Song - Artist - YouTube Music" -> "Song". "" when nothing usable."""
+    t = " ".join((raw or "").split())
+    if not t:
+        return ""
+    low = t.lower()
+    if low.endswith("- youtube music"):
+        t = t[:-len("- youtube music")].strip(" -")
+    elif low in ("youtube music", "music"):
+        return ""
+    parts = [p.strip() for p in t.split(" - ") if p.strip()]
+    if len(parts) >= 2:
+        # Last segment is the artist; a song whose own name contains " - "
+        # keeps everything before it rather than being truncated to its head.
+        return " - ".join(parts[:-1])
+    return parts[0] if parts else ""
+
+
+def _strip_ytm_suffix(raw: str) -> str:
+    """Drop only the " - YouTube Music" tail; every other segment is kept.
+
+    The artist and any extra dash segments stay because the matcher needs them:
+    a real YTM tab title like "Deep Focus - Calm Instrumental Mix" is all song
+    name, and dropping its tail would hide half the query's tokens.
+    """
+    t = " ".join((raw or "").split())
+    if not t:
+        return ""
+    low = t.lower()
+    if low.endswith("- youtube music"):
+        t = t[:-len("- youtube music")].strip(" -")
+    elif low in ("youtube music", "music"):
+        return ""
+    return t
+
+
+def _playing_titles(page):
+    """(display, match) for the track actually playing, read off the live page.
+
+    `display` is the short song-only string for TTS; `match` is the full title
+    minus the " - YouTube Music" suffix, for _title_matches. Both are "" when no
+    source is readable - callers must treat that as "cannot tell", never as a
+    mismatch, so a selector miss does not reject a track that is playing right.
+    """
+    # YouTube Music is an SPA: the tab title is rewritten a beat after the URL
+    # becomes /watch, so poll briefly instead of sampling once.
+    for attempt in range(4):
+        try:
+            raw = page.title()
+        except Exception:
+            raw = ""
+        title = _clean_tab_title(raw)
+        if title:
+            print(f"[music] now playing (page.title): {title}", flush=True)
+            return title, _strip_ytm_suffix(raw) or title
+        if attempt < 3:
+            try:
+                page.wait_for_timeout(500)
+            except Exception:
+                break
+
+    for sel in PLAYING_TITLE_SELECTORS:
+        try:
+            text = " ".join((page.locator(sel).first.inner_text(timeout=2000) or "").split())
+        except Exception:
+            continue
+        if text:
+            # Not a tab title - no suffix to strip, so it is its own match text.
+            print(f"[music] now playing ({sel}): {text}", flush=True)
+            return text, text
+    print("[music] could not read the now-playing title", flush=True)
+    return "", ""
+
+
+def _playing_title(page) -> str:
+    """The cleaned, display-length track title, or "" when unreadable."""
+    return _playing_titles(page)[0]
+
+
+def _title_similarity(a: str, b: str) -> float:
+    """Whole-string closeness of two titles, 0..1. stdlib difflib only.
+
+    Callers pass already-normalised text; the lower/strip here is a safety net
+    so a raw string never scores differently just for casing or padding.
+    """
+    return difflib.SequenceMatcher(None, (a or "").strip().lower(),
+                                   (b or "").strip().lower()).ratio()
+
+
+def _video_about_song(t: str, q: str) -> bool:
+    """Does `t` read as a video that merely MENTIONS the song `q`?
+
+    Both args must already be normalised (lowercase, punctuation stripped).
+
+    A real track title is almost entirely song, artist and release metadata, so
+    the query plus `_TITLE_NOISE` explains nearly all of its content words. A
+    video title carries a pile of words the query never asked for
+    ("most insane ... flashmob you will ever see"), and it is rejected even
+    though the query appears in it verbatim - which is exactly the presence
+    evidence every rule below accepts on.
+
+    Both conditions are required. Junk count alone would reject a long genuine
+    title; low coverage alone would reject an artist-only query like
+    "metallica" against "Nothing Else Matters - Remastered - Metallica".
+    """
+    qwords = set(q.split())
+    sig = [w for w in t.split()
+           if len(w) >= 3 and w not in _TITLE_STOPWORDS and w not in _TITLE_NOISE]
+    if not sig:
+        return False
+    unmatched = [w for w in sig if w not in qwords]
+    coverage = (len(sig) - len(unmatched)) / len(sig)
+    return len(unmatched) >= _VIDEO_JUNK_WORDS and coverage < _VIDEO_COVERAGE_MIN
+
+
+def _title_matches(title: str, query: str) -> bool:
+    """Best-effort: does `title` name the song `query` asked for? stdlib only.
+
+    `title` is expected to be the FULL title (artist and all), not the cleaned
+    display string - the artist segment often carries query tokens.
+
+    Ordered by how much evidence each rule needs, strongest first. The
+    edit-distance rule is last and single-token only because near-miss titles
+    ("Two Goals" for "Two Ghosts") score ~0.77 against the real thing, so on
+    multi-word queries a ratio test says yes to the wrong song.
+    """
+    def norm(s):
+        return " ".join(re.sub(r"[^\w\s]", " ", (s or "").lower()).split())
+
+    t, q = norm(title), norm(query)
+    if not t or not q:
+        return False
+    # Title inside query: the query named the song plus an artist the bare
+    # title omits. A subset can never be a video padded out around the song, so
+    # this direction runs ahead of the video gate.
+    if t in q:
+        return True
+
+    # Everything past here accepts on the query being PRESENT in the title, and
+    # presence is exactly what a video about the song also has. Gate first.
+    if _video_about_song(t, q):
+        return False
+
+    # The query names only the song of a "Song (feat. X)" title.
+    if q in t:
+        return True
+
+    # Nothing meaningful in common: no presence rule below should get a vote.
+    if _title_similarity(t, q) < _TITLE_SIMILARITY_MIN:
+        return False
+
+    qtokens = q.split()
+    sig = [w for w in qtokens if len(w) >= 3 and w not in _TITLE_STOPWORDS]
+    if not sig:
+        sig = [q]
+
+    # The longest content word is the query's identity - "ghosts", not "two".
+    # Present means match; absent just falls through to the weaker rules.
+    longest = max(sig, key=len)
+    if len(longest) >= 4 and longest in t:
+        return True
+
+    hits = sum(1 for w in qtokens if w in t)
+    need = (2 * len(qtokens) + 2) // 3  # ceil(2/3 * n)
+    if len(qtokens) > 1:
+        need = max(need, 2)
+    if hits >= need:
+        return True
+
+    if len(qtokens) == 1:
+        return difflib.SequenceMatcher(None, t, q).ratio() >= 0.75
+    return False
+
+
 def _fallback_open(url: str, why: str) -> str:
     """Last resort: hand the URL to Brave through the OS, and say that we did."""
     try:
@@ -487,6 +823,7 @@ def play_music(query: str, navigate_only: bool = False) -> str:
             return f"Loaded YouTube Music results for '{query}'. First result: {title[:120]}"
 
         why = "unknown"
+        last_actual, tried = "", 0
         for attempt in range(min(3, len(candidates))):
             if attempt:
                 # Previous candidate led somewhere unplayable; reload the
@@ -503,6 +840,7 @@ def play_music(query: str, navigate_only: bool = False) -> str:
                     break
 
             cand = candidates[attempt]
+            tried += 1
             try:
                 _resolve(page, cand).click(timeout=8000)
             except Exception as e:
@@ -529,7 +867,26 @@ def play_music(query: str, navigate_only: bool = False) -> str:
                     page.bring_to_front()
                 except Exception:
                     pass
-                return f"Playing '{query}' on YouTube Music in Brave."
+                # Playing is not the same as playing the right thing: read the
+                # live track title and only claim what is actually sounding.
+                # Match on the full title, speak the short one: the artist and
+                # trailing segments carry query tokens the display string drops.
+                actual, match_title = _playing_titles(page)
+                if not actual:
+                    # Unreadable title is a selector miss, not a wrong song.
+                    return f"Playing '{query}' on YouTube Music in Brave."
+                if _title_matches(match_title, query):
+                    return f"Playing '{actual}' on YouTube Music in Brave."
+                last_actual = actual
+                why = f"'{actual}' does not match '{query}'"
+                continue
+
+        if last_actual:
+            # Audio IS running, just the wrong track - no _fallback_open, which
+            # would open a second window on top of it. Report it honestly and
+            # let the user say "next" or name the song.
+            return (f"[MatchError] Started '{last_actual}' for '{query}' but it does not "
+                    f"match. I tried the first {tried} results.")
 
         return (f"[Error] Loaded '{query}' on YouTube Music but playback did not start "
                 f"({why}). You may need to press play in the Brave window.")
@@ -569,7 +926,11 @@ def stop_music() -> str:
 
 def close_music() -> str:
     """Close the Brave music window entirely."""
+    global _warmed
     _worker.shutdown()
+    # The next play_music launches Brave cold again, so it must be allowed the
+    # long warm-up budget rather than assuming a live context.
+    _warmed = False
     return "Music browser closed."
 
 

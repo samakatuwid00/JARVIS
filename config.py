@@ -92,6 +92,20 @@ OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "180"))
 JARVIS_LOCAL_ONLY = os.getenv("JARVIS_LOCAL_ONLY", "false").lower() == "true"
 OLLAMA_KEEP_WARM = os.getenv("OLLAMA_KEEP_WARM", "true").lower() == "true"
 OLLAMA_WARM_INTERVAL = int(os.getenv("OLLAMA_WARM_INTERVAL", "240"))
+# Full context reset after this many minutes without a turn. The local 4b model
+# degrades with accumulated history; after a real gap the next turn starts fresh
+# instead of replaying stale turns. 0 disables the feature entirely.
+IDLE_RESET_MINUTES = int(os.getenv("JARVIS_IDLE_RESET_MINUTES", "10"))
+# Ceiling on replayed conversation history, in estimated tokens, for the local
+# backend. The 8192-token window is already ~3.7k spent on the system prompt
+# plus 24 tool schemas before a single turn of history, so an unbounded history
+# overflows it and Ollama re-evaluates an enormous prefix: measured 8.8s for a
+# fresh turn, 45.7s at 1.9k tokens of history, 162.4s at 11.5k — past
+# OLLAMA_TIMEOUT, at which point the turn fails outright and JARVIS answers
+# with an apology instead of calling the tool it was asked for. Above this
+# estimate the oldest turns are dropped. Raising it requires a bigger num_ctx
+# in Modelfile.jarvis and a model rebuild.
+LOCAL_HISTORY_TOKEN_BUDGET = int(os.getenv("JARVIS_LOCAL_HISTORY_TOKENS", "3500"))
 
 # Audio
 SAMPLE_RATE = 16000

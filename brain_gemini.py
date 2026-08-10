@@ -2,6 +2,7 @@
 import json
 import os
 import re
+import time
 
 try:
     from google import genai
@@ -17,9 +18,59 @@ from config import (GEMINI_API_KEY, GEMINI_MODEL, JARVIS_USE_9ROUTER, ROUTER_BAS
                    CEREBRAS_BASE_URL, CEREBRAS_MODEL, JARVIS_USE_OLLAMA,
                    JARVIS_PREFER_LOCAL, OLLAMA_BASE_URL, OLLAMA_MODEL,
                    OLLAMA_API_KEY, OLLAMA_MAX_TOKENS, OLLAMA_TIMEOUT,
-                   OLLAMA_KEEP_WARM, OLLAMA_WARM_INTERVAL, JARVIS_LOCAL_ONLY)
+                   OLLAMA_KEEP_WARM, OLLAMA_WARM_INTERVAL, JARVIS_LOCAL_ONLY,
+                   LOCAL_HISTORY_TOKEN_BUDGET, IDLE_RESET_MINUTES)
 
 MAX_HISTORY = 20
+
+
+def _estimate_tokens(messages) -> int:
+    """Rough token count for a built message list: ~4 characters per token.
+
+    Deliberately an estimate and not a tokenizer call — it only has to decide
+    whether history is small, and a real tokenizer would be another dependency
+    and another per-turn cost.
+    """
+    total = 0
+    for m in messages:
+        content = m.get("content")
+        if isinstance(content, str):
+            total += len(content) // 4
+        elif content:
+            total += len(str(content)) // 4
+        for tc in (m.get("tool_calls") or []):
+            total += len(str(tc)) // 4
+        total += 4  # per-message role and framing overhead
+    return total
+
+
+def _trim_history(messages, budget=LOCAL_HISTORY_TOKEN_BUDGET):
+    """Drop the oldest turns until the replayed history fits `budget` tokens.
+
+    messages[0] is the system prompt and is never dropped, and neither is the
+    newest user message — that is the request being answered. Cuts land only on
+    a user message so a tool result can never be left without the assistant
+    tool_calls block it replies to; an orphaned tool message is a protocol error
+    that the OpenAI-compatible backends reject outright.
+    """
+    if len(messages) <= 2:
+        return messages
+    head, rest = messages[0], messages[1:]
+    last_user = 0
+    for i, m in enumerate(rest):
+        if m.get("role") == "user":
+            last_user = i
+
+    cut = 0
+    while cut < last_user and _estimate_tokens(rest[cut:]) > budget:
+        cut += 1
+        while cut < last_user and rest[cut].get("role") != "user":
+            cut += 1
+    if cut == 0:
+        return messages
+    print(f"[JARVIS] history trimmed: dropped {cut} of {len(rest)} message(s) "
+          f"to stay inside the local context window", flush=True)
+    return [head] + rest[cut:]
 
 
 JARVIS_SYSTEM = """You are JARVIS (Just A Rather Very Intelligent System), an AI assistant inspired by Iron Man's JARVIS.
@@ -461,9 +512,29 @@ class JarvisBrain:
         # actually reported are set, so the panel can leave a row blank instead
         # of inventing a number.
         self.last_stats = {}
+        # Idle-reset clock: the last moment a turn started. A turn starting resets
+        # it; after IDLE_RESET_MINUTES of silence the next turn clears context.
+        self._last_turn_ts = time.time()
+
+    def _maybe_reset_idle(self):
+        """Full context reset when the conversation has been idle too long.
+
+        The local 4b model degrades with accumulated history; after
+        IDLE_RESET_MINUTES of silence the next turn starts fresh instead of
+        replaying stale turns. 0 disables. Only fires on a real gap — active
+        conversations keep their context.
+        """
+        if not IDLE_RESET_MINUTES:
+            return
+        idle = time.time() - self._last_turn_ts
+        if idle > IDLE_RESET_MINUTES * 60:
+            self.reset()
+            print(f"[JARVIS] context reset after {idle/60:.1f} min idle", flush=True)
 
     def think(self, user_input: str) -> str:
         """Route to 9router (mimo) first; then Groq (free tier); then Gemini; then mock."""
+        self._maybe_reset_idle()
+        self._last_turn_ts = time.time()
         self.conversation.append({"role": "user", "content": user_input})
 
         # Each turn reports its own telemetry; clear last turn's so a backend that
@@ -808,6 +879,12 @@ class JarvisBrain:
                             "role": "assistant",
                             "content": f"[{tr.get('name', 'tool')} result] {tr.get('content', '')}"
                         })
+
+        # Only this path is trimmed. The cloud backends have context windows
+        # large enough that dropping history would lose the conversation for no
+        # gain; the local model does not, and an overflowing prompt there is
+        # exactly what makes tool calls stop happening after a long session.
+        messages = _trim_history(messages)
 
         pending = []
         # Telemetry for the HUD. Tokens accumulate across the loop because a turn
