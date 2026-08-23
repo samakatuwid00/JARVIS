@@ -832,6 +832,13 @@
     twSpan = null; twLine = null; twAudio = null;
   }
 
+  // Spoken session cue. Asks the server to TTS a short line so JARVIS audibly
+  // signals a state change (e.g. "what is it, sir?" on wake, "standing by" on
+  // close). The server replies with {type:'cue', audio}; we play it immediately.
+  function cue(text) {
+    send({ type: 'cue', text: text });
+  }
+
   function logConv(role, text, audio) {
     if (!chatLog) return;
     var line = document.createElement('div');
@@ -991,9 +998,16 @@
       return;
     }
 
+    // Server-synthesized session cue (wake / close). Just play it.
+    if (m.type === 'cue') {
+      if (m.audio) { speak(m.audio); }
+      else if (m.text) { notice(m.text); }
+      return;
+    }
+
     // Layer 1 (Intake) confirmation gate: a low-confidence / mis-heard command
     // becomes a set of tappable correction chips instead of a wrong action.
-    // Tapping a chip re-sends that text as a fresh (now clean) command.
+    // Tapping a chip re-sends that candidate as a fresh (now clean) command.
     if (m.type === 'clarify') {
       console.log('[clarify] heard=' + m.heard + ' echo=' + m.echo +
                   ' candidates=' + JSON.stringify(m.candidates));
@@ -1017,17 +1031,27 @@
       // merely ENDS in "jarvis" must NOT close: Whisper routinely appends the
       // wake word to whatever it heard, so ending-on-jarvis killed the session
       // after a single real command. The close verb must lead, not trail.
-      var isBareWake = /^(hey\s+|ok\s+|okay\s+|hi\s+)?(jarvis\w*)\s*$/i.test(youLower);
+      var isBareWake = /^(hey\s+|ok\s+|okay\s+|hi\s+)?(jarvis\w*)(\s+(jarvis\w*))*$/i.test(youLower);
       var isCloseIntent = /^(stop|end|close|exit|quit|that'?s all|that is all|done|finish|bye|goodbye)(\s+(jarvis\w*))?$/i.test(youLower);
       if (isBareWake || isCloseIntent) {
+        // "JARVIS" is the session toggle: a bare wake word OPENS the mic when
+        // idle (and JARVIS speaks a listening cue), and CLOSES it when already
+        // active (with a standing-by cue). This gives a clean wake -> chat ->
+        // wake-to-end boundary and an audible signal of listening state.
+        if (mode === 'off') {
+          console.log('[session] wake — opening voice session');
+          beginCapture('command', false);
+          cue('What is it, sir?');
+          return;
+        }
+        // Already active: close the session.
         sessionClosePending = true;
         console.log('[session] close requested — mic will stop after reply');
-        // Close immediately when the session was already idle (not mid-turn);
-        // otherwise defer to goIdle() so the current reply still plays out.
         if (mode !== 'busy' && mode !== 'speaking') {
           stopMic();
           mode = 'off';
-          setState('idle', 'VOICE SESSION ENDED — CLICK ENABLE MIC TO RESUME');
+          cue('Standing by, sir.');
+          setState('idle', 'VOICE SESSION ENDED — SAY "JARVIS" TO RESUME');
           dot.className = 'dead';
           if (endBtn) endBtn.classList.remove('show');
           return;
@@ -1374,7 +1398,8 @@
       sessionClosePending = false;
       stopMic();
       mode = 'off';
-      setState('idle', 'VOICE SESSION ENDED — CLICK ENABLE MIC TO RESUME');
+      cue('Standing by, sir.');
+      setState('idle', 'VOICE SESSION ENDED — SAY "JARVIS" TO RESUME');
       dot.className = 'dead';
       if (endBtn) endBtn.classList.remove('show');
       return;

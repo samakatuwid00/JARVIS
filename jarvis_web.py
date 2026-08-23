@@ -502,6 +502,21 @@ async def websocket_endpoint(websocket: WebSocket):
                         "type": "error", "text": f"unknown command: {name}"
                     }))
 
+            elif mtype == "cue":
+                # Spoken session cue (wake / close). The client requests a
+                # short line ("what is it, sir?" / "standing by, sir") and the
+                # server TTS-es it so JARVIS audibly signals listening state.
+                cue_text = (message.get("text") or "").strip()
+                if not cue_text:
+                    continue
+                try:
+                    tts_b64 = await tts_to_b64(cue_text)
+                    await websocket.send_text(json.dumps({
+                        "type": "cue", "text": cue_text, "audio": tts_b64
+                    }))
+                except Exception as e:
+                    print(f"[WS] cue TTS failed: {e}", flush=True)
+
             elif mtype == "text":
                 # Direct text command. TTS audio only when "speak": true
                 # (wake-word client uses this when the command arrived in the
