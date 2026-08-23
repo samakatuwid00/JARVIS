@@ -987,7 +987,13 @@
       var now = Date.now();
       if (now - lastWakeAt < 2000) return;   // de-dupe against the browser listener
       lastWakeAt = now;
-      if (mode === 'idle') { beginCapture('command', false); }
+      // Open the voice session when resting (off after a reply, or idle from
+      // enable-mic). Must match mode==='off' because goIdle() parks there.
+      if (mode === 'off' || mode === 'idle') {
+        console.log('[session] wake — opening voice session');
+        beginCapture('command', false);
+        cue('What is it, sir?');
+      }
       return;
     }
 
