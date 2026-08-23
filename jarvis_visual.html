@@ -1323,10 +1323,11 @@
     wakeRec.interimResults = true;
     wakeRec.lang = 'en-US';
     wakeRec.onresult = function (ev) {
-      // Only open when JARVIS is fully OFF (not already in a session). A bare
-      // "jarvis" mid-conversation must not reset/restart capture — Whisper
-      // routinely appends the wake word to real commands.
-      if (mode !== 'off') return;
+      // Open when JARVIS is resting: 'off' (after a reply / session close) or
+      // 'idle' (freshly enabled mic, waiting for the first wake word). A bare
+      // "jarvis" mid-conversation must not reset capture — Whisper routinely
+      // appends the wake word to real commands, so block during active turns.
+      if (mode !== 'off' && mode !== 'idle') return;
       for (var i = ev.resultIndex; i < ev.results.length; i++) {
         var txt = ev.results[i][0].transcript;
         if (wakeWordIn(txt)) {
