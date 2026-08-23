@@ -1017,34 +1017,31 @@
 
     if (m.type === 'transcript') {
       console.log('[you] ' + m.text);
-      // Stop-word: the user ends the voice session by saying a CLOSE phrase, e.g.
-      // "jarvis" alone, "stop jarvis", "end jarvis", "that's all jarvis". A normal
-      // command that merely happens to end in "jarvis" (Whisper often captures the
-      // wake word too) must NOT close the session — that was the bug that killed the
-      // mic after a single turn. So we only close when, after stripping wake words
-      // and filler, nothing meaningful remains or an explicit close intent is present.
+      // Session boundary rules (Phase 1 UX + spurious-close fix):
+      //   * Bare "jarvis" OPENS the mic when truly off (speaks a listening cue).
+      //   * Bare "jarvis" must NEVER CLOSE the session: Whisper routinely
+      //     appends "jarvis" to real commands, so a stray/trailing "jarvis"
+      //     would end the chat even when you never meant to. That was the
+      //     bug that killed the mic mid-conversation.
+      //   * CLOSE happens only on an EXPLICIT close phrase ("exit jarvis",
+      //     "stop jarvis", "bye jarvis", "that's all") — words Whisper does
+      //     not spontaneously emit for a normal command.
       var youText = (m.text || '').trim();
       var youLower = youText.toLowerCase().replace(/[.,!?;:]+$/g, '').trim();
-      // Session closes ONLY on an explicit close intent — a bare wake word
-      // ("jarvis", "hey jarvis") or a close verb ("stop", "goodbye", "that's
-      // all", ...), optionally followed by the wake word. A normal command that
-      // merely ENDS in "jarvis" must NOT close: Whisper routinely appends the
-      // wake word to whatever it heard, so ending-on-jarvis killed the session
-      // after a single real command. The close verb must lead, not trail.
+      // A bare wake word (and nothing else) — used ONLY to open.
       var isBareWake = /^(hey\s+|ok\s+|okay\s+|hi\s+)?(jarvis\w*)(\s+(jarvis\w*))*$/i.test(youLower);
+      // Explicit close: a close verb LEADING, optionally followed by the wake
+      // word. The verb must lead so a command merely ending in "jarvis" is safe.
       var isCloseIntent = /^(stop|end|close|exit|quit|that'?s all|that is all|done|finish|bye|goodbye)(\s+(jarvis\w*))?$/i.test(youLower);
-      if (isBareWake || isCloseIntent) {
-        // "JARVIS" is the session toggle: a bare wake word OPENS the mic when
-        // idle (and JARVIS speaks a listening cue), and CLOSES it when already
-        // active (with a standing-by cue). This gives a clean wake -> chat ->
-        // wake-to-end boundary and an audible signal of listening state.
-        if (mode === 'off') {
-          console.log('[session] wake — opening voice session');
-          beginCapture('command', false);
-          cue('What is it, sir?');
-          return;
-        }
-        // Already active: close the session.
+      if (mode === 'off' && isBareWake) {
+        // Open the voice session and audibly signal listening.
+        console.log('[session] wake — opening voice session');
+        beginCapture('command', false);
+        cue('What is it, sir?');
+        return;
+      }
+      if (isCloseIntent) {
+        // Deliberate end phrase: close the session with a standing-by cue.
         sessionClosePending = true;
         console.log('[session] close requested — mic will stop after reply');
         if (mode !== 'busy' && mode !== 'speaking') {
@@ -1320,14 +1317,14 @@
     wakeRec.interimResults = true;
     wakeRec.lang = 'en-US';
     wakeRec.onresult = function (ev) {
-      // Only act when JARVIS is idle and not already in a turn.
-      if (mode !== 'idle') return;
+      // Only open when JARVIS is fully OFF (not already in a session). A bare
+      // "jarvis" mid-conversation must not reset/restart capture — Whisper
+      // routinely appends the wake word to real commands.
+      if (mode !== 'off') return;
       for (var i = ev.resultIndex; i < ev.results.length; i++) {
         var txt = ev.results[i][0].transcript;
         if (wakeWordIn(txt)) {
           console.log('[wake] detected: ' + txt);
-          // Open the command window directly; the command itself is captured +
-          // transcribed locally (Whisper) — not by this recognizer.
           beginCapture('command', false);
           return;
         }
