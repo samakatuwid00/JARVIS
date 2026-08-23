@@ -98,8 +98,8 @@
     color: #0b0805; background: var(--holo); }
   .jv-btn:hover { filter: brightness(1.12); }
   /* Fallback controls — only shown when they are actually needed */
-  #jv-retry, #jv-unlock { display: none; }
-  #jv-retry.show, #jv-unlock.show { display: inline-block; }
+  #jv-retry, #jv-unlock, #jv-end { display: none; }
+  #jv-retry.show, #jv-unlock.show, #jv-end.show { display: inline-block; }
 
   /* ------------------------------------------------------------ terminal chat */
   /* Wrapper-side (NOT iframe) typed path. It sits above #jv-head and never
@@ -249,9 +249,37 @@
     color: color-mix(in srgb, var(--holo) 92%, #fff); caret-color: var(--holo); }
   #jv-input::placeholder { color: color-mix(in srgb, var(--holo) 45%, transparent);
     letter-spacing: .16em; font-weight: 700; }
+
+  /* Layer 1 (Intake) "did you mean?" clarification chips */
+  #jv-clarify-root { position: fixed; inset: 0; pointer-events: none; z-index: 60; }
+  .jv-clarify {
+    position: fixed; left: 50%; bottom: 12%; transform: translateX(-50%);
+    pointer-events: auto; max-width: min(560px, 92vw);
+    display: flex; flex-direction: column; gap: 10px; padding: 16px 18px;
+    background: color-mix(in srgb, #05070d 88%, var(--holo));
+    border: 1px solid color-mix(in srgb, var(--holo) 55%, transparent);
+    border-radius: 14px; backdrop-filter: blur(8px);
+    box-shadow: 0 0 28px color-mix(in srgb, var(--holo) 30%, transparent);
+    font-family: Archivo, system-ui, sans-serif; animation: jvClarifyIn .18s ease-out;
+  }
+  @keyframes jvClarifyIn { from { opacity: 0; transform: translate(-50%, 8px); } }
+  .jv-clarify-head { color: color-mix(in srgb, var(--holo) 90%, #fff);
+    font: 700 12px/1.3 Archivo, system-ui; letter-spacing: .14em; text-transform: uppercase; }
+  .jv-clarify-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .jv-chip {
+    pointer-events: auto; cursor: pointer; padding: 8px 14px; border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--holo) 50%, transparent);
+    background: color-mix(in srgb, var(--holo) 12%, transparent);
+    color: color-mix(in srgb, var(--holo) 95%, #fff);
+    font: 700 13px/1 Archivo, system-ui; letter-spacing: .04em;
+    transition: background .12s, transform .12s; }
+  .jv-chip:hover { background: color-mix(in srgb, var(--holo) 28%, transparent);
+    transform: translateY(-1px); }
+  .jv-chip:active { transform: translateY(0); }
 </style>
 </head>
 <body>
+  <div id="jv-clarify-root"></div>
   <div id="stage">
     <iframe id="hud" src="/hud.html" allow="microphone"></iframe>
   </div>
@@ -295,6 +323,7 @@
     <div class="jv-st-row"><span class="jv-st-k">Voice in</span><span class="jv-st-v" id="st-mic">—</span></div>
     <div class="jv-st-row"><span class="jv-st-k">Link</span><span class="jv-st-v" id="st-link">—</span></div>
     <div class="jv-st-row"><span class="jv-st-k">State</span><span class="jv-st-v" id="st-state">—</span></div>
+    <div class="jv-st-row"><span class="jv-st-k">Wake</span><span class="jv-st-v" id="st-wake">—</span></div>
     <div class="jv-st-row"><span class="jv-st-k">Speed</span><span class="jv-st-v" id="st-speed">—</span></div>
     <div class="jv-st-row"><span class="jv-st-k">Turn</span><span class="jv-st-v" id="st-latency">—</span></div>
     <div class="jv-st-row"><span class="jv-st-k">Context</span><span class="jv-st-v" id="st-ctx">—</span></div>
@@ -324,6 +353,7 @@
     <span id="jv-level"><i></i></span>
     <span id="jv-actions">
       <button id="jv-unlock" class="jv-btn">Activate audio</button>
+      <button id="jv-end" class="jv-btn">End session</button>
       <button id="jv-retry" class="jv-btn">Enable mic</button>
     </span>
   </div>
@@ -334,11 +364,8 @@
 
   // ---------------------------------------------------------------- config
   var WAKE_WORDS = ['jarvis', 'jarviss', 'jarvus', 'jervis', 'javis', 'jarvez', 'charvis', 'jarv'];
-  var WAKE_RE = new RegExp('\\b(?:hey\\s+|ok\\s+|okay\\s+|hi\\s+)?(' + WAKE_WORDS.join('|') + ')\\b[\\s,.:;!?-]*', 'i');
   var TARGET_RATE   = 16000;   // what we ship to Whisper
   var PREROLL_MS    = 900;     // audio kept before speech onset so the wake word is never clipped
-  var SCAN_HANG_MS  = 600;     // silence that ends a wake-word scan clip
-  var SCAN_MAX_MS   = 4000;
   var CMD_HANG_MS   = 1000;    // silence that ends a command clip (sentences breathe; 800 clipped mid-thought)
   var CMD_MAX_MS    = 12000;   // room for a long command rather than truncating it
   var CMD_WAIT_MS   = 7000;    // no speech after wake word -> back to idle
@@ -378,6 +405,7 @@
   var levelEl = document.querySelector('#jv-level i');
   var retryBtn = document.getElementById('jv-retry');
   var unlockBtn = document.getElementById('jv-unlock');
+  var endBtn = document.getElementById('jv-end');
   var hud = document.getElementById('hud');
   // Transcript now renders in the HUD's right column; #jv-log is kept in the
   // DOM (hidden) so nothing that references it breaks.
@@ -391,7 +419,7 @@
   // ---------------------------------------------------------------- hud link
   // The HUD artifact re-sets `--spd` on ITS OWN documentElement on every render,
   // so writing it once is not enough: we keep re-applying the target from here.
-  var HUD_SPD = { idle: 1, scanning: 1, listening: 1.7, transcribing: 1.2, thinking: 1.2, speaking: 2.4 };
+  var HUD_SPD = { idle: 1, listening: 1.7, transcribing: 1.2, thinking: 1.2, speaking: 2.4 };
   var hudSpd = 1;
 
   function applyHudSpeed() {
@@ -409,8 +437,7 @@
   hud.addEventListener('load', applyHudSpeed);
 
   // ---------------------------------------------------------------- ui
-  // 'scanning' = a burst of speech is being buffered while still idle. It must
-  // stay visually calm: no glow, no fast spin — we do not know it is for us yet.
+  // 'listening' = the command window is open and JARVIS is capturing the command.
   var uiState = 'idle';
 
   function setState(st, txt) {
@@ -422,7 +449,7 @@
       : (st === 'thinking' || st === 'transcribing') ? 'think' : '';
     ringsEl.className = st === 'speaking' ? 'speak' : '';   // orb rings, speech only
     dot.className = st === 'speaking' ? 'speak'
-      : (st === 'listening' || st === 'scanning') ? 'listen'
+      : st === 'listening' ? 'listen'
       : (st === 'thinking' || st === 'transcribing') ? 'think' : '';
     if (txt) statusEl.textContent = txt;
     statusEl.className = (st === 'listening' || st === 'speaking') ? 'live' : '';
@@ -435,6 +462,49 @@
   // There is no transcript panel any more. Conversation text goes to the
   // console; only one-off failures get a moment on the status strip.
   function notice(txt) { console.warn('[jarvis] ' + txt); statusEl.textContent = txt; }
+
+  // Layer 1 (Intake) "did you mean?" surface. Renders the mis-heard text plus
+  // tappable correction chips. Tapping a chip re-sends that candidate as a
+  // clean typed command so the user fixes a bad hear with one click, never a
+  // re-record. Auto-dismisses when the next real message arrives.
+  var clarifyEl = null;
+  function showClarify(heard, echo, candidates) {
+    hideClarify();
+    if (!candidates.length) { notice(echo || 'Say that again?'); return; }
+    clarifyEl = document.createElement('div');
+    clarifyEl.className = 'jv-clarify';
+    var h = document.createElement('div');
+    h.className = 'jv-clarify-head';
+    h.textContent = echo || 'Did you mean?';
+    clarifyEl.appendChild(h);
+    var row = document.createElement('div');
+    row.className = 'jv-clarify-chips';
+    candidates.forEach(function (c) {
+      var b = document.createElement('button');
+      b.className = 'jv-chip';
+      b.type = 'button';
+      b.textContent = c;
+      b.addEventListener('click', function () {
+        hideClarify();
+        if (send({ type: 'text', text: c, speak: true })) {
+          logConv('user', c);
+          pendingReply = true;
+          mode = 'busy'; busySince = Date.now();
+          setState('thinking', 'THINKING…');
+        }
+      });
+      row.appendChild(b);
+    });
+    clarifyEl.appendChild(row);
+    var root = document.getElementById('jv-clarify-root') || document.body;
+    root.appendChild(clarifyEl);
+    // float it over the HUD for a few seconds, then fade
+    setTimeout(hideClarify, 9000);
+  }
+  function hideClarify() {
+    if (clarifyEl && clarifyEl.parentNode) clarifyEl.parentNode.removeChild(clarifyEl);
+    clarifyEl = null;
+  }
 
   // ---------------------------------------------------------------- chat log
   // Terminal transcript. User lines land instantly; JARVIS lines are revealed
@@ -572,6 +642,7 @@
   var stMic = document.getElementById('st-mic');
   var stLink = document.getElementById('st-link');
   var stState = document.getElementById('st-state');
+  var stWake = document.getElementById('st-wake');
   var stAmp = document.getElementById('st-amp');
 
   function setVal(el, text, cls) {
@@ -725,6 +796,12 @@
         // Route comes from the server's live flags now. It was hardcoded, so it
         // kept advertising groq/cerebras/gemini after local-only disabled them.
         setVal(stRoute, s.route || '—', s.local_only ? 'ok' : '');
+        // Server-side wake fallback health: tells you at a glance whether the
+        // music-proof listener is alive (so deafness over music is diagnosable).
+        var wk = s.wake_server || {};
+        if (wk.healthy) setVal(stWake, 'Server live', 'ok');
+        else if (wk.error) setVal(stWake, 'Server off: ' + wk.error, 'warn');
+        else setVal(stWake, 'Server off', 'warn');
       })
       .catch(function () { setVal(stBrain, 'unreachable', 'bad'); });
   }
@@ -851,16 +928,22 @@
   // ---------------------------------------------------------------- websocket
   var ws = null, wsReady = false, reconnectDelay = 800;
 
+  var pingInterval = null;
   function connect() {
     var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     ws = new WebSocket(proto + '//' + location.host + '/ws');
     ws.onopen = function () {
       wsReady = true; reconnectDelay = 800;
+      if (pingInterval) clearInterval(pingInterval);
+      pingInterval = setInterval(function () {
+        if (ws && ws.readyState === 1) ws.send(JSON.stringify({type:'ping'}));
+      }, 15000);
       if (mode === 'boot') return;
       goIdle();
     };
     ws.onclose = function () {
       wsReady = false;
+      if (pingInterval) { clearInterval(pingInterval); pingInterval = null; }
       setDead('DISCONNECTED — RETRYING…');
       setTimeout(connect, reconnectDelay);
       reconnectDelay = Math.min(reconnectDelay * 2, 8000);
@@ -888,6 +971,19 @@
       return;
     }
 
+    // Server-side wake-word fallback fired (music-proof). Open the command window
+    // exactly as the browser WakeListener would, guarded by a short lock so the two
+    // engines can't both open a capture for one "jarvis".
+    if (m.type === 'wake') {
+      var src = (m.source === 'server') ? 'SERVER' : 'BROWSER';
+      console.log('[wake] ' + src + ' engine detected wake word');
+      var now = Date.now();
+      if (now - lastWakeAt < 2000) return;   // de-dupe against the browser listener
+      lastWakeAt = now;
+      if (mode === 'idle') { beginCapture('command', false); }
+      return;
+    }
+
     if (m.type === 'cleared') {
       pendingReply = false;
       notice(m.text || 'CONTEXT CLEARED');
@@ -895,10 +991,48 @@
       return;
     }
 
-    if (m.type === 'scan') {
-      onScanResult(m.text || '');
-    } else if (m.type === 'transcript') {
+    // Layer 1 (Intake) confirmation gate: a low-confidence / mis-heard command
+    // becomes a set of tappable correction chips instead of a wrong action.
+    // Tapping a chip re-sends that text as a fresh (now clean) command.
+    if (m.type === 'clarify') {
+      console.log('[clarify] heard=' + m.heard + ' echo=' + m.echo +
+                  ' candidates=' + JSON.stringify(m.candidates));
+      showClarify(m.heard, m.echo, m.candidates || []);
+      return;
+    }
+
+    if (m.type === 'transcript') {
       console.log('[you] ' + m.text);
+      // Stop-word: the user ends the voice session by saying a CLOSE phrase, e.g.
+      // "jarvis" alone, "stop jarvis", "end jarvis", "that's all jarvis". A normal
+      // command that merely happens to end in "jarvis" (Whisper often captures the
+      // wake word too) must NOT close the session — that was the bug that killed the
+      // mic after a single turn. So we only close when, after stripping wake words
+      // and filler, nothing meaningful remains or an explicit close intent is present.
+      var youText = (m.text || '').trim();
+      var youLower = youText.toLowerCase().replace(/[.,!?;:]+$/g, '').trim();
+      // Session closes ONLY on an explicit close intent — a bare wake word
+      // ("jarvis", "hey jarvis") or a close verb ("stop", "goodbye", "that's
+      // all", ...), optionally followed by the wake word. A normal command that
+      // merely ENDS in "jarvis" must NOT close: Whisper routinely appends the
+      // wake word to whatever it heard, so ending-on-jarvis killed the session
+      // after a single real command. The close verb must lead, not trail.
+      var isBareWake = /^(hey\s+|ok\s+|okay\s+|hi\s+)?(jarvis\w*)\s*$/i.test(youLower);
+      var isCloseIntent = /^(stop|end|close|exit|quit|that'?s all|that is all|done|finish|bye|goodbye)(\s+(jarvis\w*))?$/i.test(youLower);
+      if (isBareWake || isCloseIntent) {
+        sessionClosePending = true;
+        console.log('[session] close requested — mic will stop after reply');
+        // Close immediately when the session was already idle (not mid-turn);
+        // otherwise defer to goIdle() so the current reply still plays out.
+        if (mode !== 'busy' && mode !== 'speaking') {
+          stopMic();
+          mode = 'off';
+          setState('idle', 'VOICE SESSION ENDED — CLICK ENABLE MIC TO RESUME');
+          dot.className = 'dead';
+          if (endBtn) endBtn.classList.remove('show');
+          return;
+        }
+      }
       setState('thinking', 'THINKING…');
     } else if (m.type === 'response') {
       console.log('[jarvis] ' + m.text);
@@ -911,6 +1045,13 @@
         speak(m.audio);                         // audio with no text: just talk
       } else {
         goIdle();
+      }
+    } else if (m.type === 'progress') {
+      // Mid-task status update: show text in chat AND speak it.
+      if (m.text) {
+        logConv('jarvis', m.text, m.audio);
+      } else if (m.audio) {
+        speak(m.audio);
       }
     } else if (m.type === 'status') {
       if (m.state === 'idle') {
@@ -1119,6 +1260,88 @@
     return btoa(bin);
   }
 
+  // ---------------------------------------------------------------- wake listener
+  // Always-on wake-word detection. Replaces the old VAD-triggered "scan": instead
+  // of opening a Whisper transcription on any loud sound, we run a continuous
+  // cloud-backed speech recognizer whose ONLY job is to detect the wake word.
+  // Ambient noise / chatter never reaches Whisper or the brain — only a recognized
+  // "jarvis" (or a fuzzy variant) opens the command window. The actual command is
+  // still captured and transcribed locally via Whisper, so only the cheap wake
+  // check uses the network. If Web Speech is unavailable, we fall back to the
+  // manual "Enable mic" path and surface a notice.
+  var wakeRec = null, wakeActive = false;
+
+  function wakeWordIn(text) {
+    if (!text) return false;
+    var t = (text || '').toLowerCase().replace(/[.,!?;:]+$/, '').trim();
+    if (t === 'jarvis') return true;
+    // Fuzzy: any wake-word token as a standalone or trailing word.
+    for (var i = 0; i < WAKE_WORDS.length; i++) {
+      if (t === WAKE_WORDS[i]) return true;
+      var re = new RegExp('(^|\\s)' + WAKE_WORDS[i] + '(\\s|$)', 'i');
+      if (re.test(t)) return true;
+    }
+    return false;
+  }
+
+  function startWakeListener() {
+    var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) {
+      notice('WAKE-WORD UNAVAILABLE — use Enable Mic + type, or Chrome');
+      return;
+    }
+    if (wakeRec) { try { wakeRec.stop(); } catch (e) {} }
+    wakeRec = new SR();
+    wakeRec.continuous = true;
+    wakeRec.interimResults = true;
+    wakeRec.lang = 'en-US';
+    wakeRec.onresult = function (ev) {
+      // Only act when JARVIS is idle and not already in a turn.
+      if (mode !== 'idle') return;
+      for (var i = ev.resultIndex; i < ev.results.length; i++) {
+        var txt = ev.results[i][0].transcript;
+        if (wakeWordIn(txt)) {
+          console.log('[wake] detected: ' + txt);
+          // Open the command window directly; the command itself is captured +
+          // transcribed locally (Whisper) — not by this recognizer.
+          beginCapture('command', false);
+          return;
+        }
+      }
+    };
+    wakeRec.onerror = function (e) {
+      // 'no-speech' / 'aborted' / 'network' are benign for a continuous listener;
+      // onend will re-arm us. Only a permission error is fatal.
+      if (e && e.error === 'not-allowed') {
+        notice('MIC BLOCKED — WAKE-WORD OFF');
+        wakeActive = false;
+        return;
+      }
+    };
+    wakeRec.onend = function () {
+      // Chrome auto-stops continuous recognition every ~60s. Restart it whenever
+      // it is still wanted — regardless of mode. Restarting mid-turn is harmless
+      // because onresult ignores results unless mode === 'idle'. The old guard
+      // (mode === 'idle') left the listener dead after the first auto-stop, which
+      // looked like JARVIS "disconnecting from the mic".
+      if (wakeActive) { try { wakeRec.start(); } catch (e) {} }
+    };
+    try { wakeRec.start(); wakeActive = true; } catch (e) {}
+  }
+
+  // Self-healing watchdog: if the recognizer ever dies without onend (tab blurred,
+  // GC, network drop), restart it as long as the mic session is live.
+  setInterval(function () {
+    if (wakeActive && (!wakeRec || wakeRec.state === 'inactive') && mode !== 'nomic' && mode !== 'off') {
+      try { wakeRec = null; startWakeListener(); } catch (e) {}
+    }
+  }, 3000);
+
+  function stopWakeListener() {
+    wakeActive = false;
+    if (wakeRec) { try { wakeRec.stop(); } catch (e) {} wakeRec = null; }
+  }
+
   // ---------------------------------------------------------------- capture engine
   // One permanent getUserMedia stream + one ScriptProcessor (PCM for the clip)
   // + one AnalyserNode (RMS for the VAD). No MediaRecorder, no start/stop
@@ -1127,18 +1350,36 @@
   var analyser = null, vadBuf = null, vadTimer = null;
   var srcRate = 48000;
 
-  var mode = 'boot';            // boot | idle | scan | command | busy | speaking | nomic
+  var mode = 'boot';            // boot | idle | scan | command | busy | speaking | nomic | off
   var micOk = false;            // false -> nothing to listen with; park in 'nomic'
   var ring = [], ringLen = 0, ringCap = 0;
   var cap = null, capLen = 0, capHeard = false, capWaited = 0;
   var noiseFloor = 0.004, speechMs = 0, silenceMs = 0;
   var busySince = 0, lastLevel = 0;
+  // User may end the voice session by saying "...jarvis" at the end of a command.
+  // When a transcript ends with the wake word, we process the command normally,
+  // then close the mic instead of returning to the listening loop.
+  var sessionClosePending = false;
+  var lastWakeAt = 0;           // de-dupe server vs browser wake (ms epoch)
 
   function goIdle() {
     stopSpeakLoop();                   // idempotent: kills the RAF + resets levers
     cap = null; capLen = 0; capHeard = false; capWaited = 0;
     speechMs = 0; silenceMs = 0;
     ring = []; ringLen = 0;
+
+    // Stop-word path: the user ended the session by saying "...jarvis". Tear the
+    // mic down completely and park in 'off' so the loop does not re-arm.
+    if (sessionClosePending) {
+      sessionClosePending = false;
+      stopMic();
+      mode = 'off';
+      setState('idle', 'VOICE SESSION ENDED — CLICK ENABLE MIC TO RESUME');
+      dot.className = 'dead';
+      if (endBtn) endBtn.classList.remove('show');
+      return;
+    }
+
     if (!micOk) {
       // No mic: park. Voice is the only input, so there is nothing else to do.
       mode = 'nomic';
@@ -1148,6 +1389,16 @@
     }
     mode = 'idle';
     setState('idle', 'LISTENING FOR “JARVIS”');
+    // A live mic means a voice session is active — surface the End button so
+    // the user can always stop it without relying on a spoken close word.
+    if (endBtn) endBtn.classList.add('show');
+  }
+
+  // Fully stop and release the microphone (used by the "...jarvis" stop-word).
+  function stopMic() {
+    stopWakeListener();
+    teardownMic();
+    micOk = false;
   }
 
   function pushRing(block) {
@@ -1180,14 +1431,14 @@
   }
 
   function beginCapture(kind, seed) {
-    mode = kind;                       // 'scan' or 'command'
+    mode = kind;                       // now always 'command' (wake handled by WakeListener)
     cap = []; capLen = 0; capWaited = 0;
-    // A scan only ever starts because the VAD already confirmed speech.
-    capHeard = (kind === 'scan');
+    // The WakeListener already confirmed the wake word, so every capture here is a
+    // command. capHeard starts false; the VAD (below) flips it once real speech lands.
+    capHeard = false;
     if (seed) { for (var i = 0; i < ring.length; i++) { cap.push(ring[i]); capLen += ring[i].length; } }
     ring = []; ringLen = 0;
-    if (kind === 'command') setState('listening', 'LISTENING…');
-    else setState('scanning', 'CAPTURING…');
+    setState('listening', 'LISTENING…');
   }
 
   function endCapture() {
@@ -1201,42 +1452,8 @@
     var data = b64(encodeWav(resample(flat, srcRate, TARGET_RATE)));
 
     mode = 'busy'; busySince = Date.now();
-    if (kind === 'scan') {
-      setState('transcribing', 'CHECKING…');
-      if (!send({ type: 'audio', mode: 'scan', data: data })) goIdle();
-    } else {
-      setState('transcribing', 'TRANSCRIBING…');
-      if (!send({ type: 'audio', data: data })) goIdle();
-    }
-  }
-
-  function onScanResult(text) {
-    if (mode !== 'busy') return;                // stale reply, we already moved on
-    var t = (text || '').trim();
-    if (!t) { goIdle(); return; }
-    var m = WAKE_RE.exec(t);
-    if (!m) { goIdle(); return; }               // heard something, not for us
-
-    var rest = t.slice(m.index + m[0].length).replace(/^[\s,.:;!?-]+/, '').trim();
-    if (WAKE_RE.test(rest)) rest = '';           // "jarvis jarvis" is not a command
-    if (rest.split(/\s+/).filter(Boolean).length >= 1) {
-      // "Jarvis, what's the weather" — wake word and command in one breath.
-      // The server echoes a transcript, so don't log it twice here.
-      mode = 'busy'; busySince = Date.now();
-      setState('thinking', 'THINKING…');
-      if (!send({ type: 'text', text: rest, speak: true })) goIdle();
-    } else {
-      // Bare "Jarvis" — blip first, then open the command window once the tick
-      // has finished sounding. mode is still 'busy' here (endCapture set it), so
-      // the recorder stays shut for the whole tick and never records it.
-      var wait = playTick(880, TICK_MS, 0.18);
-      busySince = Date.now();          // keep the watchdog off our back
-      setState('listening', 'LISTENING…');
-      setTimeout(function () {
-        if (mode !== 'busy') return;   // disconnected or reset while ticking
-        beginCapture('command', false);
-      }, wait + 60);
-    }
+    setState('transcribing', 'TRANSCRIBING…');
+    if (!send({ type: 'audio', data: data })) goIdle();
   }
 
   // The ScriptProcessor is now only a tape recorder: it buffers PCM. Every
@@ -1283,19 +1500,20 @@
 
     if (mode === 'boot') return;         // still calibrating the room
 
-    if (mode === 'idle') {
-      // Real speech only. Ambient noise never reaches the backend.
-      if (voice) beginCapture('scan', true);
-      return;
-    }
+    // NOTE: the idle -> scan trigger used to live here, driven by raw mic energy
+    // (VAD). That let any loud noise in a busy room open a Whisper "scan" and
+    // occasionally mis-fire the wake word. Wake detection is now owned by the
+    // continuous Web Speech listener (WakeListener), so ambient noise can never
+    // start a capture. The VAD below is only used to END a command clip.
+    if (mode === 'idle') { return; }
 
-    // scan | command
+    // command capture: VAD only decides when the utterance is over.
     if (voice) { capHeard = true; capWaited = 0; }
     else if (!capHeard) { capWaited += VAD_TICK_MS; }
 
     var ms = (capLen / srcRate) * 1000;
-    var hang = (mode === 'scan') ? SCAN_HANG_MS : CMD_HANG_MS;
-    var max = (mode === 'scan') ? SCAN_MAX_MS : CMD_MAX_MS;
+    var hang = CMD_HANG_MS;
+    var max = CMD_MAX_MS;
     if ((capHeard && silenceMs >= hang) || ms >= max) { endCapture(); return; }
     if (!capHeard && capWaited >= ((mode === 'command') ? CMD_WAIT_MS : 1200)) goIdle();
   }
@@ -1332,6 +1550,9 @@
     }
     retryBtn.classList.remove('show');
     micOk = true;
+
+    // Wake-word listener owns detection now (ambient noise must not trigger JARVIS).
+    startWakeListener();
 
     var AC = window.AudioContext || window.webkitAudioContext;
     ctx = new AC();
@@ -1378,6 +1599,18 @@
     audioUnlocked = true;
     unlockBtn.classList.remove('show');
   };
+  // End session button — guaranteed teardown regardless of voice state. Lets
+  // the user stop JARVIS without depending on a spoken close word.
+  if (endBtn) {
+    endBtn.onclick = function () {
+      endBtn.classList.remove('show');
+      sessionClosePending = false;
+      stopMic();
+      mode = 'off';
+      setState('idle', 'VOICE SESSION ENDED — CLICK ENABLE MIC TO RESUME');
+      dot.className = 'dead';
+    };
+  }
   retryBtn.onclick = function () { retryBtn.classList.remove('show'); mode = 'boot'; startMic(); };
 
   // Watchdog: nothing may stay stuck, ever.

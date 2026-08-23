@@ -1,0 +1,29 @@
+{
+  "_comment": "JARVIS Intake Layer corpus (portable DATA, not code). Seed from jarvis-profile + Second Brain. Edit freely; the layer reloads on boot. Keep entries lowercase; multi-word values allowed.",
+  "commands": [
+    "play", "open", "search", "write", "list", "read", "make", "build",
+    "compose", "launch", "stop", "close", "what", "who", "how", "weather",
+    "remember", "find", "show", "create", "generate", "email", "send",
+    "copy", "paste", "note", "report"
+  ],
+  "apps": [
+    "notepad", "chrome", "brave", "spotify", "vlc", "excel", "word",
+    "powerpoint", "calculator", "file explorer", "explorer", "slack",
+    "discord", "telegram", "obsidian", "visual studio code", "code",
+    "terminal", "command prompt", "outlook", "onenote"
+  ],
+  "artists": [
+    "taylor swift", "the beatles", "ed sheeran", "linkin park",
+    "coldplay", "adele", "bruno mars", "billie eilish", "bts",
+    "moira dela torre", "ben&ben", "erald mandanas"
+  ],
+  "projects": [
+    "iRIMS-V", "iRIMS", "schema-mapper", "jarvis-demo", "Musubae",
+    "Second Brain", "my-app", "Portfolio", "LRMIS"
+  ],
+  "contacts": ["Roger", "nikoo", "abay"],
+  "genres": [
+    "pop", "rock", "jazz", "lofi", "classical", "hip hop", "rnb",
+    "opm", "ballad"
+  ]
+}
