@@ -1068,9 +1068,11 @@
       return;
     }
 
-    // Server-synthesized session cue (wake / close). Just play it.
+    // Server-synthesized session cue (wake / close). Play it, but preserve the
+    // active capture while the clip plays so an opening cue doesn't drop the
+    // just-opened listening window when it ends.
     if (m.type === 'cue') {
-      if (m.audio) { speak(m.audio, true); }
+      if (m.audio) { speak(m.audio, mode === 'command'); }
       else if (m.text) { notice(m.text); }
       return;
     }
@@ -1329,7 +1331,22 @@
               audioUnlocked = true; unlockBtn.classList.remove('show');
               startSpeechVisuals(a);       // playback has actually begun
             })
-            .catch(function () { unlockBtn.classList.add('show'); stopSpeakLoop(); goIdle(); });
+            .catch(function () {
+              // Chrome autoplay policy: play() is rejected until a user gesture
+              // or an active getUserMedia session resumes the audio contexts.
+              // The page holds a live mic stream, so resuming the contexts here
+              // is a legitimate unlock — then retry once before giving up.
+              var retry = function () {
+                a.play().then(function () {
+                      audioUnlocked = true; unlockBtn.classList.remove('show');
+                      startSpeechVisuals(a);
+                    })
+                    .catch(function () { unlockBtn.classList.add('show'); stopSpeakLoop(); goIdle(); });
+              };
+              if (ctx) { try { ctx.resume().then(retry, retry); } catch (e) { retry(); } }
+              else if (ampCtx) { try { ampCtx.resume().then(retry, retry); } catch (e) { retry(); } }
+              else { retry(); }
+            });
   }
 
   // ---------------------------------------------------------------- wav encode
