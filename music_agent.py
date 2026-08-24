@@ -434,6 +434,24 @@ _worker = BraveMusicWorker()
 # Set once the Brave context exists, so only the first play_music pays launch cost.
 _warmed = False
 
+# Module-level progress callback — set by tools.py before calling play_music,
+# so the job() running on the BraveWorker thread can emit mid-task status.
+_progress_cb = None
+
+
+def set_progress_cb(cb):
+    global _progress_cb
+    _progress_cb = cb
+
+
+def _emit(msg):
+    """Emit a progress update if a callback is set."""
+    if _progress_cb:
+        try:
+            _progress_cb(msg)
+        except Exception:
+            pass
+
 
 def _first_visible(page, selectors, timeout=10000):
     """Return the first element that is actually visible, across all selectors.
@@ -808,6 +826,8 @@ def play_music(query: str, navigate_only: bool = False) -> str:
     """
     global _warmed
     url = YOUTUBE_SEARCH.format(urllib.parse.quote_plus(query))
+    _emit("On it, sir.")
+    _emit(f"Searching YouTube Music for {query}...")
 
     def job(page):
         page.goto(url, wait_until="domcontentloaded", timeout=60000)
@@ -818,6 +838,7 @@ def play_music(query: str, navigate_only: bool = False) -> str:
         if not candidates:
             return (f"[Error] Loaded the YouTube Music results for '{query}' but found no "
                     "song result to click. The page layout likely changed.")
+        _emit(f"Found {len(candidates)} results, picking the best match...")
         if navigate_only:
             title = candidates[0]["text"]
             return f"Loaded YouTube Music results for '{query}'. First result: {title[:120]}"
@@ -841,6 +862,7 @@ def play_music(query: str, navigate_only: bool = False) -> str:
 
             cand = candidates[attempt]
             tried += 1
+            _emit(f"Starting playback of {cand['text'][:50]}...")
             try:
                 _resolve(page, cand).click(timeout=8000)
             except Exception as e:
@@ -873,8 +895,13 @@ def play_music(query: str, navigate_only: bool = False) -> str:
                 # trailing segments carry query tokens the display string drops.
                 actual, match_title = _playing_titles(page)
                 if not actual:
-                    # Unreadable title is a selector miss, not a wrong song.
-                    return f"Playing '{query}' on YouTube Music in Brave."
+                    # Phase 12a: playback IS running but the title could not be
+                    # read. Never claim a song name — the old fallback string
+                    # ("Playing '<query>'") impersonated a verified result and
+                    # once announced the literal words of the voice command.
+                    return (f"Playback started for '{query}' on YouTube Music in Brave, "
+                            f"but I couldn't read what's playing — please check it's "
+                            f"the right song.")
                 if _title_matches(match_title, query):
                     return f"Playing '{actual}' on YouTube Music in Brave."
                 last_actual = actual
@@ -901,6 +928,14 @@ def play_music(query: str, navigate_only: bool = False) -> str:
     out = _worker.call(job, timeout=240)
     if isinstance(out, str) and out.startswith("[Error]"):
         return _fallback_open(url, out[len("[Error]"):].strip())
+    # Phase 12a: one retry with navigate_only on a MatchError — the first
+    # click landed on a wrong/unverifiable track; reloading the results page
+    # and picking fresh often finds the right one. Only once, only when we
+    # have not already retried (navigate_only calls never recurse).
+    if isinstance(out, str) and out.startswith("[MatchError]") and not navigate_only:
+        _emit("That doesn't look like the right song — trying once more...")
+        retry = play_music(query, navigate_only=False)
+        return f"{retry} (second attempt after a wrong first match)"
     return out
 
 

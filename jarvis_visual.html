@@ -276,6 +276,57 @@
   .jv-chip:hover { background: color-mix(in srgb, var(--holo) 28%, transparent);
     transform: translateY(-1px); }
   .jv-chip:active { transform: translateY(0); }
+
+  /* ---- Apps modal: same holo/dark language as the rest of the HUD. ---- */
+  #jv-apps-modal { position: fixed; inset: 0; display: none; z-index: 80;
+    background: rgba(4, 8, 14, .72); backdrop-filter: blur(6px); }
+  #jv-apps-modal.show { display: flex; align-items: center; justify-content: center; }
+  #jv-apps-card { width: min(680px, 92vw); max-height: 82vh; display: flex;
+    flex-direction: column; border-radius: 10px;
+    background: linear-gradient(160deg, rgba(10, 18, 30, .97), rgba(6, 12, 22, .97));
+    border: 1px solid color-mix(in srgb, var(--holo) 32%, transparent);
+    box-shadow: 0 24px 70px rgba(0, 0, 0, .55);
+    font-family: Archivo, system-ui, sans-serif; }
+  #jv-apps-head { display: flex; align-items: center; gap: 10px;
+    padding: 14px 16px 10px; }
+  #jv-apps-title { font-weight: 800; font-size: 13px; letter-spacing: .2em;
+    color: color-mix(in srgb, var(--holo) 90%, #fff); flex: 1; }
+  #jv-apps-count { font-size: 11px; letter-spacing: .1em; opacity: .7;
+    color: color-mix(in srgb, var(--holo) 70%, #fff); }
+  #jv-apps-close { background: none; border: none; cursor: pointer;
+    font-size: 20px; line-height: 1; padding: 2px 8px;
+    color: color-mix(in srgb, var(--holo) 75%, #fff); }
+  #jv-apps-search { margin: 0 16px 10px; padding: 8px 12px; border-radius: 6px;
+    border: 1px solid color-mix(in srgb, var(--holo) 26%, transparent);
+    background: rgba(255, 255, 255, .04); color: #eaf2ff;
+    font: 500 13px/1.3 Archivo, system-ui; outline: none; }
+  #jv-apps-search:focus { border-color: color-mix(in srgb, var(--holo) 55%, transparent); }
+  #jv-apps-cats { display: flex; gap: 6px; flex-wrap: wrap;
+    padding: 0 16px 10px; }
+  .jv-app-cat { font: 700 9.5px/1 Archivo, system-ui; letter-spacing: .12em;
+    text-transform: uppercase; padding: 5px 9px; border-radius: 999px;
+    cursor: pointer; user-select: none;
+    border: 1px solid color-mix(in srgb, var(--holo) 30%, transparent);
+    color: color-mix(in srgb, var(--holo) 78%, #fff); background: transparent; }
+  .jv-app-cat.on { background: color-mix(in srgb, var(--holo) 24%, transparent);
+    border-color: color-mix(in srgb, var(--holo) 60%, transparent); }
+  #jv-apps-list { overflow-y: auto; padding: 2px 10px 10px; flex: 1; }
+  .jv-app-row { display: flex; align-items: center; gap: 10px;
+    padding: 7px 8px; border-radius: 6px; cursor: pointer; }
+  .jv-app-row:hover { background: color-mix(in srgb, var(--holo) 12%, transparent); }
+  .jv-app-row.broken { cursor: not-allowed; opacity: .45; }
+  .jv-app-name { flex: 1; font-size: 13px; color: #e8f0ff; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; }
+  .jv-app-path { font-size: 10px; color: color-mix(in srgb, var(--holo) 55%, #fff);
+    opacity: .65; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    max-width: 42%; direction: rtl; text-align: left; }
+  .jv-app-badge { font: 700 9px/1 Archivo; letter-spacing: .1em;
+    text-transform: uppercase; padding: 3px 7px; border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--holo) 35%, transparent);
+    color: color-mix(in srgb, var(--holo) 85%, #fff); }
+  .jv-app-badge.dead { border-color: rgba(255, 120, 120, .5); color: #ff9d9d; }
+  #jv-apps-foot { padding: 8px 16px 12px; font-size: 10px; letter-spacing: .08em;
+    opacity: .55; color: color-mix(in srgb, var(--holo) 60%, #fff); }
 </style>
 </head>
 <body>
@@ -352,10 +403,25 @@
     <span id="jv-status">BOOTING…</span>
     <span id="jv-level"><i></i></span>
     <span id="jv-actions">
+      <button id="jv-apps" class="jv-btn" title="Apps JARVIS can open">Apps</button>
       <button id="jv-unlock" class="jv-btn">Activate audio</button>
-      <button id="jv-end" class="jv-btn">End session</button>
       <button id="jv-retry" class="jv-btn">Enable mic</button>
     </span>
+  </div>
+
+  <!-- Apps modal: everything in the registry, searchable, click to open. -->
+  <div id="jv-apps-modal">
+    <div id="jv-apps-card">
+      <div id="jv-apps-head">
+        <span id="jv-apps-title">SOFTWARE REGISTRY</span>
+        <span id="jv-apps-count"></span>
+        <button id="jv-apps-close" class="jv-btn">×</button>
+      </div>
+      <input id="jv-apps-search" type="text" placeholder="Search apps…" autocomplete="off">
+      <div id="jv-apps-cats"></div>
+      <div id="jv-apps-list"></div>
+      <div id="jv-apps-foot">Click an app to open it · broken entries marked ✖</div>
+    </div>
   </div>
 
 <script>
@@ -463,43 +529,25 @@
   // console; only one-off failures get a moment on the status strip.
   function notice(txt) { console.warn('[jarvis] ' + txt); statusEl.textContent = txt; }
 
-  // Layer 1 (Intake) "did you mean?" surface. Renders the mis-heard text plus
-  // tappable correction chips. Tapping a chip re-sends that candidate as a
-  // clean typed command so the user fixes a bad hear with one click, never a
-  // re-record. Auto-dismisses when the next real message arrives.
+  // Layer 1 (Intake) clarification: speaks candidates via voice instead of
+  // showing tappable chips. JARVIS asks "Did you mean X or Y?" and the mic
+  // stays open so the user can reply naturally.
   var clarifyEl = null;
   function showClarify(heard, echo, candidates) {
     hideClarify();
     if (!candidates.length) { notice(echo || 'Say that again?'); return; }
-    clarifyEl = document.createElement('div');
-    clarifyEl.className = 'jv-clarify';
-    var h = document.createElement('div');
-    h.className = 'jv-clarify-head';
-    h.textContent = echo || 'Did you mean?';
-    clarifyEl.appendChild(h);
-    var row = document.createElement('div');
-    row.className = 'jv-clarify-chips';
-    candidates.forEach(function (c) {
-      var b = document.createElement('button');
-      b.className = 'jv-chip';
-      b.type = 'button';
-      b.textContent = c;
-      b.addEventListener('click', function () {
-        hideClarify();
-        if (send({ type: 'text', text: c, speak: true })) {
-          logConv('user', c);
-          pendingReply = true;
-          mode = 'busy'; busySince = Date.now();
-          setState('thinking', 'THINKING…');
-        }
-      });
-      row.appendChild(b);
-    });
-    clarifyEl.appendChild(row);
-    var root = document.getElementById('jv-clarify-root') || document.body;
-    root.appendChild(clarifyEl);
-    // float it over the HUD for a few seconds, then fade
-    setTimeout(hideClarify, 9000);
+    // Build a spoken clarification: "I heard X. Did you mean Y, Z, or W?"
+    var spoken = 'I heard ' + (echo || heard) + '. ';
+    if (candidates.length === 1) {
+      spoken += 'Did you mean ' + candidates[0] + '?';
+    } else {
+      spoken += 'Did you mean ' + candidates.slice(0, -1).join(', ') +
+                ', or ' + candidates[candidates.length - 1] + '?';
+    }
+    // Show text in chat for reference, then speak it and keep mic open.
+    logConv('jarvis', spoken, null);
+    cue(spoken);
+    // Mic stays open — user replies naturally ("yes" or names the right one).
   }
   function hideClarify() {
     if (clarifyEl && clarifyEl.parentNode) clarifyEl.parentNode.removeChild(clarifyEl);
@@ -905,6 +953,22 @@
     if (value.charAt(0) === '/') {
       var cmd = value.slice(1).trim().toLowerCase();
       if (cmd === 'clear' || cmd === 'reset') { runCommand('clear'); return; }
+      // Phase 4: mid-flight redirect — forward the rest of the line as an
+      // instruction to the warm Hermes session (not a new task).
+      if (cmd.startsWith('redirect')) {
+        var instr = value.slice(1).replace(/^redirect\s*/i, '').trim();
+        if (instr && send({ type: 'command', name: 'redirect', text: instr })) {
+          logConv('user', value);
+          chatInput.value = '';
+          pendingReply = true;
+          mode = 'busy'; busySince = Date.now();
+          setState('thinking', 'REDIRECTING…');
+        } else if (!instr) {
+          notice('USAGE: /redirect <instruction>');
+          chatInput.value = '';
+        }
+        return;
+      }
       notice('UNKNOWN COMMAND: ' + value);
       chatInput.value = '';
       return;
@@ -1006,7 +1070,7 @@
 
     // Server-synthesized session cue (wake / close). Just play it.
     if (m.type === 'cue') {
-      if (m.audio) { speak(m.audio); }
+      if (m.audio) { speak(m.audio, true); }
       else if (m.text) { notice(m.text); }
       return;
     }
@@ -1077,6 +1141,9 @@
       // Mid-task status update: show text in chat AND speak it.
       if (m.text) {
         logConv('jarvis', m.text, m.audio);
+        if (m.text.startsWith('Delegating to Hermes')) {
+          setState('thinking', 'DELEGATING…');
+        }
       } else if (m.audio) {
         speak(m.audio);
       }
@@ -1237,7 +1304,8 @@
   // ---------------------------------------------------------------- audio out
   var current = null, audioUnlocked = false;
 
-  function speak(b64) {
+  function speak(b64, preserveMode) {
+    var prevMode = mode;
     mode = 'speaking';
     if (current) { try { current.pause(); } catch (e) {} }
     stopSpeakLoop();                       // never double-analyse two clips
@@ -1247,7 +1315,15 @@
     a.onended = a.onerror = function () {
       if (current === a) current = null;
       stopSpeakLoop();
-      goIdle();
+      if (preserveMode) {
+        // Restore the mode that was active before this clip (e.g. 'command'
+        // during a cue so the mic stays open for the user's reply).
+        mode = prevMode;
+        if (mode === 'command') setState('listening', 'LISTENING…');
+        else goIdle();
+      } else {
+        goIdle();
+      }
     };
     a.play().then(function () {
               audioUnlocked = true; unlockBtn.classList.remove('show');
@@ -1642,6 +1718,111 @@
     };
   }
   retryBtn.onclick = function () { retryBtn.classList.remove('show'); mode = 'boot'; startMic(); };
+
+  // ---------------------------------------------------------------- apps modal
+  var appsData = null, appCat = 'all';
+  var appsModal = document.getElementById('jv-apps-modal');
+  var appsList = document.getElementById('jv-apps-list');
+  var appsSearch = document.getElementById('jv-apps-search');
+  var appsCats = document.getElementById('jv-apps-cats');
+  var appsCount = document.getElementById('jv-apps-count');
+
+  function renderApps() {
+    if (!appsData) return;
+    var q = (appsSearch.value || '').toLowerCase().trim();
+    appsList.innerHTML = '';
+    var shown = 0;
+    appsData.apps.forEach(function (a) {
+      if (appCat !== 'all' && a.category !== appCat) return;
+      if (q && a.name.toLowerCase().indexOf(q) < 0 &&
+          a.key.toLowerCase().indexOf(q) < 0) return;
+      shown++;
+      var row = document.createElement('div');
+      row.className = 'jv-app-row' + (a.broken ? ' broken' : '');
+      var nm = document.createElement('span');
+      nm.className = 'jv-app-name';
+      nm.textContent = a.name + (a.broken ? '  ✖' : '');
+      var badge = document.createElement('span');
+      badge.className = 'jv-app-badge' + (a.broken ? ' dead' : '');
+      badge.textContent = a.broken ? 'broken' : a.kind;
+      row.appendChild(nm);
+      if (a.bin) {
+        var p = document.createElement('span');
+        p.className = 'jv-app-path';
+        p.textContent = a.bin;
+        p.title = a.bin;
+        row.appendChild(p);
+      }
+      row.appendChild(badge);
+      if (!a.broken) {
+        row.onclick = function () {
+          nm.style.opacity = '.4';
+          fetch('/apps/open', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key: a.key })
+          }).then(function (r) { return r.json(); }).then(function (j) {
+            logConv('jarvis', j.result, null);
+          }).catch(function () {}).finally(function () {
+            setTimeout(function () { nm.style.opacity = ''; }, 1200);
+          });
+        };
+      }
+      appsList.appendChild(row);
+    });
+    appsCount.textContent = shown + ' / ' + appsData.count;
+  }
+
+  function renderCats() {
+    var cats = {};
+    appsData.apps.forEach(function (a) { cats[a.category] = (cats[a.category] || 0) + 1; });
+    var keys = Object.keys(cats).sort(function (a, b) { return cats[b] - cats[a]; });
+    appsCats.innerHTML = '';
+    ['all'].concat(keys).forEach(function (k) {
+      var chip = document.createElement('span');
+      chip.className = 'jv-app-cat' + (appCat === k ? ' on' : '');
+      chip.textContent = k === 'all'
+        ? 'all ' + appsData.count
+        : k + ' ' + cats[k];
+      chip.onclick = function () {
+        appCat = k;
+        Array.prototype.forEach.call(appsCats.children, function (el) {
+          el.classList.toggle('on', el === chip);
+        });
+        renderApps();
+      };
+      appsCats.appendChild(chip);
+    });
+  }
+
+  function openApps() {
+    appsModal.classList.add('show');
+    appsSearch.value = '';
+    appCat = 'all';
+    if (!appsData) {
+      appsList.innerHTML = '<div style="padding:20px;opacity:.6">Loading registry…</div>';
+      fetch('/apps').then(function (r) { return r.json(); }).then(function (j) {
+        appsData = j;
+        renderCats();
+        renderApps();
+      }).catch(function () {
+        appsList.innerHTML = '<div style="padding:20px;opacity:.6">Registry unavailable.</div>';
+      });
+    } else {
+      renderCats();
+      renderApps();
+    }
+    appsSearch.focus();
+  }
+
+  document.getElementById('jv-apps').onclick = openApps;
+  document.getElementById('jv-apps-close').onclick = function () {
+    appsModal.classList.remove('show');
+  };
+  appsModal.onclick = function (e) {
+    if (e.target === appsModal) appsModal.classList.remove('show');
+  };
+  appsSearch.oninput = renderApps;
 
   // Watchdog: nothing may stay stuck, ever.
   setInterval(function () {

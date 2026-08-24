@@ -449,6 +449,173 @@ def ask_chatgpt(prompt: str, submit: bool = False, wait_seconds: int = 120) -> s
     return _worker.call(job, timeout=wait_seconds + 90)
 
 
+# ---------------------------------------------------------------------------
+# Multi-AI prompting: write into any web AI, send only on explicit consent.
+# Each site gets its own composer/send selectors; the flow is identical:
+# navigate -> find box -> clear -> type -> (send only if submit=True) -> read.
+# ---------------------------------------------------------------------------
+WEB_AI_SITES = {
+    "chatgpt": {
+        "url": "https://chatgpt.com/",
+        "composer": [
+            "#prompt-textarea",
+            "div[contenteditable='true'][data-virtualkeyboard='true']",
+            "div.ProseMirror[contenteditable='true']",
+            "textarea[data-testid='prompt-textarea']",
+        ],
+        "send": [
+            "button[data-testid='send-button']",
+            "button[aria-label*='Send']",
+            "#composer-submit-button",
+        ],
+        "reply": "[data-message-author-role='assistant']",
+        "streaming": ["button[data-testid='stop-button']", "button[aria-label*='Stop']"],
+    },
+    "gemini": {
+        "url": "https://gemini.google.com/app",
+        "composer": [
+            "div.ql-editor[contenteditable='true']",
+            "rich-textarea div[contenteditable='true']",
+            "textarea[aria-label*='Enter a prompt']",
+        ],
+        "send": [
+            "button[aria-label*='Send message']",
+            "button.send-button",
+            "button[mattooltip*='Send']",
+        ],
+        "reply": "model-response, message-content, .model-response-text",
+        "streaming": ["button[aria-label*='Stop']"],
+    },
+    "claude": {
+        "url": "https://claude.ai/new",
+        "composer": [
+            "div[contenteditable='true'].ProseMirror",
+            "div[contenteditable='true']",
+            "textarea[placeholder*='How can I help']",
+        ],
+        "send": [
+            "button[aria-label='Send message']",
+            "button[aria-label*='Send Message']",
+            "button[data-testid='send-button']",
+        ],
+        "reply": ".font-claude-message, [data-testid='assistant-message']",
+        "streaming": ["button[aria-label*='Stop']"],
+    },
+    "copilot": {
+        "url": "https://copilot.microsoft.com/",
+        "composer": [
+            "textarea#userInput",
+            "textarea[placeholder*='Ask me']",
+            "textarea[aria-label*='message']",
+        ],
+        "send": [
+            "button[aria-label*='Submit']",
+            "button[data-testid='submit-button']",
+        ],
+        "reply": "[data-content='ai-message'], .ac-textBlock",
+        "streaming": ["button[aria-label*='Stop']"],
+    },
+}
+
+
+def ask_web_ai(prompt: str, site: str = "chatgpt", submit: bool = False,
+               wait_seconds: int = 120) -> str:
+    """Write `prompt` into a web AI's composer; send ONLY when submit is True.
+
+    site: one of WEB_AI_SITES keys ('chatgpt' | 'gemini' | 'claude' | 'copilot').
+    Falls back to ask_chatgpt for chatgpt so the signed-in profile path,
+    login detection and battle-tested selectors are reused there.
+    """
+    site = (site or "chatgpt").lower().strip()
+    if site not in WEB_AI_SITES:
+        return (f"[Error] Unknown AI site '{site}'. Supported: "
+                f"{', '.join(WEB_AI_SITES)}.")
+    if site == "chatgpt":
+        # ChatGPT keeps its dedicated path: signed-in profile + login recovery.
+        return ask_chatgpt(prompt, submit=submit, wait_seconds=wait_seconds)
+
+    cfg = WEB_AI_SITES[site]
+
+    def job(page):
+        if cfg["url"] not in page.url:
+            page.goto(cfg["url"], wait_until="domcontentloaded", timeout=60000)
+            page.wait_for_timeout(2500)
+
+        composer = _first_visible(page, cfg["composer"], timeout=8000)
+        if composer is None:
+            return (f"[Error] Could not find the {site.title()} message box. "
+                    "It may need sign-in once in the browser window, or the "
+                    "page layout changed.")
+
+        composer.click()
+        try:
+            page.keyboard.press("Control+A")
+            page.keyboard.press("Delete")
+        except Exception:
+            pass
+        composer.type(prompt, delay=12)
+
+        if not submit:
+            return (f"Typed into {site.title()} and left it unsent: {prompt}. "
+                    "Say the word and I'll send it.")
+
+        before = 0
+        try:
+            before = page.locator(cfg["reply"]).count()
+        except Exception:
+            pass
+
+        send = _first_visible(page, cfg["send"], timeout=4000)
+        if send is not None:
+            send.click()
+        else:
+            page.keyboard.press("Enter")
+
+        # Wait for a reply to appear and streaming to settle.
+        deadline = wait_seconds * 1000
+        step = 500
+        waited = 0
+        settled = False
+        while waited < deadline:
+            page.wait_for_timeout(step)
+            waited += step
+            try:
+                if page.locator(cfg["reply"]).count() <= before:
+                    continue
+            except Exception:
+                continue
+            streaming = False
+            for sel in cfg["streaming"]:
+                try:
+                    if page.locator(sel).first.is_visible(timeout=250):
+                        streaming = True
+                        break
+                except Exception:
+                    continue
+            if not streaming:
+                settled = True
+                break
+
+        try:
+            turns = page.locator(cfg["reply"])
+            if turns.count() <= before:
+                return f"[Error] Sent to {site.title()} but no reply appeared in time."
+            answer = (turns.last.inner_text() or "").strip()
+            if not settled:
+                answer += " ... (still writing when I stopped listening)"
+            # Phase 11b: quarantine instruction-shaped content in AI replies.
+            try:
+                import guard
+                answer = guard.sanitize_web_text(answer, label=f"{site} reply")
+            except Exception:
+                pass
+            return answer or f"[Error] {site.title()} replied but the text was empty."
+        except Exception as e:
+            return f"[Error] Reading the {site.title()} reply failed: {e}"
+
+    return _worker.call(job, timeout=wait_seconds + 90)
+
+
 def _goto_chatgpt(page):
     if "chatgpt.com" not in page.url:
         page.goto(CHATGPT_URL, wait_until="domcontentloaded", timeout=60000)
@@ -471,6 +638,33 @@ def _query_terms(query: str):
     words = re.findall(r"[a-z0-9]+", (query or "").lower())
     terms = [w for w in words if len(w) > 2 and w not in _SEARCH_STOPWORDS]
     return terms or words
+
+
+def _score_title(title: str, terms, needle: str) -> float:
+    """Rank a conversation title against the query terms.
+
+    Combines two signals so that, among many similar titles, the most
+    on-topic and specific one wins instead of an arbitrary tie:
+      * coverage of the query  - how many distinct query terms appear
+      * specificity            - how much of the TITLE is those terms
+                                (a short, exact title beats a long one that
+                                 merely contains the words)
+    An exact whole-title match is forced to 1.0.
+    """
+    if not title:
+        return 0.0
+    tl = title.lower()
+    if needle and tl == needle:
+        return 1.0
+    if not terms:
+        return 1.0 if (needle and needle in tl) else 0.0
+    matched = [w for w in terms if w in tl]
+    if not matched:
+        return 0.0
+    frac = len(matched) / len(terms)
+    tl_words = re.findall(r"[a-z0-9]+", tl)
+    title_cov = len(matched) / len(tl_words) if tl_words else 0.0
+    return 0.6 * frac + 0.4 * title_cov
 
 
 def _collect_convo_titles(page):
@@ -545,20 +739,13 @@ def search_chatgpt_history(query: str, limit: int = 10) -> str:
         searched = len(titles)
 
         needle = (query or "").lower().strip()
-        scored = []
-        for t in titles:
-            tl = t.lower()
-            if needle and needle in tl:
-                score = 1.0
-            elif terms:
-                score = sum(1 for w in terms if w in tl) / len(terms)
-            else:
-                score = 0.0
-            if score > 0:
-                scored.append((score, t))
-        scored.sort(key=lambda p: (-p[0], p[1]))
-        strong = [t for s, t in scored if s >= 0.5]
-        hits = (strong or [t for _, t in scored])[:limit]
+        scored = [(_score_title(t, terms, needle), " ".join(t.split())) for t in titles]
+        scored = [(s, t) for s, t in scored if s > 0]
+        # Highest score first; ties broken by the SHORTER (more specific) title,
+        # then alphabetically - so among similar names the best one is unambiguous.
+        scored.sort(key=lambda p: (-p[0], len(p[1]), p[1]))
+        best = scored[0][1] if scored else None
+        hits = [t for _, t in scored[:limit]]
 
         if not hits:
             # Say what was actually searched. ChatGPT exposes only recent chats
@@ -568,8 +755,15 @@ def search_chatgpt_history(query: str, limit: int = 10) -> str:
                     f"conversation title(s) — ChatGPT only exposes recent chats plus "
                     f"its search results, so older conversations may exist but be "
                     f"unreachable from the sidebar.")
+        best_line = f"BEST MATCH: {best}. " if best else ""
         listed = "; ".join(f"{i}. {t[:110]}" for i, t in enumerate(hits, 1))
-        return (f"Found {len(hits)} of {searched} conversation title(s) matching "
+        try:
+            import guard
+            listed = guard.sanitize_web_text(listed, label="chatgpt history")
+            best_line = guard.sanitize_web_text(best_line, label="chatgpt history")
+        except Exception:
+            pass
+        return (f"{best_line}Found {len(hits)} of {searched} conversation title(s) matching "
                 f"'{query}': {listed}")
 
     return _worker.call(job, timeout=150)
@@ -584,34 +778,41 @@ def open_chatgpt_conversation(title_contains: str, max_chars: int = 3000) -> str
             return "[Error] Not signed in to ChatGPT. Sign in to the open Chrome window first."
 
         needle = " ".join(title_contains.split()).lower()
-        target = None
+        terms = _query_terms(title_contains)
 
-        # The sidebar link's own text is the conversation title, so match on it
-        # and click the link itself - no pin buttons, nothing that writes to the
-        # account.
-        for link in page.locator(CONVO_LINK).all():
+        # Collect EVERY sidebar row whose title contains the fragment, across both
+        # the current layout and the older nav-link layout, then open the single
+        # HIGHEST-SCORING match. Picking the first row (most-recent) is what made
+        # JARVIS open a wrong-but-similar conversation and then loop retrying; a
+        # deterministic best-match stops that.
+        candidates = []  # (score, title_text, locator)
+
+        def _consider(link):
             try:
                 text = " ".join((link.inner_text() or "").split())
             except Exception:
-                continue
+                return
             if text and needle in text.lower():
-                target = link
-                break
+                candidates.append((_score_title(text, terms, needle), text, link))
 
+        for link in page.locator(CONVO_LINK).all():
+            _consider(link)
         # Older layout, and any row whose link text has not rendered yet.
-        if target is None:
-            links = page.locator("nav a[href*='/c/']")
-            for i in range(min(links.count(), 60)):
-                try:
-                    text = (links.nth(i).inner_text() or "").strip()
-                except Exception:
-                    continue
-                if needle in text.lower():
-                    target = links.nth(i)
-                    break
-        if target is None:
+        for i in range(min(page.locator("nav a[href*='/c/']").count(), 60)):
+            try:
+                _consider(page.locator("nav a[href*='/c/']").nth(i))
+            except Exception:
+                continue
+
+        if not candidates:
             return (f"[Error] No conversation in the sidebar matches '{title_contains}'. "
                     "Try search_chatgpt_history first, or scroll the sidebar.")
+
+        # Highest score; ties broken by the shorter (more specific) title, then
+        # alphabetically - the same ranking search_chatgpt_history uses, so the
+        # conversation the search flagged as BEST MATCH is the one that opens.
+        candidates.sort(key=lambda p: (-p[0], len(p[1]), p[1]))
+        best_score, best_title, target = candidates[0]
 
         target.click()
         page.wait_for_timeout(2500)
@@ -640,6 +841,58 @@ def open_chatgpt_conversation(title_contains: str, max_chars: int = 3000) -> str
         return f"Conversation at {page.url} has {count} messages. " + " | ".join(parts)
 
     return _worker.call(job, timeout=180)
+
+
+def open_site(url: str, name: str = "") -> str:
+    """Open a website in the JARVIS debug-Chrome as a NEW tab.
+
+    New tab, never reuse: the attached Chrome is normally the user's daily
+    browser and hijacking a tab they are reading is destructive (same rule
+    as _attach). Returns once the page starts loading.
+    """
+    url = (url or "").strip()
+    if not url:
+        return "[Error] No URL given."
+
+    def job(page):
+        # page param is the worker's cached tab; we only use its context.
+        ctx = page.context
+        tab = ctx.new_page()
+        try:
+            tab.goto(url, wait_until="domcontentloaded", timeout=45000)
+        except Exception as e:
+            # Phase 12b: distinguish real failure from slow load before
+            # claiming anything. Evidence: title AND final URL.
+            title = ""
+            try:
+                title = (tab.title() or "").strip()
+            except Exception:
+                pass
+            try:
+                final_url = tab.url or ""
+            except Exception:
+                final_url = ""
+            if not title and (not final_url
+                              or final_url.startswith(("about:blank", "chrome://"))):
+                return f"[Error] Could not open {url} ({type(e).__name__}). Nothing loaded."
+            # Page navigated somewhere real but did not settle — honest hedge.
+            label0 = name or url
+            return (f"Opened {label0} in a new tab, but it may still be "
+                    f"loading ({type(e).__name__}).")
+        try:
+            title = (tab.title() or "").strip()
+        except Exception:
+            title = ""
+        label = name or url
+        if not title:
+            # Loaded without error but no readable title — say what we know.
+            return f"Opened {label} in a new tab — page had no readable title yet."
+        return f"Opened {label} in a new tab — {title}"
+
+    try:
+        return _worker.call(job, timeout=90)
+    except Exception as e:
+        return f"[Error] Opening {url} in the JARVIS browser failed: {e}"
 
 
 def browser_status() -> str:

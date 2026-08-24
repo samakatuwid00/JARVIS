@@ -15,8 +15,8 @@ import tempfile
 import asyncio
 import threading
 
-from fastapi import FastAPI, WebSocket
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, Request, WebSocket
+from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.websockets import WebSocketDisconnect
 
 from voice_engine import VoiceEngine
@@ -42,6 +42,7 @@ print("[JARVIS Web] Loading VoiceEngine (Whisper)...", flush=True)
 voice_engine = VoiceEngine()
 print(f"[JARVIS Web] Loading Brain ({ROUTER_MODEL})...", flush=True)
 brain = JarvisBrain()
+import tools  # for the /apps/open endpoint (same dispatcher the brain uses)
 
 # Server-side wake-word fallback. The browser's Web Speech WakeListener is primary,
 # but it degrades when music/ambient noise bleeds into the mic — this catches the
@@ -69,6 +70,32 @@ wake_engine.set_callback(broadcast_wake)
 wake_engine.set_error_callback(
     lambda msg: print(f"[WakeEngine] error: {msg}", flush=True))
 wake_engine.start()
+
+# Phase 2: pre-warm Hermes session at boot so the first voice query doesn't
+# pay the full cold-start cost. Runs in a background thread to avoid blocking
+# server startup. The session is persisted on disk and survives JARVIS restarts.
+def _prewarm_hermes():
+    try:
+        from warm_harness import warm_session
+        sid = warm_session(timeout=120)
+        if sid:
+            print(f"[JARVIS Web] Hermes warm session ready: {sid}", flush=True)
+        else:
+            print("[JARVIS Web] Hermes warm session: no session_id (will spawn fresh)", flush=True)
+    except Exception as e:
+        print(f"[JARVIS Web] Hermes warm-up failed: {e}", flush=True)
+
+threading.Thread(target=_prewarm_hermes, daemon=True).start()
+
+# Phase 8: refresh the web registry in the background ONLY if older than 7
+# days (policy C). One stat call when fresh; voice resolution uses the current
+# registry immediately either way.
+try:
+    import web_registry as _wr
+    if _wr.maybe_refresh_async():
+        print("[JARVIS Web] Web registry stale — background rescan started.", flush=True)
+except Exception as _e:
+    print(f"[JARVIS Web] Web registry check failed: {_e}", flush=True)
 
 print("[JARVIS Web] Ready.", flush=True)
 
@@ -315,6 +342,51 @@ async def get_hud():
     return HTMLResponse(content=html, status_code=200)
 
 
+@app.get("/apps")
+async def get_apps():
+    """The app registry for the HUD's Apps modal.
+
+    Returns launchable apps grouped for display: name, category, path,
+    broken flag. Sorted by category then name. No auth needed — local only,
+    and the registry is already gitignored.
+    """
+    import os as _os
+    from machine_capabilities import load_registry
+    reg = load_registry()
+    if not reg:
+        return JSONResponse({"error": "no registry", "apps": [], "count": 0})
+    out = []
+    for key, entry in reg.get("apps", {}).items():
+        binp = entry.get("bin") or ""
+        out.append({
+            "name": entry.get("name", key),
+            "key": key,
+            "bin": binp,
+            "category": entry.get("category", "other"),
+            "kind": entry.get("kind", "gui"),
+            "broken": bool(binp) and not _os.path.exists(binp),
+        })
+    out.sort(key=lambda a: (a["category"], a["name"]))
+    return JSONResponse({"count": len(out), "generated": reg.get("generated"), "apps": out})
+
+
+@app.post("/apps/open")
+async def post_apps_open(message: Request):
+    """Open an app by registry key from the HUD modal. Same chain as voice."""
+    try:
+        body = await message.json()
+    except Exception:
+        return JSONResponse({"error": "bad json"}, status_code=400)
+    key = (body.get("key") or "").strip()
+    if not key:
+        return JSONResponse({"error": "missing key"}, status_code=400)
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(
+        None, lambda: tools.execute_tool("open_application", {"app": key}))
+    ok = not result.startswith("[Error]")
+    return JSONResponse({"ok": ok, "result": result})
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
@@ -399,11 +471,16 @@ async def websocket_endpoint(websocket: WebSocket):
                         continue
 
                     # ---- Layer 1: Intake normalization + confirm gate ----
-                    # Fixes bad voice/grammar before the router sees it, and
-                    # offers "did you mean?" chips when confidence is low so a
-                    # mis-hear becomes one tap instead of a wrong action.
+                    # Fixes bad voice/grammar before the router sees it.
+                    # Clarify ONLY when we have an uncertain ENTITY guess
+                    # ("play talor swift" -> did you mean taylor swift?).
+                    # A verb with NO entity ('open' clipped by music) routes
+                    # to the brain normally — it resolves apps far better
+                    # than the tiny corpus, and asking 'did you mean open,
+                    # the beatles?' for a clipped command is worse than trying.
                     intent = resolve_intent(text.strip(), INTAKE_CORPUS)
-                    if intent.needs_confirmation() and intent.candidates:
+                    if (intent.needs_confirmation() and intent.candidates
+                            and intent.entity is not None):
                         await websocket.send_text(json.dumps({
                             "type": "clarify",
                             "heard": text.strip(),
@@ -496,6 +573,38 @@ async def websocket_endpoint(websocket: WebSocket):
                         "text": "Context cleared. Starting fresh."
                     }))
                     await send_telemetry(websocket)
+                    await websocket.send_text(json.dumps({"type": "status", "state": "idle"}))
+                elif name == "redirect":
+                    # Phase 4: mid-flight redirect — inject a new instruction into
+                    # the warm Hermes session without starting a fresh task.
+                    redirect_text = (message.get("text") or "").strip()
+                    if not redirect_text:
+                        await websocket.send_text(json.dumps({
+                            "type": "error", "text": "redirect: no instruction given"
+                        }))
+                        continue
+                    try:
+                        from warm_harness import warm_redirect
+                        await websocket.send_text(json.dumps({
+                            "type": "status", "state": "thinking"
+                        }))
+                        loop = asyncio.get_running_loop()
+                        result = await asyncio.to_thread(warm_redirect, redirect_text)
+                        if result is None:
+                            await websocket.send_text(json.dumps({
+                                "type": "error",
+                                "text": "No active Hermes session to redirect."
+                            }))
+                        else:
+                            sstore_log("assistant", result)
+                            await websocket.send_text(json.dumps({
+                                "type": "response", "text": result,
+                                "audio": await tts_to_b64(result)
+                            }))
+                    except Exception as e:
+                        await websocket.send_text(json.dumps({
+                            "type": "error", "text": f"redirect failed: {e}"
+                        }))
                     await websocket.send_text(json.dumps({"type": "status", "state": "idle"}))
                 else:
                     await websocket.send_text(json.dumps({

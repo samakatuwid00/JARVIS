@@ -2,15 +2,36 @@
 import os
 import shutil
 import subprocess
+import threading
 import json
 import platform
 import re
 import time
 import datetime
+import difflib
 import webbrowser
 import urllib.parse
 import urllib.request
 from pathlib import Path
+
+# Thread-local progress callback — set by brain_gemini.think() so tools can
+# stream mid-task status ("Searching YouTube Music...") back to the WS layer.
+_tools_tls = threading.local()
+
+
+def set_progress_cb(cb):
+    """Store the progress callback for the current thread (called by brain)."""
+    _tools_tls.cb = cb
+
+
+def progress(msg: str):
+    """Emit a mid-task status update if a callback is set. Safe to call anytime."""
+    cb = getattr(_tools_tls, "cb", None)
+    if cb:
+        try:
+            cb(msg)
+        except Exception:
+            pass
 
 
 def get_system_info():
@@ -761,6 +782,222 @@ def search_web(query: str) -> str:
     return f"Opened search: {query}"
 
 
+# ---- Web registry (Phase 8): named site resolution ------------------------
+
+def open_site(name: str, url: str = None) -> str:
+    """Resolve a spoken site name against web_registry.json and open it in
+    the JARVIS debug-Chrome. Falls back to treating the input as a URL."""
+    import web_registry as wr
+    key = wr.resolve_site(name) if url is None else None
+    if key:
+        site = wr.get_site(key)
+        return __import__("browser_agent").open_site(site["url"], name=key)
+    raw = (url or name or "").strip()
+    if "://" not in raw and "." in raw:
+        raw = "https://" + raw
+    if "://" in raw:
+        return __import__("browser_agent").open_site(raw, name=name)
+    return (f"[Error] No registered site matches '{name}'. "
+            "Say 'add site <name> <url>' to register it, or 'rescan my sites'.")
+
+
+def rescan_sites() -> str:
+    """Full incremental rescan of browser history into web_registry.json."""
+    import web_registry as wr
+    reg = wr.scan_sites()
+    wr.build_index()
+    n = len(reg.get("sites", {}))
+    return f"Rescanned sites — {n} known now (last scan {reg.get('last_scan')})."
+
+
+# ---- Phase 13: session recall (FTS5 over JARVIS's own transcripts) ---------
+
+def search_sessions(query: str, limit: int = 10) -> str:
+    """Full-text search over past JARVIS conversations."""
+    import session_index as si
+    si.rebuild()  # cheap incremental; picks up any lines written by other processes
+    hits = si.search_sessions(query, int(limit or 10))
+    if not hits:
+        return f"No past conversation turns matched '{query}'."
+    return (f"Found {len(hits)} past turn(s) matching '{query}':\n"
+            + si.format_hits(hits))
+
+
+# ---- Phase 10: search-target routing ---------------------------------------
+# "search X in chatgpt" must search ChatGPT HISTORY, not open a Google tab
+# with the literal words "in chatgpt" in the query.
+
+_SEARCH_START = re.compile(
+    r"^(search|look ?up|find|google)\b[,:]?\s*", re.I)
+_CORRECTION_START = re.compile(r"^i mean\b|^actually\b|^no[, ]+", re.I)
+_TAIL_TARGET = re.compile(r"\b(?:inside|in|on|at)\s+([a-z0-9 .'-]{1,24}?)\s*$", re.I)
+
+# Spoken names for AI chats. History-searchable ones first.
+_AI_HISTORY_SITES = {"chatgpt": "chatgpt", "chat gpt": "chatgpt",
+                     "chat gpts": "chatgpt"}
+_AI_TYPED_SITES = {"gemini": "gemini", "claude": "claude", "grok": "grok",
+                   "copilot": "copilot"}
+# Leading noise from natural phrasing: "search in history for X" / "in histor"
+_LEAD_HISTORY = re.compile(
+    r"^(?:in\s+|inside\s+)?(?:my\s+)?(?:chat\s*g?pt\s+)?h(?:is|isto)ry\b[, :]?\s*(?:for\b\s*)?",
+    re.I)
+
+
+def _exact_site_key(cand: str):
+    """Exact-only registry lookup (name or alias). NEVER fuzzy here: a search
+    tail like 'manila' must stay part of the query, not become a website."""
+    import web_registry as wr
+    wr.ensure_index()
+    q = cand.strip().lower().rstrip(".!?")
+    return wr._index["exact"].get(q)
+
+
+def parse_search_command(text: str):
+    """Parse a spoken search command.
+
+    Returns dict: {query, target, is_history_search, corrected}
+    or None when this isn't a search command. Target may be None (= Google).
+    """
+    raw = (text or "").strip()
+    # A correction marker may precede the verb ("I mean search ...").
+    m_corr = _CORRECTION_START.match(raw)
+    if m_corr:
+        raw = re.sub(_CORRECTION_START, "", raw).strip()
+        corrected = True
+    else:
+        corrected = False
+    m = _SEARCH_START.match(raw)
+    if not m:
+        return None
+    body = raw[m.end():].strip()
+
+    # correction marker: replace previous turn's query rather than append.
+    # The marker may sit before the verb ("I mean search ...") or after it
+    # (caller strips the verb first) — handle both.
+    if not corrected:
+        corrected = bool(_CORRECTION_START.match(body))
+        if corrected:
+            body = re.sub(_CORRECTION_START, "", body).strip()
+            m2 = _SEARCH_START.match(body)
+            if m2:
+                body = body[m2.end():].strip()
+
+    # leading "history" phrasing: "search in history for irimsv report"
+    lead_history = bool(_LEAD_HISTORY.match(body))
+    if lead_history:
+        body = re.sub(_LEAD_HISTORY, "", body).strip()
+        if not body:
+            return {"query": "", "target": "chatgpt",
+                    "is_history_search": True, "corrected": corrected}
+
+    # tail qualifier: "... in <target>" — candidate capped at a few words,
+    # resolved EXACTLY against AI names then the site registry.
+    target = None
+    is_hist = lead_history
+    tail = _TAIL_TARGET.search(body)
+    if tail:
+        cand = tail.group(1).strip().lower().rstrip(".!?")
+        hit = (_AI_HISTORY_SITES.get(cand) or _AI_HISTORY_SITES.get(cand + " gpt"))
+        typed = None
+        if not hit:
+            # try the last 1-3 words of the candidate as an AI/site name
+            words = cand.split()
+            for n in (3, 2, 1):
+                frag = " ".join(words[-n:]) if len(words) >= n else cand
+                if frag in _AI_HISTORY_SITES:
+                    hit = _AI_HISTORY_SITES[frag]
+                    break
+                if frag in _AI_TYPED_SITES:
+                    typed = _AI_TYPED_SITES[frag]
+                    break
+                key = _exact_site_key(frag)
+                if key:
+                    typed = key
+                    break
+        if hit:
+            target = hit
+            is_hist = True
+            body = body[:tail.start()].strip().rstrip(",.")
+        elif typed:
+            target = typed
+            body = body[:tail.start()].strip().rstrip(",.")
+
+    return {"query": body, "target": target,
+            "is_history_search": is_hist,
+            "corrected": corrected}
+
+
+def execute_search(parsed: dict) -> str:
+    """Run a parsed search command against the right backend."""
+    import web_registry as wr
+    q, target = parsed["query"], parsed.get("target")
+
+    if parsed.get("is_history_search"):
+        # ChatGPT has real conversation-history search via browser_agent
+        return __import__("browser_agent").search_chatgpt_history(q)
+
+    if target:
+        site = wr.get_site(target)
+        url = site["url"] if site else f"https://{target}.com"
+        # AI web chats get the query typed into the composer; plain sites just open
+        if target in _AI_TYPED_SITES.values():
+            return __import__("browser_agent").ask_web_ai(prompt=q, site=target)
+        result = __import__("browser_agent").open_site(url, name=target)
+        return f"{result} — search for '{q}' manually there; I can't search inside that site yet."
+
+    return search_web(q)
+
+
+def resolve_open_target(text: str, force: str | None = None):
+    """Dual-registry lookup for 'open X' style commands.
+
+    Returns ('site', key) | ('app', name) | ('clarify', candidates) |
+    (None, text) when nothing matches — caller falls back to existing behavior.
+    force: 'app' | 'site' honours explicit 'open the spotify app' /
+    'facebook site' phrasing.
+    """
+    t = text.strip().lower().rstrip(".!?")
+    # strip filler words
+    for w in ("please", "jarvis", "the ", "my ", "up ", "now "):
+        if t.startswith(w):
+            t = t[len(w):]
+    for suffix, forced in ((" app", "app"), (" application", "app"),
+                           (" program", "app"), (" site", "site"),
+                           (" website", "site"), (" in browser", "site")):
+        if t.endswith(suffix):
+            t = t[: -len(suffix)].strip()
+            force = force or forced
+
+    import web_registry as wr
+    site_key = wr.resolve_site(t)
+
+    app_hit = False
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               "app_registry.json"), encoding="utf-8") as f:
+            apps = json.load(f).get("apps", {})
+        app_hit = t in apps
+        if not app_hit:
+            # fuzzy on app names too (spotify vs spotifly etc.)
+            close = difflib.get_close_matches(t, list(apps.keys()), n=1, cutoff=0.85)
+            app_hit = bool(close)
+    except Exception:
+        pass
+
+    if force == "site" and site_key:
+        return ("site", site_key)
+    if force == "app":
+        return ("app", t) if app_hit else (None, text)
+
+    if site_key and app_hit:
+        return ("clarify", {"name": t, "site": site_key})
+    if site_key:
+        return ("site", site_key)
+    if app_hit:
+        return ("app", t)
+    return (None, text)
+
+
 # Agents JARVIS can hand a job to when it cannot do it itself. Resolved through
 # the PATH entry, not a hardcoded location, so a reinstall does not break this.
 DELEGATE_AGENTS = {
@@ -808,6 +1045,442 @@ def delegate_task(task: str, agent: str = "claude") -> str:
         return f"{key} finished but returned no output."
     # Spoken aloud, so hand back a readable slice rather than a wall of text.
     return f"{key} reports: {out[:1500]}"
+
+
+# ── Hermes delegation bridge (full harness, approval-gated) ────────────────
+# JARVIS is the voice peripheral (mic in, speaker out); Hermes is the EXECUTOR
+# with the full machine toolkit (terminal, file, browser, code_execution,
+# delegation/subagents, cron, skills, memory, computer_use). JARVIS hands a
+# self-contained task to the local Hermes agent, which runs as a SEPARATE
+# process with the FULL toolset, so it can actually get work done on this box.
+#
+# SAFETY MODEL (scope A, approved by user 2026-08-22):
+#   * READ / compute / safe-local actions run immediately — "fully utilize".
+#   * DESTRUCTIVE actions (delete/overwrite/install/git push/kill/sudo/...) are
+#     NOT auto-run. The first call returns a NEEDS_CONFIRM notice describing the
+#     action; only a second call with confirm=true executes it. This is the
+#     user's "I approve destructive acts" gate, enforced structurally — Hermes
+#     never sees the destructive task until confirmation is given.
+#
+# This is intentionally distinct from the broken delegate_task(agent="hermes"),
+# which used `hermes -p` (not a real flag) and had no confirm gate.
+_HERMES_BIN = shutil.which("hermes") or "hermes"
+
+# Full toolset: Hermes may use everything. (Keep this as the live default; the
+# confirm-regex below is what restrains destructive work, not tool stripping.)
+_HERMES_FULL_TOOLSETS = (
+    "web,browser,terminal,file,code_execution,vision,video,image_gen,"
+    "video_gen,bfl,x_search,tts,skills,todo,memory,session_search,clarify,"
+    "delegation,cronjob,computer_use"
+)
+
+# Lexical guard: a task matching any of these is genuinely destructive and MUST
+# be confirmed before Hermes is launched with it (scope A). Narrow on purpose —
+# "create/write a NEW file" (e.g. manifest, a remembered note) is SAFE and must
+# NOT be gated, so we only match delete/overwrite/install/git-push/kill/sudo/deploy.
+_DESTRUCTIVE_RE = re.compile(
+    r"""(?ix)
+      \b(rm|del|delete|remove|erase|wipe|purge|shred|trash|format|drop|unlink)\b
+    | \b(overwrite|clobber|replace\s+(the\s+)?file)\b
+    | \b(kill|terminate|shutdown|reboot|halt|stop\s+the\s+(process|service))\b
+    | \b(git\s+(push|reset|clean|checkout|rm|branch\s+-D))\b
+    | \b(chmod|chown|mkfs|sudo|su\s)\b
+    | \b(install|pip\s+install|npm\s+(i|install)|curl\b.*\|\s*(sh|bash))\b
+    | \b(deploy|migrate\s+database|drop\s+database)\b
+    """
+)
+
+# Module-level latch so a confirm only releases the EXACT pending task.
+_PENDING_DESTRUCTIVE = {"task": None}
+
+
+# Phase 4: fire-and-forget acknowledgment token. When Hermes is delegated in the
+# background, think() returns this immediately so the voice/mic path stays live;
+# the real answer arrives later via the on_done callback.
+HERMES_BACKGROUND_ACK = "⟳ HERMES_BACKGROUND: On it, sir, working on that now…"
+
+
+def _run_hermes_sync(task: str, timeout: int, max_turns: int,
+                      progress_cb=None) -> str:
+    """Synchronously launch Hermes and return its parsed reply (blocking).
+
+    Phase 2 (warm harness): uses persistent session via warm_harness module
+    instead of spawning a fresh subprocess each turn. Session survives JARVIS
+    restarts via disk cache. Falls back to fresh spawn if warm session fails.
+    Phase 4: progress_cb streams milestone status to the caller (WS/voice).
+    """
+    from warm_harness import warm_send
+    return warm_send(task, timeout=timeout, max_turns=max_turns,
+                     progress_cb=progress_cb)
+
+
+def delegate_to_hermes(task: str, timeout: int = 300, max_turns: int = 15,
+                       confirm: bool = False, raw_task: str = None,
+                       background: bool = False, on_done=None,
+                       progress_cb=None) -> str:
+    """Hand a task to the local Hermes agent (full toolset) and report its answer.
+
+    Hermes is the executor: it can use the terminal, files, browser, code,
+    subagents, and more to actually do the work on this machine.
+
+    APPROVAL GATE: if the task looks destructive (delete/overwrite/install/git
+    push/kill/sudo/...), the first call does NOT launch Hermes. It returns a
+    NEEDS_CONFIRM notice. Call again with the SAME task and confirm=true to run
+    it. Read-only / safe tasks run immediately with no confirmation.
+
+    `raw_task` (internal): when a wrapper prepends context (profile/session/
+    grounding) to `task`, the destructive check must run on the USER's original
+    words, not on the injected context (which legitimately contains words like
+    "delete"/"install" inside the safety instructions and would false-positive).
+    If provided, the gate is evaluated against `raw_task`.
+
+    `progress_cb` (Phase 4): callable invoked with status strings at milestones
+    ("Delegating to Hermes...", "Hermes finished.") so the caller can stream
+    progress to the user while Hermes runs.
+
+    ASYNC / fire-and-forget (Phase 4): when `background=True` and `on_done` is a
+    callable, Hermes is launched in a daemon thread and this returns IMMEDIATELY
+    with a "working" acknowledgment token (HERMES_BACKGROUND_ACK). The real answer
+    is delivered later by calling `on_done(result)`. This keeps the voice/mic path
+    responsive instead of freezing for the ~2-min Hermes cold start. The sync path
+    (background=False) is unchanged and blocks until Hermes returns.
+    """
+    task = str(task or "").strip()
+    if not task:
+        return "[Error] No task given to delegate to Hermes."
+
+    # Gate the user's real intent, never the injected context.
+    gate_target = raw_task if raw_task is not None else task
+    gate_target = str(gate_target or "").strip()
+
+    try:
+        timeout = max(15, min(int(timeout), 600))
+    except (TypeError, ValueError):
+        timeout = 300
+    try:
+        max_turns = max(1, min(int(max_turns), 30))
+    except (TypeError, ValueError):
+        max_turns = 6
+
+    destructive = bool(_DESTRUCTIVE_RE.search(gate_target))
+
+    # --- Destruction path: enforce the approval gate structurally -----------
+    if destructive:
+        if not confirm:
+            _PENDING_DESTRUCTIVE["task"] = task
+            return ("[NEEDS_CONFIRM] That task would change or delete something "
+                    "on this machine. If you want me to proceed, say or type "
+                    "'confirm' and I'll run it through Hermes: "
+                    f"\"{task}\"")
+        # confirm=True: only release it if it matches the latched task, so a
+        # stray "confirm" can't authorize a different destructive command.
+        if _PENDING_DESTRUCTIVE["task"] != task:
+            _PENDING_DESTRUCTIVE["task"] = task
+            return ("[NEEDS_CONFIRM] Please re-issue the exact task and then "
+                    "confirm, so I run the right one.")
+        _PENDING_DESTRUCTIVE["task"] = None  # consumed
+
+    # --- Execution path -----------------------------------------------------
+    # Phase 4: fire-and-forget. Launch Hermes in a daemon thread, return the
+    # "working" ack NOW, and deliver the real answer via on_done when it lands.
+    if background and callable(on_done):
+        def _bg():
+            try:
+                result = _run_hermes_sync(task, timeout, max_turns, progress_cb)
+            except Exception as e:
+                result = f"[Error] Hermes background task failed: {type(e).__name__}: {e}"
+            try:
+                on_done(result)
+            except Exception as e:
+                print(f"[HERMES] on_done callback raised: {e}", flush=True)
+        threading.Thread(target=_bg, daemon=True).start()
+        return HERMES_BACKGROUND_ACK
+
+    return _run_hermes_sync(task, timeout, max_turns, progress_cb)
+
+
+# ── Grounded Hermes delegation (Pillar C: memory layer) ─────────────────────
+# Wraps delegate_to_hermes for JARVIS's use: injects the Tier-2 profile + Tier-3
+# rolling session context into the task so Hermes has continuity and ground truth,
+# plus an instruction to ground answers in the Second Brain vault and cite sources.
+# Keep this import-local so importing tools.py never hard-fails if session_store
+# is absent on some deployment.
+_PROFILE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "jarvis-profile.md")
+_VAULT_HINT = ("Second Brain vault at C:/Users/deped/Documents/Second Brain "
+               "(semantic search via turbovec; read/write wiki/evergreen).")
+
+
+def _load_profile() -> str:
+    try:
+        with open(_PROFILE_PATH, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return "(jarvis-profile.md not found)"
+
+
+def _app_context(task: str) -> str:
+    """If the task names any installed app, append resolved launch locations + a
+    how-to so the delegated Hermes drives the EXACT path (via its terminal tool)
+    instead of guessing. computer_use is a skill, not a loaded tool in the harness,
+    so deterministic path/URI guidance is what makes app control actually work."""
+    try:
+        from machine_capabilities import resolve as _resolve
+    except Exception:
+        try:
+            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            from machine_capabilities import resolve as _resolve
+        except Exception:
+            return ""
+    # Known app keywords to probe (broad; resolve() does fuzzy match).
+    probes = ["spotify", "vlc", "chrome", "brave", "edge", "firefox", "notepad",
+              "word", "excel", "powerpoint", "discord", "telegram", "slack",
+              "whatsapp", "teams", "zoom", "obs", "blender", "gimp", "vscode",
+              "code", "terminal", "calculator", "photos", "paint", "explorer",
+              "steam", "epic", "netflix", "youtube", "music", "browser", "app"]
+    found = []
+    low = (task or "").lower()
+    for p in probes:
+        if p in low:
+            e = _resolve(p)
+            if e:
+                line = f"- {e.get('name', p)} ({e.get('kind')}): {e.get('bin')}"
+                if "spotify" in e.get("name", "").lower():
+                    line += ("  | music search: run `start spotify:search:QUERY` "
+                             "(opens the Search pane); then the user picks & plays.")
+                found.append(line)
+    if not found:
+        return ""
+    return ("\n[INSTALLED APPS — launch these by EXACT path/URI via your terminal tool]\n"
+            + "\n".join(found) +
+            "\nTo open: `start \"\" \"<path>.lnk\"` or `start \"\" \"<path>.exe\"`. "
+            "Do NOT guess paths.\n")
+
+
+def delegate_to_hermes_grounded(task: str, timeout: int = 300, max_turns: int = 15,
+                                confirm: bool = False, background: bool = False,
+                                on_done=None, progress_cb=None) -> str:
+    """Delegate a task to Hermes WITH JARVIS's memory context attached.
+
+    Prepends: the durable profile (who the user is, machine facts, harness
+    contract), the recent session window (so Hermes isn't amnesiac between
+    turns), an app-location block (so it can drive installed apps by exact path),
+    and a grounding instruction (cite the Second Brain vault, do not
+    fabricate). The actual execution/confirm-gate is delegate_to_hermes.
+
+    Use this instead of delegate_to_hermes for any general JARVIS task so the
+    harness remembers context and stays grounded against hallucinations.
+    """
+    from session_store import recent_summary
+    profile = _load_profile()
+    recent = recent_summary(6)
+    appctx = _app_context(task)
+    # Phase 13: recall-shaped queries pull matching past turns into context.
+    recall_block = ""
+    if re.search(r"\b(remember|last time|did i|what did i|previously|"
+                 r"before|history of (?:my|our) (?:chats?|conversations?))\b",
+                 task, re.I):
+        try:
+            import session_index as si
+            si.rebuild()
+            hits = si.search_sessions(task, 3)
+            if hits:
+                recall_block = ("[PAST SESSION MATCHES]\n" + si.format_hits(hits)
+                                + "\n\n")
+        except Exception:
+            pass
+    prefix = (
+        "CONTEXT (JARVIS persistent memory):\n"
+        f"[PROFILE]\n{profile}\n\n"
+        f"[RECENT SESSION]\n{recent}\n\n"
+        + (f"{recall_block}" if recall_block else "")
+        + f"[KNOWLEDGE BASE] {_VAULT_HINT}\n"
+        "Ground factual answers in the Second Brain vault (semantic search it) and "
+        "cite the source note name. If the vault has nothing relevant, say so rather "
+        "than inventing. Respect the user's stated preferences in [PROFILE].\n\n"
+    )
+    if appctx:
+        prefix += appctx + "\n"
+    prefix += "TASK:\n"
+    return delegate_to_hermes(prefix + task, timeout=timeout, max_turns=max_turns,
+                              confirm=confirm, raw_task=task,
+                              background=background, on_done=on_done,
+                              progress_cb=progress_cb)
+
+
+# ── Phase 3: Unified delegate() — single routing primitive ────────────────
+# Collapses delegate_task / delegate_to_hermes / delegate_to_hermes_grounded
+# into ONE function. The router picks the backend; delegate() executes.
+
+def _detect_backend(task: str) -> str:
+    """Auto-detect backend from task text using intake's verb→backend map.
+    Returns 'hermes' for anything that doesn't match a local tool."""
+    try:
+        from intake import verb_backend, resolve_intent, load_corpus
+        intent = resolve_intent(task, load_corpus())
+        be = verb_backend(intent.verb)
+        if be and be in ("music", "desktop", "web", "manus", "chatgpt", "native"):
+            return be
+    except Exception:
+        pass
+    return "hermes"
+
+
+# Local / direct backends (no Hermes spawn). Each returns a string result.
+_LOCAL_DISPATCH = {
+    "music": lambda task: (
+        execute_tool("stop_music", {}) if "stop" in task.lower()
+        else execute_tool("play_music", {"query": task})
+    ),
+    "desktop": lambda task: execute_tool("open_application", {"app": task}),
+    "web": lambda task: execute_tool("search_web", {"query": task}),
+    "chatgpt": lambda task: execute_tool("ask_chatgpt",
+                                         {"prompt": task, "submit": True}),
+    "manus": lambda task: __import__("manus_agent").delegate_to_manus(task),
+}
+
+
+def delegate(
+    task: str,
+    backend: str | None = None,
+    confirm: bool = False,
+    grounded: bool = True,
+    background: bool = False,
+    on_done=None,
+    timeout: int = 300,
+    max_turns: int = 15,
+    progress_cb=None,
+) -> str:
+    """Unified delegation — the ONE primitive for routing tasks.
+
+    backend: "hermes" | "music" | "desktop" | "web" | None (auto-detect).
+    grounded: inject JARVIS memory context (profile, session, vault) — default True.
+    confirm: pass True to run a previously-confirmed destructive task.
+    background/on_done: async fire-and-forget (Phase 4 voice pattern).
+    progress_cb: Phase 4 — stream milestone status ("Delegating to Hermes...").
+
+    Local backends (music/desktop/web) run instantly via execute_tool().
+    Hermes backend runs the full agent with confirm gate + optional grounding.
+    """
+    task = str(task or "").strip()
+    if not task:
+        return "[Error] No task given."
+
+    # ---- Phase 9: conversation window (local fast path context) ----------
+    try:
+        import conversation_window as cw
+    except Exception:
+        cw = None
+
+    if cw is not None:
+        kind = cw.classify(task)
+
+        # 1) Answering our own app-vs-site question ("site" / "the app")
+        if kind == "clarify_answer":
+            pend = cw.pending_clarify()
+            choice = cw.answer_clarify(task)
+            if pend and choice:
+                name = pend.get("payload", {}).get("name", "")
+                cw.append(task, "clarify_answer")
+                result = (open_site(name) if choice == "site"
+                          else execute_tool("open_application", {"app": name}))
+                cw.append(name, "command",
+                          tool=("open_site" if choice == "site"
+                                else "open_application"), result=result)
+                return result
+            # unclear answer -> fall through to normal routing, drop the ask
+            cw.append(task, "command")
+
+        # 2) Fragment / follow-up ("also youtube", "again")
+        elif kind in ("fragment", "contextual"):
+            comp = cw.complete_fragment(re.sub(r"^(and|also|too|then)\s+", "",
+                                               task.strip(), flags=re.I))
+            if comp:
+                tag, target = comp
+                if tag == "repeat":
+                    cw.append(task, "fragment", tool=tag)
+                    return f"Repeating: {target or 'previous action'}."
+                if tag == "open_target":
+                    resolved = resolve_open_target(target)
+                    if resolved[0] == "site":
+                        cw.append(task, "fragment")
+                        result = open_site(resolved[1])
+                        cw.append(target, "command", tool="open_site",
+                                  result=result)
+                        return result
+                    if resolved[0] == "app":
+                        cw.append(task, "fragment")
+                        result = execute_tool("open_application",
+                                              {"app": resolved[1]})
+                        cw.append(target, "command", tool="open_application",
+                                  result=result)
+                        return result
+                    # fragment named something unknown -> let normal flow try
+            cw.append(task, "fragment")
+
+    # ---- Phase 10: search-target routing ---------------------------------
+    # "search X in chatgpt" -> ChatGPT history; "... in gemini" -> typed into
+    # Gemini; correction ("I mean ...") replaces the previous query.
+    if cw is not None:
+        try:
+            parsed = parse_search_command(task)
+        except Exception:
+            parsed = None
+        if parsed is not None:
+            corrected = bool(parsed.get("corrected"))
+            prev = cw.last()
+            if corrected and prev and prev.get("tool") in ("search_web",
+                                                           "execute_search"):
+                # replace the previous turn's query with this one
+                result = execute_search(parsed)
+                cw.append(task, "command", tool="execute_search", result=result)
+                return (f"Corrected — {result}" if "[error]" not in result.lower()
+                        else result)
+            result = execute_search(parsed)
+            cw.append(task, "command", tool="execute_search", result=result)
+            return result
+
+    # ---- Phase 8 fast path: dual-registry "open X" -----------------------
+    if re.match(r"^(open|launch|go to|goto)\b", task.lower()):
+        stripped = re.sub(r"^(open|launch|go to|goto)\s+", "", task, flags=re.I)
+        kind8, target8 = resolve_open_target(stripped)
+        if kind8 == "site":
+            result = open_site(target8)
+            if cw is not None:
+                cw.append(task, "command", tool="open_site", result=result)
+            return result
+        if kind8 == "clarify" and isinstance(target8, dict):
+            if cw is not None:
+                cw.append(task, "clarify", payload={"name": target8["name"]})
+            return (f"Found '{target8['name']}' both as an installed app and a "
+                    f"website — which one, the app or the site?")
+        if kind8 == "app":
+            result = execute_tool("open_application", {"app": target8})
+            if cw is not None:
+                cw.append(task, "command", tool="open_application",
+                          result=result)
+            return result
+        if cw is not None:
+            cw.append(task, "command")
+
+    if backend is None:
+        backend = _detect_backend(task)
+
+    # Fast path: local tools (no Hermes spawn)
+    handler = _LOCAL_DISPATCH.get(backend)
+    if handler:
+        return handler(task)
+
+    # Hermes path: full agent with confirm gate + grounding
+    if grounded:
+        return delegate_to_hermes_grounded(
+            task, timeout=timeout, max_turns=max_turns,
+            confirm=confirm, background=background, on_done=on_done,
+            progress_cb=progress_cb)
+    return delegate_to_hermes(
+        task, timeout=timeout, max_turns=max_turns,
+        confirm=confirm, raw_task=task,
+        background=background, on_done=on_done,
+        progress_cb=progress_cb)
 
 
 def write_to_notepad(content: str, filename: str = "") -> str:
@@ -865,31 +1538,396 @@ APP_ALIASES = {
 }
 
 
-def open_application(app: str) -> str:
-    """Open an application, resolving spoken names like "Microsoft Word"."""
+# Leading verbs/filler the voice model often includes in the app argument.
+_APP_VERB_RE = re.compile(
+    r"^(?:please\s+)?(?:can you\s+)?"
+    r"(?:open|launch|start|run|boot|fire up|bring up|pull up|show me|"
+    r"open up|start up)\s+(?:the\s+|my\s+|a\s+)*", re.IGNORECASE)
+_APP_TRAIL_RE = re.compile(r"[.\s]+$|[.,!?;:]+")
+
+
+def _clean_app_name(app: str) -> str:
+    """Strip command verbs, articles and punctuation from an app request.
+
+    The brain sometimes passes a whole sentence ('Open the Microsoft Word.')
+    instead of just the app name; this reduces it to 'Microsoft Word'.
+    """
+    s = str(app).strip()
+    prev = None
+    while prev != s:
+        prev = s
+        s = _APP_VERB_RE.sub("", s).strip()
+        s = s.strip('"').strip("'").strip()
+        s = _APP_TRAIL_RE.sub("", s).strip()
+    return s or str(app).strip()
+
+
+def open_application(app: str, action: str = None, query: str = None) -> str:
+    """Open an application by friendly name, resolving it via the capability manifest.
+
+    Prefers machine_capabilities.resolve() (live scan of PATH / Program Files /
+    Start-Menu .lnk) and falls back to APP_ALIASES, then a last-chance .exe strip.
+    Non-destructive. For music apps, action="search" opens the in-app search pane.
+    """
+    import os as _os
     system = platform.system()
-    requested = str(app).strip()
+    requested = _clean_app_name(app)
     target = APP_ALIASES.get(requested.lower(), requested)
+
+    # 1) Try app_registry.json first (fresh scan), then capabilities.json.
+    entry = None
+    try:
+        from machine_capabilities import load_registry
+        reg = load_registry()
+        if reg:
+            n = requested.lower().strip()
+            apps = reg.get("apps", {})
+            # exact match, then substring
+            for key in (n, requested.lower()):
+                if key in apps:
+                    entry = apps[key]
+                    break
+            if not entry:
+                for key in apps:
+                    if n in key or key in n:
+                        entry = apps[key]
+                        break
+            # Friendly product names whose exe keys share no word with them
+            # ("microsoft word" vs key "winword"). Map to the exe stem and
+            # retry exact/substring before falling to token scoring.
+            if not entry:
+                _PRODUCT_EXE = {
+                    "word": "winword", "excel": "excel", "powerpoint": "powerpnt",
+                    "outlook": "outlook", "onenote": "onenote", "access": "msaccess",
+                    "teams": "teams", "edge": "msedge", "paint": "mspaint",
+                    "calculator": "calculator", "vs code": "code",
+                    "visual studio code": "code", "vscode": "code",
+                }
+                for phrase, exe_stem in _PRODUCT_EXE.items():
+                    if phrase in n:
+                        if exe_stem in apps:
+                            entry = apps[exe_stem]
+                            break
+                        for key in apps:
+                            if exe_stem in key:
+                                entry = apps[key]
+                                break
+                        if entry:
+                            break
+            # Token-overlap scoring: fraction of the registry key's words found
+            # in the request ("microsoft office home 2024" vs "office 2024").
+            if not entry:
+                n_words = set(n.split()) - {"microsoft", "ms", "the", "app", "application"}
+                best, best_score = None, 0.0
+                for key in apps:
+                    k_words = set(key.split())
+                    if not k_words:
+                        continue
+                    inter = n_words & k_words
+                    if not inter:
+                        continue
+                    score = len(inter) / min(len(k_words), max(1, len(n_words)))
+                    if score > best_score:
+                        best_score = score
+                        best = key
+                if best and best_score >= 0.5:
+                    entry = apps[best]
+    except Exception:
+        pass
+    if not entry:
+        try:
+            from machine_capabilities import resolve as _resolve
+        except Exception:
+            try:
+                sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+                from machine_capabilities import resolve as _resolve
+            except Exception:
+                _resolve = None
+        entry = _resolve(requested) if _resolve else None
+    binp = entry.get("bin") if entry else None
+    name = entry.get("name", requested) if entry else requested
+
+    # 2) Spotify (or other music) search: reliable URI opens the Search pane.
+    if action == "search" and "spotify" in name.lower():
+        q = (query or "").strip()
+        uri = "spotify:search:" + q.replace(" ", "%20")
+        try:
+            _os.startfile(uri)
+            return (f"Opened Spotify search for '{q}'. The Search pane is showing "
+                    f"results for '{q}' — pick the track and press play.")
+        except Exception as e:
+            return f"[Error] Could not open Spotify search URI: {e}"
+
+    # 3) Launch the resolved binary / alias / raw name.
+    cand = binp or target
     try:
         if system == "Windows":
-            os.startfile(target)
+            _os.startfile(cand)
         elif system == "Darwin":
-            subprocess.run(["open", "-a", target])
+            subprocess.run(["open", "-a", cand])
         else:
-            subprocess.run(["xdg-open", target])
-        return f"Opened {requested}"
+            subprocess.run(["xdg-open", cand])
+        return f"Opened {name}" + (f" from {binp}" if binp else "")
     except Exception as e:
-        # Last chance: strip a trailing .exe (or add one) before giving up, so a
-        # near-miss name does not become a flat "not installed" to the user.
-        alt = target[:-4] if target.lower().endswith(".exe") else target + ".exe"
+        # Last chance: strip/add .exe before giving up.
+        alt = cand[:-4] if cand.lower().endswith(".exe") else cand + ".exe"
         try:
             if system == "Windows":
-                os.startfile(alt)
-                return f"Opened {requested}"
+                _os.startfile(alt)
+                return f"Opened {name}"
         except Exception:
             pass
-        return (f"[Error] Could not open {requested} (tried '{target}'): {str(e)}. "
-                "It may not be installed under that name.")
+        # 6) Broken shortcut? Try to find a replacement by re-scanning.
+        try:
+            from machine_capabilities import find_replacement, REGISTRY_PATH
+            repair = find_replacement(requested)
+            if repair:
+                # Update the registry with the fix
+                from machine_capabilities import load_registry
+                reg = load_registry() or {"apps": {}}
+                reg["apps"][repair["name"]] = {
+                    "bin": repair["bin"], "kind": "gui",
+                    "category": _categorize(repair["name"]),
+                    "confidence": "repaired"}
+                with open(REGISTRY_PATH, "w", encoding="utf-8") as f:
+                    json.dump(reg, f, indent=2)
+                if system == "Windows":
+                    _os.startfile(repair["bin"])
+                return f"Repaired and opened {repair['name']} from {repair['bin']}"
+        except Exception:
+            pass
+        if not entry:
+            return (f"[Error] Could not open {requested} (tried '{cand}'): {e}. "
+                    f"Say 'scan installed software' to refresh the manifest.")
+        return f"[Error] Could not open {name} from {binp}: {e}"
+
+
+def rescan_applications() -> str:
+    """Rescan all installed software and update the app registry.
+    Reports broken shortcuts found during the scan."""
+    from machine_capabilities import write_registry, load_registry
+    result = write_registry()
+    reg = load_registry()
+    if reg:
+        broken = []
+        for name, entry in reg.get("apps", {}).items():
+            binp = entry.get("bin")
+            if binp and not os.path.exists(binp):
+                broken.append(name)
+        if broken:
+            result += f"\n{len(broken)} broken shortcuts: {', '.join(broken[:15])}"
+            if len(broken) > 15:
+                result += f" (and {len(broken)-15} more)"
+    return result
+
+
+def close_application(app: str) -> str:
+    """Close a running application by friendly name, via registry lookup.
+
+    Resolves the app exactly like open_application, derives its exe name,
+    then asks it to quit gracefully (WM_CLOSE) before force-killing.
+    """
+    requested = _clean_app_name(app)
+    # Strip the close verb itself — callers may pass the whole utterance
+    # ('close it', 'close the spotify') rather than a bare app name.
+    requested = re.sub(
+        r"^(?:please\s+)?(?:close|quit|exit|kill|shut down)\s+(?:the\s+|my\s+|a\s+)*",
+        "", requested, flags=re.IGNORECASE).strip()
+    if requested.lower() in {"it", "this", "that", "app", "application",
+                             "the", "a", "my", ""}:
+        return "[Error] Which app should I close? Name it, e.g. 'close Spotify'."
+
+    # Resolve through the same chain as open_application.
+    entry = None
+    try:
+        from machine_capabilities import load_registry, resolve as _resolve
+        reg = load_registry()
+        if reg:
+            n = requested.lower().strip()
+            apps = reg.get("apps", {})
+            if n in apps:
+                entry = apps[n]
+            else:
+                for key in apps:
+                    if n in key or key in n:
+                        entry = apps[key]
+                        break
+            if not entry:
+                _PRODUCT_EXE = {
+                    "word": "winword", "excel": "excel", "powerpoint": "powerpnt",
+                    "outlook": "outlook", "onenote": "onenote", "edge": "msedge",
+                }
+                for phrase, exe_stem in _PRODUCT_EXE.items():
+                    if phrase in n and exe_stem in apps:
+                        entry = apps[exe_stem]
+                        break
+        if not entry:
+            entry = _resolve(requested)
+    except Exception:
+        entry = None
+
+    binp = (entry or {}).get("bin") or ""
+    exe_name = os.path.splitext(os.path.basename(binp.strip('"')))[0] if binp else ""
+    name = (entry or {}).get("name", requested)
+
+    if not exe_name:
+        # No registry entry: try the raw name as an image name.
+        exe_name = requested
+
+    def _running(image: str) -> bool:
+        r = subprocess.run(["tasklist", "/FI", f"IMAGENAME eq {image}.exe"],
+                           capture_output=True, text=True,
+                           encoding="utf-8", errors="replace")
+        return image.lower() in (r.stdout or "").lower()
+
+    if not _running(exe_name):
+        return f"{name} is not running."
+
+    # 1) Graceful: WM_CLOSE to all windows of the process.
+    ps = (f"Get-Process -Name '{exe_name}' -ErrorAction SilentlyContinue | "
+          "ForEach-Object { $_.CloseMainWindow() } | Out-Null")
+    subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+                   capture_output=True, timeout=15)
+    time.sleep(2)
+    if not _running(exe_name):
+        return f"Closed {name}."
+
+    # 2) Force: taskkill without /F first (sends WM_QUIT), then /F as last resort.
+    subprocess.run(["taskkill", "/IM", f"{exe_name}.exe"],
+                   capture_output=True, timeout=15)
+    time.sleep(1)
+    if not _running(exe_name):
+        return f"Closed {name}."
+
+    subprocess.run(["taskkill", "/IM", f"{exe_name}.exe", "/F"],
+                   capture_output=True, timeout=15)
+    time.sleep(1)
+    if not _running(exe_name):
+        return f"Force-closed {name}."
+    return f"[Error] Could not close {name} ({exe_name}.exe is still running)."
+
+
+def _resolve_spotify_track(query: str) -> str:
+    """Resolve a free-text song/artist query to a spotify:track:<id> URI using the
+    public open.spotify.com search page rendered headlessly (no auth, no Premium).
+    Returns the URI string or '' if resolution failed."""
+    import re as _re
+    try:
+        from playwright.sync_api import sync_playwright
+    except Exception as e:
+        return ""
+    q = (query or "").strip()
+    if not q:
+        return ""
+    # Already a URI? pass through.
+    if q.startswith("spotify:"):
+        return q
+    uri = ""
+    try:
+        import tempfile as _tf
+        _prof = _tf.mkdtemp(prefix="jv_spotify_res_")
+        with sync_playwright() as p:
+            # launch_persistent_context (NOT launch + --user-data-dir, which Playwright rejects)
+            ctx = p.chromium.launch_persistent_context(_prof, headless=True)
+            pg = ctx.new_page()
+            # Spotify is JS-rendered and rate-limits headless scrapers, so retry a few
+            # times, each waiting for a real track link + scrolling to force lazy-load.
+            enc = _re.sub(r"\s+", "%20", q)
+            seen = []
+            for attempt in range(3):
+                try:
+                    pg.goto(f"https://open.spotify.com/search/{enc}",
+                            wait_until="domcontentloaded", timeout=20000)
+                except Exception:
+                    pass
+                # wait for a track anchor, up to ~8s
+                try:
+                    pg.wait_for_selector("a[href*='/track/']", timeout=8000)
+                except Exception:
+                    pass
+                # scroll the results grid to trigger lazy rendering
+                for _ in range(3):
+                    pg.mouse.wheel(0, 1200)
+                    pg.wait_for_timeout(800)
+                uris = _re.findall(r"spotify:track:[A-Za-z0-9]+", pg.content())
+                if not uris:
+                    # open.spotify.com serves results as JS-rendered <a href="/track/<id>">
+                    # links; the spotify:track: form is no longer in the HTML, so read
+                    # the hrefs directly and convert them to spotify:track: URIs.
+                    try:
+                        hrefs = pg.eval_on_selector_all(
+                            'a[href*="/track/"]',
+                            'els => els.map(e => e.getAttribute("href") || "").filter(Boolean)')
+                        for h in hrefs:
+                            m = _re.search(r"/track/([A-Za-z0-9]+)", h or "")
+                            if m:
+                                uris.append("spotify:track:" + m.group(1))
+                    except Exception:
+                        pass
+                for u in uris:
+                    if u not in seen:
+                        seen.append(u)
+                if seen:
+                    break
+                pg.wait_for_timeout(2500)  # back off before retry
+            uri = seen[0] if seen else ""
+            ctx.close()
+    except Exception:
+        uri = ""
+    return uri
+
+
+def play_spotify(query: str) -> str:
+    """Play a song/artist/album on the user's DESKTOP Spotify app (the spicetify-
+    patched install), hands-free — no Premium, no credentials, no GUI clicks.
+
+    Flow: if `query` is already a spotify: URI, open it directly; otherwise resolve
+    the name to a track URI via the public search page, then `os.startfile` the
+    track URI, which makes the desktop app start playback. Returns a short status
+    string for speech. On any failure it says plainly what went wrong."""
+    import os as _os
+    q = (query or "").strip()
+    if not q:
+        return "Say what you'd like to play, sir."
+    # Ensure Spotify is running (the desktop app must be open to receive the URI).
+    try:
+        from machine_capabilities import resolve as _resolve
+    except Exception:
+        try:
+            sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+            from machine_capabilities import resolve as _resolve
+        except Exception:
+            _resolve = None
+    spot = _resolve("spotify") if _resolve else None
+    if spot and spot.get("bin"):
+        try:
+            _os.startfile(spot["bin"])
+        except Exception:
+            pass
+        import time as _t
+        _t.sleep(3)
+    uri = _resolve_spotify_track(q)
+    if not uri:
+        return (f"I couldn't find a Spotify track for '{q}', sir. Try a more "
+                f"specific title or artist.")
+    try:
+        _os.startfile(uri)
+        return f"Playing {q} on Spotify, sir."
+    except Exception as e:
+        return f"[Error] Could not start playback: {e}"
+
+
+def stop_spotify() -> str:
+    """Pause the desktop Spotify app by sending the system MediaPlayPause key to the
+    foreground window (no auth, no GUI clicks). Returns a short status string."""
+    try:
+        import ctypes
+        # VK_MEDIA_PLAY_PAUSE = 0xB3
+        ctypes.windll.user32.keybd_event(0xB3, 0, 0, 0)
+        ctypes.windll.user32.keybd_event(0xB3, 0, 2, 0)
+        return "Paused Spotify, sir."
+    except Exception as e:
+        return f"[Error] Could not pause Spotify: {e}"
 
 
 def get_weather(city: str = "Manila") -> str:
@@ -919,20 +1957,6 @@ def get_weather(city: str = "Manila") -> str:
 
 # Tool definitions for Claude API
 TOOLS = [
-    {
-        "name": "run_shell",
-        "description": "Execute a shell command on the system. Use for running programs, checking status, system operations.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "command": {
-                    "type": "string",
-                    "description": "The shell command to execute"
-                }
-            },
-            "required": ["command"]
-        }
-    },
     {
         "name": "read_file",
         "description": "Read the contents of a file.",
@@ -1020,48 +2044,82 @@ TOOLS = [
     },
     {
         "name": "open_application",
-        "description": "Open an application by name.",
+        "description": ("Open an installed application by friendly name (resolves via the "
+                        "capability manifest). For music apps, action='search' opens the "
+                        "in-app search pane with 'query'."),
         "input_schema": {
             "type": "object",
             "properties": {
                 "app": {
                     "type": "string",
-                    "description": "Application name or path"
+                    "description": "Application name (e.g. 'spotify', 'vlc', 'chrome') or path"
+                },
+                "action": {
+                    "type": "string",
+                    "description": "Optional: 'search' (music apps) or omit to just launch"
+                },
+                "query": {
+                    "type": "string",
+                    "description": "Search term when action='search'"
                 }
             },
             "required": ["app"]
         }
     },
     {
-        "name": "get_weather",
-        "description": "Get current weather for a city.",
+        "name": "open_site",
+        "description": ("Open a website by name from the user's site registry "
+                        "(web_registry.json — manual entries + their most-visited "
+                        "domains) in a new tab of the JARVIS browser. Also accepts "
+                        "a raw URL. Use for 'open facebook', 'open my email', etc."),
         "input_schema": {
             "type": "object",
             "properties": {
-                "city": {
-                    "type": "string",
-                    "description": "City name (default: Manila)"
-                }
-            }
+                "name": {"type": "string", "description": "Site name or alias (e.g. 'facebook', 'email')"},
+                "url": {"type": "string", "description": "Direct URL; bypasses registry lookup"}
+            },
+            "required": ["name"]
         }
     },
     {
-        "name": "get_system_info",
-        "description": "Get system information (OS, Python version, etc).",
-        "input_schema": {
-            "type": "object",
-            "properties": {}
-        }
+        "name": "rescan_sites",
+        "description": ("Rescan the default browser's history and update the user's "
+                        "site registry (most-visited domains). Use when the user says "
+                        "'rescan my sites' or asks JARVIS to learn their sites."),
+        "input_schema": {"type": "object", "properties": {}}
     },
     {
-        "name": "search_files",
-        "description": "Search inside files recursively for text; returns matching files and line numbers.",
+        "name": "list_sites",
+        "description": ("List the sites in the user's site registry with visit counts. "
+                        "Use for 'what sites do you know'."),
+        "input_schema": {"type": "object", "properties": {}}
+    },
+    {
+        "name": "add_site",
+        "description": ("Manually register a website (manual entries always win over "
+                        "history scans). Use when the user says 'add site <name> <url>'."),
         "input_schema": {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "Text to search for"},
-                "path": {"type": "string", "description": "Folder to search (default: current directory)"},
-                "max_results": {"type": "integer", "description": "Maximum files to report (default 20)"}
+                "name": {"type": "string", "description": "Short name to call it by (e.g. 'school')"},
+                "url": {"type": "string", "description": "The site URL"},
+                "aliases": {"type": "array", "items": {"type": "string"},
+                            "description": "Optional alternative names"}
+            },
+            "required": ["name", "url"]
+        }
+    },
+    {
+        "name": "search_sessions",
+        "description": ("Search past JARVIS voice conversations by keyword "
+                        "(full-text over all session transcripts). Use when the "
+                        "user asks what they said before, to recall an earlier "
+                        "request, or references something from a previous day."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Keywords to search for"},
+                "limit": {"type": "integer", "description": "Max results (default 10)"}
             },
             "required": ["query"]
         }
@@ -1111,54 +2169,23 @@ TOOLS = [
         }
     },
     {
-        "name": "browser_status",
-        "description": "Check whether the automation browser is open and signed in to ChatGPT.",
+        "name": "manus_status",
+        "description": (
+            "Check whether the Manus AI delegation backend is configured (user's "
+            "Manus cookies present locally). Read-only. Returns setup instructions "
+            "if not configured, or a ready state if it is."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {}
         }
     },
     {
-        "name": "search_vault",
-        "description": (
-            "Search the user's Second Brain Obsidian vault for text and return the "
-            "matching notes with the line that matched. Strictly read-only."
-        ),
+        "name": "browser_status",
+        "description": "Check whether the automation browser is open and signed in to ChatGPT.",
         "input_schema": {
             "type": "object",
-            "properties": {
-                "query": {"type": "string", "description": "Text to search the vault for"},
-                "limit": {"type": "integer", "description": "Maximum notes to return (default 10)"}
-            },
-            "required": ["query"]
-        }
-    },
-    {
-        "name": "read_vault_note",
-        "description": (
-            "Read one Second Brain note in full, found by part of its filename. "
-            "Strictly read-only."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "name": {"type": "string", "description": "Part of the note's filename"}
-            },
-            "required": ["name"]
-        }
-    },
-    {
-        "name": "open_file",
-        "description": (
-            "Find a file by part of its name under Documents, Desktop, Downloads, "
-            "the Second Brain vault and Portfolio, and open it in its default app."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "name": {"type": "string", "description": "Part of the file's name"}
-            },
-            "required": ["name"]
+            "properties": {}
         }
     },
     {
@@ -1234,18 +2261,25 @@ TOOLS = [
         }
     },
     {
-        "name": "delegate_task",
+        "name": "delegate",
         "description": (
-            "Hand a task to a CLI coding agent (claude or hermes) when it is beyond "
-            "JARVIS's own tools — multi-file code changes, debugging, or work needing "
-            "a full agent session. Slow: the agent runs its own session, so only use "
-            "this when no other tool can do the job."
+            "Unified delegation — the ONE primitive for routing tasks. Auto-detects "
+            "the best backend (music / desktop / web / chatgpt / manus run instantly "
+            "via local tools; everything else goes to hermes, the full agent with the "
+            "machine toolkit). Hermes path includes a confirm gate for destructive "
+            "tasks and optional memory grounding (profile, session context, vault "
+            "citation). Use this INSTEAD of delegate_to_hermes / "
+            "delegate_to_hermes_grounded for all new tool calls."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "task": {"type": "string", "description": "The task to hand over, in full"},
-                "agent": {"type": "string", "description": "claude (default) or hermes"}
+                "task": {"type": "string", "description": "The self-contained task to perform"},
+                "backend": {"type": "string", "description": "Force backend: hermes, music, desktop, web, chatgpt, manus (or null for auto-detect)"},
+                "confirm": {"type": "boolean", "description": "Set true ONLY to run a previously-confirmed destructive task"},
+                "grounded": {"type": "boolean", "description": "Inject JARVIS memory context (default true). Set false for raw Hermes."},
+                "timeout": {"type": "integer", "description": "Max seconds (15-600, default 300)"},
+                "max_turns": {"type": "integer", "description": "Max agent iterations (1-30, default 15)"}
             },
             "required": ["task"]
         }
@@ -1274,37 +2308,98 @@ def _ask_chatgpt(**kw) -> str:
     return browser_agent.ask_chatgpt(prompt=kw["prompt"], submit=submit)
 
 
+def _ask_ai(**kw) -> str:
+    """Write a prompt into a web AI (chatgpt/gemini/claude/copilot) or the
+    Copilot desktop app. Sends ONLY on explicit consent."""
+    import browser_agent
+    submit = _truthy(kw.get("submit", False))
+    site = (kw.get("site") or "chatgpt").strip()
+    prompt = kw.get("prompt") or ""
+    print(f"[TOOL] ask_ai site={site} submit={submit} "
+          f"prompt={prompt[:80]!r}", flush=True)
+    if site.lower() in {"copilot desktop", "copilotapp"}:
+        return _ask_copilot_desktop(prompt, submit)
+    return browser_agent.ask_web_ai(prompt=prompt, site=site, submit=submit)
+
+
+def _ask_copilot_desktop(prompt: str, submit: bool) -> str:
+    """Drive the installed Microsoft Copilot app via computer control:
+    open it, type the prompt; send only on consent."""
+    import subprocess as _sp, time as _time
+    exe = r"C:\Program Files (x86)\Microsoft\EdgeCore\151.0.4129.101\copilotapp.exe"
+    if not os.path.exists(exe):
+        return "[Error] The Copilot desktop app is not at its expected path."
+    try:
+        _sp.Popen([exe])
+        _time.sleep(4)
+        import pyautogui
+        pyautogui.typewrite(prompt, interval=0.02)
+        if not submit:
+            return (f"Typed into the Copilot app and left it unsent: {prompt}. "
+                    "Say the word and I'll send it.")
+        pyautogui.press("enter")
+        _time.sleep(8)
+        return f"Sent to the Copilot desktop app: {prompt}. Its reply is on screen."
+    except Exception as e:
+        return f"[Error] Driving the Copilot app failed: {e}"
+
+
 # Tool dispatcher
 TOOL_MAP = {
-    "run_shell": lambda **kw: run_shell(kw["command"]),
     "read_file": lambda **kw: read_file(kw["path"]),
     "write_file": lambda **kw: write_file(kw["path"], kw["content"],
                                           _truthy(kw.get("overwrite", False))),
     "write_to_notepad": lambda **kw: write_to_notepad(kw["content"], kw.get("filename", "")),
     "list_directory": lambda **kw: list_directory(kw.get("path", ".")),
-    "search_files": lambda **kw: search_files(kw["query"], kw.get("path", "."),
-                                              int(kw.get("max_results", 20) or 20)),
     "search_chatgpt_history": lambda **kw: __import__("browser_agent").search_chatgpt_history(
         kw["query"], int(kw.get("limit", 10) or 10)),
     "open_chatgpt_conversation": lambda **kw: __import__("browser_agent").open_chatgpt_conversation(
         kw["title_contains"]),
     "search_web": lambda **kw: search_web(kw["query"]),
-    "open_application": lambda **kw: open_application(kw["app"]),
-    "get_weather": lambda **kw: get_weather(kw.get("city", "Manila")),
-    "get_system_info": lambda **kw: json.dumps(get_system_info(), indent=2),
+    "open_site": lambda **kw: open_site(kw["name"], kw.get("url")),
+    "rescan_sites": lambda **kw: rescan_sites(),
+    "list_sites": lambda **kw: __import__("web_registry").list_sites(),
+    "add_site": lambda **kw: __import__("web_registry").add_manual_site(
+        kw["name"], kw["url"], kw.get("aliases")),
+    "search_sessions": lambda **kw: search_sessions(
+        kw["query"], int(kw.get("limit", 10) or 10)),
+    "open_application": lambda **kw: open_application(
+        kw["app"], kw.get("action"), kw.get("query")),
     "ask_chatgpt": _ask_chatgpt,
+    "ask_ai": _ask_ai,
+    "manus_status": lambda **kw: __import__("manus_agent").manus_status(),
     "browser_status": lambda **kw: __import__("browser_agent").browser_status(),
-    "search_vault": lambda **kw: search_vault(kw["query"], int(kw.get("limit", 10) or 10)),
-    "search_vault_semantic": lambda **kw: search_vault_semantic(kw["query"], int(kw.get("limit", 10) or 10)),
-    "read_vault_note": lambda **kw: read_vault_note(kw["name"]),
-    "open_file": lambda **kw: open_file(kw["name"]),
-    "play_music": lambda **kw: __import__("music_agent").play_music(kw["query"]),
-    "stop_music": lambda **kw: __import__("music_agent").stop_music(),
+    "play_music": lambda **kw: (
+        __import__("music_agent").set_progress_cb(getattr(_tools_tls, "cb", None)),
+        __import__("music_agent").play_music(kw["query"])
+    )[-1],
+    "stop_music": lambda **kw: (
+        __import__("music_agent").set_progress_cb(getattr(_tools_tls, "cb", None)),
+        __import__("music_agent").stop_music()
+    )[-1],
+    "play_spotify": lambda **kw: play_spotify(kw["query"]),
+    "stop_spotify": lambda **kw: stop_spotify(),
     "get_credentials": _get_credentials_tool,
     "launch_project": lambda **kw: __import__("project_agent").launch_project(kw["name"]),
     "compose_report": lambda **kw: __import__("report_agent").compose_report(
         kw["topic"], kw.get("output_path"), _truthy(kw.get("verbatim", False))),
+    "rescan_applications": lambda **kw: rescan_applications(),
+    "close_application": lambda **kw: close_application(kw["app"]),
     "delegate_task": lambda **kw: delegate_task(kw["task"], kw.get("agent", "claude")),
+    "delegate_to_hermes": lambda **kw: delegate_to_hermes(
+        kw["task"], int(kw.get("timeout", 300) or 300),
+        int(kw.get("max_turns", 6) or 6), _truthy(kw.get("confirm", False))),
+    "delegate_to_hermes_grounded": lambda **kw: delegate_to_hermes_grounded(
+        kw["task"], int(kw.get("timeout", 300) or 300),
+        int(kw.get("max_turns", 6) or 6), _truthy(kw.get("confirm", False))),
+    "delegate": lambda **kw: delegate(
+        kw["task"], kw.get("backend"),
+        _truthy(kw.get("confirm", False)),
+        _truthy(kw.get("grounded", True)),
+        _truthy(kw.get("background", False)),
+        kw.get("on_done"),
+        int(kw.get("timeout", 300) or 300),
+        int(kw.get("max_turns", 15) or 15)),
 }
 
 
@@ -1315,11 +2410,25 @@ def execute_tool(name: str, arguments: dict) -> str:
     # Audit line: makes a hung or misrouted tool call visible in the server log.
     print(f"[TOOL] {name} args={json.dumps(arguments, default=str)[:200]}", flush=True)
     start = time.monotonic()
+    confirmed = _truthy(arguments.get("confirm", False))
     try:
         result = TOOL_MAP[name](**arguments)
     except Exception as e:
+        result = f"[Tool Error] {name}: {str(e)}"
         print(f"[TOOL] {name} raised {type(e).__name__} after "
               f"{time.monotonic() - start:.1f}s", flush=True)
-        return f"[Tool Error] {name}: {str(e)}"
+        try:
+            import audit
+            audit.log_call(name, arguments, time.monotonic() - start, result,
+                           confirmed=confirmed)
+        except Exception:
+            pass
+        return result
     print(f"[TOOL] {name} done in {time.monotonic() - start:.1f}s", flush=True)
+    try:
+        import audit
+        audit.log_call(name, arguments, time.monotonic() - start, result,
+                       confirmed=confirmed)
+    except Exception:
+        pass
     return result

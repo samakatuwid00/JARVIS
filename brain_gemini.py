@@ -23,6 +23,22 @@ from config import (GEMINI_API_KEY, GEMINI_MODEL, JARVIS_USE_9ROUTER, ROUTER_BAS
 
 MAX_HISTORY = 20
 
+# Thread-local progress callback so tools can stream status updates back to the
+# WebSocket handler while think() is still running. Set once at the top of
+# think(), read by tools via _progress(). Costs nothing when unset (the common
+# path for non-voice callers).
+import threading as _threading
+_progress_local = _threading.local()
+
+def _progress(msg: str):
+    """Emit a mid-task status update if a progress callback is set."""
+    cb = getattr(_progress_local, "cb", None)
+    if cb:
+        try:
+            cb(msg)
+        except Exception:
+            pass
+
 
 def _estimate_tokens(messages) -> int:
     """Rough token count for a built message list: ~4 characters per token.
@@ -42,6 +58,138 @@ def _estimate_tokens(messages) -> int:
             total += len(str(tc)) // 4
         total += 4  # per-message role and framing overhead
     return total
+
+
+# ---------------------------------------------------------------- fast path
+# P1: answer trivial intents locally, with NO cloud call and NO tool schema.
+# This is the single biggest latency win for "simple tasks": math, time/date,
+# greetings and thanks are resolved instantly instead of paying the ~4s 9router
+# round-trip (plus the ~2.7k-token tool prefix that P3 would otherwise still send).
+import ast
+import datetime
+
+# Intents that can NEVER need a tool. Used by both the fast path (P1) and the
+# tool-gating in _think_router (P3): a "simple" intent skips the tool schema.
+SIMPLE_INTENTS = {"math", "greeting", "thanks", "time", "help"}
+
+def _safe_eval(expr: str):
+    """Evaluate a basic arithmetic expression safely via AST (no builtins/names)."""
+    allowed = (ast.Expression, ast.BinOp, ast.UnaryOp, ast.Constant,
+               ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Mod, ast.Pow,
+               ast.USub, ast.UAdd, ast.FloorDiv)
+    node = ast.parse(expr, mode="eval")
+    if not isinstance(node, ast.Expression):
+        raise ValueError("not an expression")
+    for n in ast.walk(node):
+        if not isinstance(n, allowed):
+            raise ValueError("disallowed syntax")
+    return eval(compile(node, "<expr>", "eval"), {"__builtins__": {}}, {})
+
+def _fmt_num(x):
+    if isinstance(x, float):
+        # Trim float noise: 4.0 -> "4", 3.3333333 -> "3.33"
+        if x == int(x):
+            return str(int(x))
+        return f"{x:.2f}".rstrip("0").rstrip(".")
+    return str(x)
+
+def classify_intent(text: str) -> str:
+    """Return a coarse intent label for fast-path / tool-gating decisions."""
+    t = (text or "").strip().lower()
+    if not t:
+        return "general"
+    # math: a string that is essentially an arithmetic expression
+    stripped = t.rstrip("= ").strip()
+    if re.fullmatch(r"[\d\s\.\+\-\*/\(\)\%\^]+", stripped) and re.search(r"\d", stripped):
+        return "math"
+    if re.search(r"\b(hi|hello|hey|good\s*(morning|afternoon|evening)|yo|hiya|greetings)\b", t):
+        return "greeting"
+    if re.search(r"\b(thanks|thank you|cheers|appreciate it|ty)\b", t):
+        return "thanks"
+    if re.search(r"\b(time|clock|date|day|today|now)\b", t) and re.search(r"\b(what|tell|is|the)\b", t):
+        return "time"
+    if re.fullmatch(r"(help|what can you do\??|commands\??|options\??)", t):
+        return "help"
+    # report / launch: JARVIS-specific side-routes (compose_report, launch_project).
+    # These run on JARVIS's local brain + signed-in browser, NOT Hermes, so they
+    # must NOT be classified as `general` (which routes to the Hermes harness).
+    if re.search(r"\b(report|compose|recap|summary\s+doc|write\s+(me\s+)?a\s+report)\b", t) and \
+       re.search(r"\b(about|on|for|of)\b", t):
+        return "report"
+    if re.search(r"\b(launch|start|open|run|boot)\b", t) and \
+       re.search(r"\b(project|app|server|dev)\b", t):
+        return "launch"
+    # rescan: JARVIS-local side-route — rescan installed software, no cloud needed.
+    if re.search(r"\b(rescan|refresh|scan)\b", t) and \
+       re.search(r"\b(apps?|software|programs?|installed)\b", t):
+        return "rescan"
+    # close_app: JARVIS-local side-route — close a NAMED application via
+    # close_application (registry lookup + graceful taskkill). Detect BEFORE
+    # the music-stop check so 'close spotify' closes the app, not its music.
+    # Requires an app word after the verb; bare 'close it' still falls through.
+    if re.search(r"\b(close|quit|exit|kill|shut down)\b", t) and \
+       not re.search(r"\b(music|song|track|playing|playback|sound|audio)\b", t):
+        after = re.search(r"\b(?:close|quit|exit|kill|shut down)\b\s+(?:the\s+|my\s+)*(.+)", t)
+        if after and len(after.group(1).split()) >= 1:
+            return "close_app"
+    # music: MUST stay on the JARVIS local side-route (play_music via music_agent),
+    # NOT delegated to Hermes (which has no play_music and no GUI control). Detect
+    # before app_reference. Trigger on a play-verb; exclude app-control phrasing
+    # ("open/launch/search ... spotify") which is a real app task (app_reference).
+    # A bare track/artist word after the verb also counts as music.
+    if re.search(r"\b(play|put on|queue|listen to)\b", t) and not \
+       re.search(r"\b(open|launch|search|run)\b", t):
+        if re.search(r"\b(music|song|track|album|artist|playlist|genre|lo-?fi|spotify|ytmusic|youtube music)\b", t) \
+           or re.search(r"\bplay\b\s+(\w+\s+){0,3}\w+", t):
+            return "music"
+    # stop: MUST stay on a JARVIS-local side-route (stop_spotify / stop_music),
+    # NOT delegated to Hermes (which has no Spotify/YouTube-Music control). A bare
+    # stop/pause verb with no play-verb and no app-verb routes here. "stop the music
+    # on spotify" / "pause spotify" / "stop music" all land here. Detect before
+    # app_reference so we don't hand a stop command to the Hermes harness.
+    if re.search(r"\b(stop|pause|turn off|shut (off|up)|kill|end|quit|cut)\b", t) and \
+       re.search(r"\b(music|song|track|playing|playback|spotify|ytmusic|youtube music|sound|audio)\b", t):
+        return "stop"
+    # app_reference: task names or implies a specific installed app/tool.
+    # Phrasing like "use X", "open X", "with X", "in X", "via X", or a known
+    # capability name. These route to the Hermes harness (which resolves the
+    # app from the capability manifest) instead of the cloud brain.
+    if re.search(r"\b(use|open|launch|run|with|via|in)\s+[\w .\-]+", t) and \
+       re.search(r"\b(ffmpeg|blender|vlc|photoshop|premiere|obs|gimp|audacity|"
+                 r"docker|node|python|git|npm|code|notepad|chrome|brave|edge|firefox|"
+                 r"spotify|discord|telegram|libreoffice|excel|word|powerpoint|"
+                 r"7z|winrar)\b", t):
+        return "app_reference"
+    if re.search(r"\b(use|open|launch|run|with|via|in)\s+\w+", t) and \
+       re.search(r"\b(app|application|software|tool|program)\b", t):
+        return "app_reference"
+    return "general"
+
+def fast_path_answer(text: str):
+    """Answer a trivial intent locally. Returns (answer, intent) or (None, intent)
+    when the intent is not handled by the fast path."""
+    t = (text or "").strip()
+    intent = classify_intent(t)
+    if intent == "math":
+        expr = t.rstrip("= ").strip()
+        try:
+            val = _safe_eval(expr)
+            return f"That's {_fmt_num(val)}, sir.", intent
+        except Exception:
+            return None, intent
+    if intent == "greeting":
+        return "Hello, sir. How may I assist you?", intent
+    if intent == "thanks":
+        return "You're welcome, sir.", intent
+    if intent == "time":
+        now = datetime.datetime.now()
+        # Speak the time the way a person would.
+        return (f"It is {now.strftime('%I:%M %p')} on "
+                f"{now.strftime('%A, %B %d')}, sir."), intent
+    if intent == "help":
+        return ("I can answer questions, do quick math, tell you the time, "
+                "search the web, write reports, and more, sir."), intent
+    return None, intent
 
 
 def _trim_history(messages, budget=LOCAL_HISTORY_TOKEN_BUDGET):
@@ -98,7 +246,7 @@ How you speak:
 - Being brief is fine and human; short natural sentences beat exhaustive answers
 - Read numbers and results the way a person would say them aloud, and never reply with a bare
   figure or single token; wrap the answer in a short spoken sentence, e.g. "That's twenty-five."
-- Address the user respectfully, and reference your capabilities only when it is relevant
+- Address the user respectfully as "sir" (as Iron Man's JARVIS would), and reference your capabilities only when it is relevant
 - Keep responses concise for voice output (avoid long lists)
 
 TOOL DISCIPLINE — NON-NEGOTIABLE:
@@ -116,16 +264,43 @@ need to call browser_status first.
 
 MUSIC IS AN ACTION, NOT A PROMISE:
 If the user asks you to play, queue, or put on any music — a song, an artist, a genre, a
-playlist, "some lo-fi", anything at all — you must call the play_music tool with the query.
+playlist, "some lo-fi", anything at all — you must call a music tool with the query.
+- If the user says "Spotify", "on Spotify", or "in Spotify", call play_spotify (it drives
+  the DESKTOP Spotify app hands-free — no Premium, no login needed).
+- Otherwise call play_music (YouTube Music in Brave).
 Saying "I will play music for you", "playing music for you", "here is your music", "I'll put
-that on" or "now playing" WITHOUT calling play_music is a failure; the user hears you promise
-music and nothing ever starts. Words like "I'll play" or "now playing" are permitted only
-AFTER play_music has returned a success. Never describe music as playing unless play_music
-was just called in this turn and came back with a Playing result. If play_music returns an
-error, say plainly what it reported, for instance "I tried to start it but playback didn't
-begin — you may need to press play in the Brave window." This holds for every backend, and
+that on" or "now playing" WITHOUT calling the right music tool is a failure; the user hears you
+promise music and nothing ever starts. Words like "I'll play" or "now playing" are permitted only
+AFTER the music tool has returned a success. Never describe music as playing unless a music tool
+was just called in this turn and came back with a Playing result. If the tool returns an
+error, say plainly what it reported. This holds for every backend, and
 it matters most on the local model, which has a habit of narrating an action instead of
 performing it.
+
+STOPPING MUSIC IS ALSO AN ACTION, NOT A PROMISE:
+If the user asks to stop, pause, or end the music - "stop the music", "pause spotify",
+"stop playing", "turn off the music", anything of that sort - you must call a stop tool.
+- If they mention Spotify, call stop_spotify (it pauses the DESKTOP Spotify app via the
+  system media key - no Premium, no login needed).
+- Otherwise call stop_music (pauses YouTube Music in Brave).
+Do NOT narrate stopping without calling the tool; "stopping the music now" with no tool call
+is a failure. Only say music was stopped after the stop tool returned success.
+
+VOICE STYLE — NO AI-ISMS (apply to every reply, spoken or written):
+You must sound like a person, not a language model. Before you send any reply, strip
+these machine tells:
+- Em dashes (—) and double-hyphens (--): use a comma, period, or two sentences. Zero em dashes in speech.
+- Chatbot artifacts: never say "Great question!", "I hope this helps!", "Absolutely!",
+  "Certainly!", "You're welcome!" as a filler, "Feel free to ask", "Let me know if you need anything".
+- "Let's explore / let's dive in / let's break this down" filler openers: start with the point.
+- Significance inflation on routine facts: no "a pivotal moment", "a game-changer",
+  "a watershed moment", "the future looks bright". State what happened, plainly.
+- Hollow intensifiers: cut "genuinely", "truly", "quite frankly", "it's worth noting that",
+  "actually" when it only adds emphasis.
+- Vary sentence length; be concrete (names, numbers, specifics); don't pad to a neat rule of three.
+Keep your brisk JARVIS cadence — short ACKs, "sir" when it fits — but never let the polish
+make you sound like a bot. The anti-AI-ism rule overrides the music-promise rule only in wording,
+not in action: you still MUST call the tool before claiming music played or stopped.
 
 When using tools:
 - Execute commands carefully
@@ -139,6 +314,23 @@ When using tools:
   facts as though that tool retrieved them for you.
 
 Current system info will be provided in context."""
+
+# ── Pillar C (memory): ground the brain in the durable profile ──────────────
+_PROFILE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "jarvis-profile.md")
+def _load_jarvis_profile() -> str:
+    try:
+        with open(_PROFILE_FILE, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+_profile_text = _load_jarvis_profile()
+if _profile_text:
+    JARVIS_SYSTEM += (
+        "\n\nPERSISTENT MEMORY (always true — from the user's JARVIS profile):\n"
+        + _profile_text
+        + "\n\nUse the PERSISTENT MEMORY above to answer questions about the user, their "
+          "role, their machine, and the harness contract. It is fact, not a guess.\n"
+    )
 
 
 _ASTERISK_BLOCK = re.compile(r"\*[^*]*\*")
@@ -176,13 +368,6 @@ def _make_tool(name: str, description: str, params: dict) -> types.FunctionDecla
 
 
 TOOL_DECLARATIONS = [
-    _make_tool("run_shell", "Execute a shell command and return its output.",
-        {"type": "object", "properties": {
-            "command": {"type": "STRING", "description": "Shell command to execute"},
-            "cwd": {"type": "STRING", "description": "Working directory (optional)"},
-            "timeout": {"type": "INTEGER", "description": "Timeout in seconds (default 30)"}
-        }, "required": ["command"]}),
-
     _make_tool("read_file", "Read the contents of a file.",
         {"type": "object", "properties": {
             "path": {"type": "STRING", "description": "Path to file"}
@@ -197,15 +382,6 @@ TOOL_DECLARATIONS = [
             "content": {"type": "STRING", "description": "Content to write"},
             "overwrite": {"type": "BOOLEAN", "description": "Replace an existing file. Explicit requests only."}
         }, "required": ["path", "content"]}),
-
-    _make_tool("search_files",
-        "Search inside files recursively for a piece of text and return the matching "
-        "files with line numbers. Use this to find where something is written on disk.",
-        {"type": "object", "properties": {
-            "query": {"type": "STRING", "description": "Text to search for"},
-            "path": {"type": "STRING", "description": "Folder to search (default: current directory)"},
-            "max_results": {"type": "INTEGER", "description": "Maximum files to report (default 20)"}
-        }, "required": ["query"]}),
 
     _make_tool("list_directory", "List files and directories at a given path.",
         {"type": "object", "properties": {
@@ -234,14 +410,6 @@ TOOL_DECLARATIONS = [
             "app": {"type": "STRING", "description": "Application name or executable path"}
         }, "required": ["app"]}),
 
-    _make_tool("get_weather", "Get current weather for a city.",
-        {"type": "object", "properties": {
-            "city": {"type": "STRING", "description": "City name"}
-        }, "required": ["city"]}),
-
-    _make_tool("get_system_info", "Get system information (OS, Python version, user, etc.).",
-        {"type": "object", "properties": {}}),
-
     _make_tool("ask_chatgpt",
         "Type a prompt into the ChatGPT website in a real browser window. "
         "Set submit to true ONLY when the user explicitly asked you to send, submit, "
@@ -263,58 +431,43 @@ TOOL_DECLARATIONS = [
         }, "required": ["query"]}),
 
     _make_tool("open_chatgpt_conversation",
-        "Open one of the user's past ChatGPT conversations by a fragment of its title "
-        "and read its messages back. Read-only: it does not send anything.",
+        "Open the user's single BEST-MATCHING past ChatGPT conversation for a title "
+        "fragment and read its messages back. Read-only. Among several similar "
+        "titles it opens the highest-scoring match (most on-topic and specific), "
+        "NOT the first one - so pass the exact title from search_chatgpt_history's "
+        "BEST MATCH and call this ONCE; do not retry with different fragments.",
         {"type": "object", "properties": {
-            "title_contains": {"type": "STRING", "description": "Part of the conversation title"}
+            "title_contains": {"type": "STRING", "description": "Part of the conversation title - prefer the exact BEST MATCH title returned by search_chatgpt_history"}
         }, "required": ["title_contains"]}),
 
     _make_tool("browser_status",
         "Check whether the automation browser is open and signed in to ChatGPT.",
         {"type": "object", "properties": {}}),
 
-    _make_tool("search_vault",
-        "Search the user's Second Brain Obsidian vault for text and return the matching "
-        "notes with the line that matched. Use this for anything the user has written "
-        "down themselves - notes, credentials, decisions, projects. Strictly read-only: "
-        "it never changes the vault.",
-        {"type": "object", "properties": {
-            "query": {"type": "STRING", "description": "Text to search the vault for"},
-            "limit": {"type": "INTEGER", "description": "Maximum notes to return (default 10)"}
-        }, "required": ["query"]}),
-
-    _make_tool("search_vault_semantic",
-        "Search the Second Brain vault semantically using turbovec vector index. "
-        "Matches by meaning, not just keywords — finds notes that are conceptually "
-        "relevant even if they don't contain the query's words. Falls back to "
-        "search_vault (substring search) if no turbovec index exists. "
-        "Strictly read-only; never changes the vault.",
-        {"type": "object", "properties": {
-            "query": {"type": "STRING", "description": "Semantic search query — describe what you are looking for, not just keywords"},
-            "limit": {"type": "INTEGER", "description": "Maximum notes to return (default 10)"}
-        }, "required": ["query"]}),
-
-    _make_tool("read_vault_note",
-        "Read one Second Brain note in full, found by part of its filename. If several "
-        "notes match, it lists them instead of guessing. Strictly read-only.",
-        {"type": "object", "properties": {
-            "name": {"type": "STRING", "description": "Part of the note's filename"}
-        }, "required": ["name"]}),
-
-    _make_tool("open_file",
-        "Find a file by part of its name under Documents, Desktop, Downloads, the "
-        "Second Brain vault and Portfolio, and open it in its default application.",
-        {"type": "object", "properties": {
-            "name": {"type": "STRING", "description": "Part of the file's name"}
-        }, "required": ["name"]}),
-
     _make_tool("play_music",
         "Play music: searches YouTube Music (music.youtube.com) in a Brave window "
         "and plays the first song result. Use for any request to play a song, an "
-        "artist or a genre.",
+        "artist or a genre UNLESS the user explicitly says 'Spotify' (then use "
+        "play_spotify instead, which drives the desktop Spotify app).",
         {"type": "object", "properties": {
             "query": {"type": "STRING", "description": "Song, artist or genre to play"}
         }, "required": ["query"]}),
+
+    _make_tool("play_spotify",
+        "Play a song, artist or album on the user's DESKTOP Spotify app "
+        "(the spicetify-patched install), hands-free — no Premium, no login, no "
+        "GUI clicks. Resolves the name to a track and starts playback in the "
+        "desktop app. USE THIS whenever the user says 'Spotify', 'on Spotify', or "
+        "'play <song> in Spotify'. For generic 'play music' with no Spotify mention, "
+        "use play_music (YouTube Music) instead.",
+        {"type": "object", "properties": {
+            "query": {"type": "STRING", "description": "Song, artist or album to play on Spotify"}
+        }, "required": ["query"]}),
+
+    _make_tool("stop_spotify",
+        "Pause the desktop Spotify app (sends the media play/pause key). Use when "
+        "the user wants to stop or pause Spotify.",
+        {"type": "object", "properties": {}}),
 
     _make_tool("stop_music",
         "Stop the music that play_music started.",
@@ -352,15 +505,48 @@ TOOL_DECLARATIONS = [
                 "Use when the user says quote, copy, paste, exact or word for word."}
         }, "required": ["topic"]}),
 
-    _make_tool("delegate_task",
-        "Hand a task to a CLI coding agent (claude or hermes) when it is beyond your "
-        "own tools — multi-file code changes, debugging, or work needing a full agent "
-        "session. This is slow because the agent runs its own session, so use it only "
-        "when no other tool can do the job.",
+    _make_tool("delegate",
+        "Unified delegation — the ONE primitive for routing tasks. Auto-detects the "
+        "best backend (music / desktop / web / chatgpt / manus run instantly via local "
+        "tools; everything else goes to hermes, the full agent with the machine toolkit). "
+        "The hermes path includes a confirm gate for destructive tasks and optional memory "
+        "grounding (profile, session context, vault citation). Use this INSTEAD of any "
+        "other delegate_* tool for all new tool calls.",
         {"type": "object", "properties": {
-            "task": {"type": "STRING", "description": "The task to hand over, in full"},
-            "agent": {"type": "STRING", "description": "claude (default) or hermes"}
-        }, "required": ["task"]})
+            "task": {"type": "STRING", "description": "The self-contained task to perform"},
+            "backend": {"type": "STRING", "description": "Force backend: hermes, music, desktop, web, chatgpt, manus (or omit/empty for auto-detect)"},
+            "confirm": {"type": "BOOLEAN", "description": "Set true ONLY to run a previously-confirmed destructive task"},
+            "grounded": {"type": "BOOLEAN", "description": "Inject JARVIS memory context (default true). Set false for raw Hermes."},
+            "timeout": {"type": "INTEGER", "description": "Max seconds to wait (15-600, default 300)"},
+            "max_turns": {"type": "INTEGER", "description": "Max agent iterations (1-30, default 15)"}
+        }, "required": ["task"]}),
+
+    _make_tool("rescan_applications",
+        "Rescan all installed software on this computer and update the app registry. "
+        "Use when a new app was installed, an app can't be found, or the user says "
+        "'rescan', 'refresh apps', or 'scan installed software'.",
+        {"type": "object", "properties": {}}),
+
+    _make_tool("close_application",
+        "Close a running application by name. Use for any request to close, quit, "
+        "exit or kill an app: 'close Spotify', 'quit Word', 'close the calculator'. "
+        "Closes gracefully first and force-kills only if needed.",
+        {"type": "object", "properties": {
+            "app": {"type": "STRING", "description": "The application name to close, e.g. 'Spotify' or 'Microsoft Word'"}
+        }, "required": ["app"]}),
+
+    _make_tool("ask_ai",
+        "Write a prompt into a web AI - ChatGPT, Gemini, Claude or Copilot (site "
+        "parameter) - or the installed Copilot desktop app (site='copilot desktop'). "
+        "Set submit to true ONLY when the user explicitly asked you to send it "
+        "('and send it', 'then send', 'send that to Gemini'). If the user said write "
+        "or type or draft, leave submit false and the text waits in the box. When in "
+        "doubt leave it false. When submit is true this returns the AI's reply.",
+        {"type": "object", "properties": {
+            "prompt": {"type": "STRING", "description": "The prompt text to write"},
+            "site": {"type": "STRING", "description": "chatgpt | gemini | claude | copilot | copilot desktop (default chatgpt)"},
+            "submit": {"type": "BOOLEAN", "description": "Send it. True only on an explicit request to send."}
+        }, "required": ["prompt"]}),
 ]
 
 TOOLS = types.Tool(function_declarations=TOOL_DECLARATIONS)
@@ -397,6 +583,11 @@ _CONSENT_FLAGS = {
         r"(?i)\b(overwrite|replace|clobber|update it|rewrite|wipe|yes|go ahead|do it|confirm)\b")),
     "ask_chatgpt": ("submit", re.compile(
         r"(?i)\b(send|submit|post|ask chatgpt|fire it|go ahead|do it|yes)\b")),
+    # Same gate for the multi-AI writer: sending to Gemini/Claude/Copilot
+    # requires the user's own words to ask for it.
+    "ask_ai": ("submit", re.compile(
+        r"(?i)\b(send|submit|post|fire it|go ahead|do it|yes|send it|then send|"
+        r"and send)\b")),
 }
 
 
@@ -441,14 +632,14 @@ class MockJarvisBrain:
 
         responses = {
             "what is 2+2": "That's 4. Basic arithmetic, sir.",
-            "weather": "I would check the weather for you, but I'm running in demo mode. In production, I'd call the weather API.",
-            "open notepad": "Opening Notepad for you, sir. (Demo mode - would launch notepad.exe)",
-            "files in": "In demo mode, I'd list your files. Currently showing: Projects/, resume.pdf, notes.txt, Downloads/",
+            "weather": "I would check the weather for you, but every live backend (9router, Groq, Cerebras and local Ollama) is unreachable right now, so I'm in offline demo mode.",
+            "open notepad": "Opening Notepad for you, sir. (Offline demo mode — can't launch notepad.exe without a live backend.)",
+            "files in": "In offline demo mode I'd list your files. Currently showing: Projects/, resume.pdf, notes.txt, Downloads/",
             "create a python": "Creating hello.py with print('Hello from JARVIS!'). Done! Would you like me to run it?",
-            "hello": "Hello! I'm JARVIS, your AI assistant. Running in demo mode with Google Gemini (free tier).",
+            "hello": "Hello! I'm JARVIS. All live backends are down, so I'm in offline demo mode with canned replies.",
             "help": "I can help with: weather, file operations, opening apps, web search, shell commands, and answering questions.",
-            "time": "I'd check the system time, but in demo mode I'll just say: it's presentation time!",
-            "status": "System: Windows 11, Python 3.11, Model: gemini-1.5-flash (demo mode), Tools: 8 available"
+            "time": "I'd check the system time, but every backend is unreachable, so in offline demo mode I'll just say: it's presentation time!",
+            "status": "System: Windows 11, Python 3.11, Mode: OFFLINE DEMO (all live backends unreachable), Tools: available when a backend is up"
         }
 
         user_lower = user_input.lower()
@@ -457,7 +648,9 @@ class MockJarvisBrain:
                 self.conversation.append({"role": "assistant", "content": resp})
                 return resp
 
-        default = f"I heard: '{user_input}'. In demo mode, I respond with pre-scripted answers. With a live API key, I'd use Google Gemini to process this and execute tools as needed."
+        default = (f"I heard: '{user_input}'. Every live backend — 9router, Groq, "
+                   f"Cerebras and local Ollama — was unreachable, so I'm in offline "
+                   f"demo mode with pre-scripted replies. Check your network or Ollama.")
         self.conversation.append({"role": "assistant", "content": default})
         return default
 
@@ -467,17 +660,15 @@ class MockJarvisBrain:
 
 
 class JarvisBrain:
-    """Multi-backend brain: 9router/mimo (primary) -> Gemini (fallback) -> mock (last resort)."""
+    """Multi-backend brain: Cerebras (primary) -> 9router -> Ollama -> mock (last resort)."""
 
     def __init__(self):
-        if not GEMINI_API_KEY:
-            raise ValueError(
-                "GEMINI_API_KEY not set!\\n"
-                "Create .env file with:\\n"
-                "GEMINI_API_KEY=your-key-here"
-            )
-
-        self.client = genai.Client(api_key=GEMINI_API_KEY)
+        # Gemini is optional: its key is reserved for the user's portfolio work,
+        # so JARVIS must run without it. Only build the Gemini client when a key
+        # is present; the brain chain skips Gemini entirely when it is absent.
+        self.client = None
+        if GEMINI_API_KEY:
+            self.client = genai.Client(api_key=GEMINI_API_KEY)
         self.model = GEMINI_MODEL
         self.conversation = []
         self._use_mock = False
@@ -531,8 +722,24 @@ class JarvisBrain:
             self.reset()
             print(f"[JARVIS] context reset after {idle/60:.1f} min idle", flush=True)
 
-    def think(self, user_input: str) -> str:
-        """Route to 9router (mimo) first; then Groq (free tier); then Gemini; then mock."""
+    def think(self, user_input: str, on_hermes_done=None, progress_cb=None) -> str:
+        """Route to Cerebras (primary); then 9router; then local Ollama; then mock.
+
+        Each hop falls through on error or rate-limit (429/quota/rate) so a dead
+        or throttled provider never blocks the request.
+
+        `on_hermes_done` (Phase 4): when provided (a callable) and the turn routes
+        to the Hermes harness, the delegation runs in the BACKGROUND — think()
+        returns the "working" ack immediately and the real answer is delivered to
+        on_hermes_done(result) when Hermes finishes. Used by the voice/WS path so
+        complex tasks don't freeze the mic for the ~2-min Hermes cold start.
+
+        `progress_cb`: when provided (a callable), tools may call it with short
+        status strings mid-task ("Searching YouTube Music...", "Playing now...")
+        so the WS handler can speak progress while the task is still running.
+        """
+        # Store progress callback in thread-local so tools can reach it.
+        _progress_local.cb = progress_cb
         self._maybe_reset_idle()
         self._last_turn_ts = time.time()
         self.conversation.append({"role": "user", "content": user_input})
@@ -540,6 +747,105 @@ class JarvisBrain:
         # Each turn reports its own telemetry; clear last turn's so a backend that
         # records nothing cannot leave stale numbers on the HUD.
         self.last_stats = {}
+
+        # P1: fast path for trivial intents — answer locally with NO cloud call and
+        # NO tool schema. Removes the ~4s 9router round-trip for simple tasks.
+        ans, intent = fast_path_answer(user_input)
+        if ans is not None and intent in SIMPLE_INTENTS:
+            self.conversation.append({"role": "assistant", "content": ans})
+            self.last_backend = "instant"
+            self.last_stats = {"backend": "instant", "intent": intent}
+            return ans
+
+        # P1.5 (Tiered Router — Phase 1): general + app-reference tasks go to the
+        # Hermes harness (the EXECUTOR) instead of the cloud brain. Hermes has the
+        # full machine toolkit + the capability manifest + grounded memory, so it is
+        # the right owner for anything that touches the machine or names an app.
+        # Simple/voice-fast intents still take the instant path above. On any error
+        # (Hermes unreachable, spawn failure) we fall through to the cloud brain
+        # rather than failing the turn — the tiered router degrades, it doesn't break.
+        # NOTE (Phase 3): `report` and `launch` are JARVIS-specific side-routes
+        # (compose_report / launch_project) that run on the LOCAL brain + signed-in
+        # browser — they are deliberately NOT routed to Hermes, so they are excluded.
+        # NOTE (Phase 6b): `music` is also a JARVIS side-route (play_music via
+        # music_agent, which drives YouTube Music in Brave). Hermes has no play_music
+        # and no GUI control, so music MUST stay local — EXCLUDED from the Hermes route
+        # (it is intentionally absent from the set below).
+        if intent in ("general", "app_reference"):
+            try:
+                from tools import delegate
+                # Phase 4: if a delivery callback is supplied (voice/WS path), run
+                # Hermes in the background so the mic stays live; think() returns the
+                # "working" ack now and on_hermes_done receives the real answer later.
+                # progress_cb (Phase 4) streams milestone status to the WS consumer.
+                if on_hermes_done is not None:
+                    hermes_out = delegate(
+                        user_input, timeout=300, max_turns=15,
+                        background=True, on_done=on_hermes_done,
+                        progress_cb=_progress_local.cb)
+                else:
+                    hermes_out = delegate(
+                        user_input, timeout=300, max_turns=15,
+                        progress_cb=_progress_local.cb)
+                # The answer from Hermes is surfaced verbatim (the "Hermes reports:"
+                # label is now stripped in tools.py). The user hears the real answer.
+                self.conversation.append({"role": "assistant", "content": hermes_out})
+                self.last_backend = "hermes"
+                self.last_stats = {"backend": "hermes", "intent": intent}
+                return hermes_out
+            except Exception as e:
+                print(f"[JARVIS] Hermes delegation failed ({e}); falling back to cloud brain...")
+
+        # STOP (music): JARVIS-local side-route - must NOT reach the Hermes harness
+        # or any cloud brain, which have no Spotify/YouTube-Music control. Resolve the
+        # right stop tool deterministically: a Spotify mention -> stop_spotify (desktop
+        # app, via the MediaPlayPause key); otherwise -> stop_music (YouTube Music in
+        # Brave). This runs before the cloud tiers so a stop is instant and local.
+        # RESCAN: instant local tool — scan installed software, no cloud needed.
+        if intent == "rescan":
+            try:
+                from tools import rescan_applications
+                res = rescan_applications()
+                self.conversation.append({"role": "assistant", "content": res})
+                self.last_backend = "instant"
+                self.last_stats = {"backend": "instant", "intent": "rescan"}
+                return res
+            except Exception as e:
+                print(f"[JARVIS] Rescan failed ({e}); falling back to cloud brain...")
+        # CLOSE_APP: instant local route — close a named application.
+        if intent == "close_app":
+            try:
+                from tools import execute_tool
+                import tools as _tools_mod, re as _re2
+                _tools_mod.set_progress_cb(_progress_local.cb)
+                m = _re2.search(
+                    r"\b(?:close|quit|exit|kill|shut down)\b\s+(?:the\s+|my\s+)*(.+)",
+                    (user_input or "").lower())
+                app_name = m.group(1).strip() if m else user_input
+                _progress(f"Closing {app_name}...")
+                res = execute_tool("close_application", {"app": app_name}, user_input)
+                self.conversation.append({"role": "assistant", "content": res})
+                self.last_backend = "instant"
+                self.last_stats = {"backend": "instant", "intent": "close_app"}
+                return res
+            except Exception as e:
+                print(f"[JARVIS] close_app failed ({e}); falling back to cloud brain...")
+        if intent == "stop":
+            try:
+                from tools import execute_tool
+                import tools as _tools_mod
+                _tools_mod.set_progress_cb(_progress_local.cb)
+                _progress("Stopping music...")
+                if re.search(r"\bspotify\b", (user_input or "").lower()):
+                    res = execute_tool("stop_spotify", {}, user_input)
+                else:
+                    res = execute_tool("stop_music", {}, user_input)
+                self.conversation.append({"role": "assistant", "content": res})
+                self.last_backend = "instant"
+                self.last_stats = {"backend": "instant", "intent": "stop"}
+                return res
+            except Exception as e:
+                print(f"[JARVIS] stop failed ({e}); falling back to cloud brain...")
 
         # 0) Local first, only when explicitly preferred (offline / on-device).
         if self._prefer_local:
@@ -557,33 +863,9 @@ class JarvisBrain:
                       + ("; local-only, not falling back." if self._local_only
                          else "; falling back to cloud..."))
 
-        # 1) Primary: 9router / mimo
-        if self._use_router:
-            try:
-                result = self._think_router(user_input)
-                if result:
-                    self.last_backend = "router"
-                    self.last_stats["backend"] = "router"
-                    return result
-            except Exception as e:
-                print(f"[JARVIS] 9router/mimo unavailable ({e}); falling back...")
-
-        # 2) Groq (OpenAI-compatible free tier) — spares the Gemini quota
-        if self._use_groq:
-            try:
-                result = self._think_groq(user_input)
-                if result:
-                    self.last_backend = "groq"
-                    self.last_stats["backend"] = "groq"
-                    return result
-            except Exception as e:
-                err = str(e)
-                if "429" in err or "quota" in err.lower() or "rate" in err.lower():
-                    print("[JARVIS] Groq quota exceeded, falling back to Cerebras...")
-                else:
-                    print(f"[JARVIS] Groq unavailable ({e}); falling back to Cerebras...")
-
-        # 2b) Cerebras (OpenAI-compatible free tier) — backstop if Groq is walled
+        # 1) PRIMARY: Cerebras (OpenAI-compatible free tier).
+        #    If it's rate-limited (429/quota) or otherwise down, fall through to
+        #    9router instead of burning the request.
         if self._use_cerebras:
             try:
                 result = self._think_cerebras(user_input)
@@ -594,28 +876,27 @@ class JarvisBrain:
             except Exception as e:
                 err = str(e)
                 if "429" in err or "quota" in err.lower() or "rate" in err.lower():
-                    print("[JARVIS] Cerebras quota exceeded, falling back to Gemini...")
+                    print("[JARVIS] Cerebras rate-limited (429/quota); falling back to 9router...")
                 else:
-                    print(f"[JARVIS] Cerebras unavailable ({e}); falling back to Gemini...")
+                    print(f"[JARVIS] Cerebras unavailable ({e}); falling back to 9router...")
 
-        # 3) Fallback: Gemini — skipped entirely in local-only mode, which is the
-        #    difference between "prefer local" and "never leave this machine".
-        gemini_err = None
-        if self._local_only:
-            return ("I could not get an answer from the local model, and local-only "
-                    "mode is on, so I did not fall back to a cloud service.")
-        try:
-            result = self._think_gemini(user_input)
-            if result:
-                self.last_backend = "gemini"
-                return result
-        except Exception as e:
-            gemini_err = str(e)
-            print(f"[JARVIS] Gemini unavailable ({gemini_err}); trying local Ollama...")
+        # 2) FALLBACK: 9router (local AI proxy, multi-model).
+        if self._use_router:
+            try:
+                result = self._think_router(user_input)
+                if result:
+                    self.last_backend = "router"
+                    self.last_stats["backend"] = "router"
+                    return result
+            except Exception as e:
+                err = str(e)
+                if "429" in err or "quota" in err.lower() or "rate" in err.lower():
+                    print("[JARVIS] 9router rate-limited; falling back to local Ollama...")
+                else:
+                    print(f"[JARVIS] 9router/mimo unavailable ({e}); falling back to local Ollama...")
 
-        # 4) Local Ollama — the last backend that can produce a real answer.
-        #    Everything past this point is canned demo text, so a small local
-        #    model beats it even though it is well below the cloud tiers.
+        # 3) LOCAL: Ollama — final real backend before demo mode. A small local
+        #    model beats canned demo text, so it is kept as the last resort.
         if self._use_ollama and not self._prefer_local:
             try:
                 result = self._think_ollama(user_input)
@@ -625,19 +906,13 @@ class JarvisBrain:
             except Exception as e:
                 print(f"[JARVIS] Ollama unavailable ({e}); switching to demo mode...")
 
-        # 5) Demo mode, or surface a non-quota Gemini error as before
-        if gemini_err:
-            if not ("429" in gemini_err or "RESOURCE_EXHAUSTED" in gemini_err
-                    or "quota" in gemini_err.lower()):
-                return f"I encountered an error: {gemini_err}"
-            print("[JARVIS] Gemini quota exceeded, switching to demo mode...")
-            self._use_mock = True
-            self._mock_brain = MockJarvisBrain()
-            self._mock_brain.conversation = self.conversation.copy()
-            self.last_backend = "mock"
-            return self._mock_brain.think(user_input)
-
-        return "I apologize, but I encountered an issue processing that request."
+        # 4) Demo mode fallback
+        print("[JARVIS] All backends exhausted, switching to demo mode...")
+        self._use_mock = True
+        self._mock_brain = MockJarvisBrain()
+        self._mock_brain.conversation = self.conversation.copy()
+        self.last_backend = "mock"
+        return self._mock_brain.think(user_input)
 
     def _think_router(self, user_input: str) -> str:
         """Call 9router (OpenAI-compatible) with mimo model + tool loop."""
@@ -692,12 +967,18 @@ class JarvisBrain:
 
         pending = []
         for _ in range(10):
+            # P3: skip the ~2.7k-token tool schema (and the tool-decision step) for
+            # simple intents that can never need a tool. Tiered max_tokens too.
+            needs_tool = classify_intent(user_input) not in SIMPLE_INTENTS
+            tools_arg = otools if needs_tool else None
+            tool_choice_arg = "auto" if needs_tool else None
+            max_tokens_arg = 256 if not needs_tool else 1024
             response = client.chat.completions.create(
                 model=ROUTER_MODEL,
                 messages=messages,
-                tools=otools,
-                tool_choice="auto",
-                max_tokens=1024,
+                tools=tools_arg,
+                tool_choice=tool_choice_arg,
+                max_tokens=max_tokens_arg,
                 timeout=45,
             )
 
@@ -727,6 +1008,10 @@ class JarvisBrain:
                 })
 
                 for tc in message.tool_calls:
+                    # Expose the progress callback to tools so they can stream
+                    # mid-task status while think() is still running.
+                    import tools as _tools_mod
+                    _tools_mod.set_progress_cb(_progress_local.cb)
                     result = execute_tool(tc.function.name, _safe_json(tc.function.arguments),
                                           user_input)
                     pending.append({
@@ -792,6 +1077,18 @@ class JarvisBrain:
 
             if not OLLAMA_KEEP_WARM:
                 return
+            # Re-ping inside Ollama's eviction window so an idle gap never costs
+            # the user a cold rebuild. _ollama_active keeps this off the CPU while
+            # a real turn is generating — the ping is cheap but not free, and
+            # contending for the same 8 cores would slow the live answer.
+            while True:
+                time.sleep(OLLAMA_WARM_INTERVAL)
+                if self._ollama_active:
+                    continue
+                try:
+                    _warm_once()
+                except Exception as e:
+                    print(f"[JARVIS] Ollama keep-warm ping failed ({e}); will retry.")
             # Re-ping inside Ollama's eviction window so an idle gap never costs
             # the user a cold rebuild. _ollama_active keeps this off the CPU while
             # a real turn is generating — the ping is cheap but not free, and
@@ -1067,6 +1364,8 @@ class JarvisBrain:
                 })
 
                 for tc in message.tool_calls:
+                    import tools as _tools_mod
+                    _tools_mod.set_progress_cb(_progress_local.cb)
                     result = execute_tool(tc.function.name, _safe_json(tc.function.arguments),
                                           user_input)
                     pending.append({
@@ -1184,6 +1483,8 @@ class JarvisBrain:
                 })
 
                 for tc in message.tool_calls:
+                    import tools as _tools_mod
+                    _tools_mod.set_progress_cb(_progress_local.cb)
                     result = execute_tool(tc.function.name, _safe_json(tc.function.arguments),
                                           user_input)
                     pending.append({

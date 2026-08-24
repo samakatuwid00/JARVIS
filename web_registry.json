@@ -1,0 +1,868 @@
+{
+  "generated": "2026-08-24T12:11:11",
+  "sites": {
+    "irimsv": {
+      "url": "https://irimsv.net",
+      "host": "irimsv.net",
+      "aliases": [],
+      "source": "history",
+      "visits": 1001,
+      "top_urls": [
+        {
+          "url": "https://irimsv.net/dashboard",
+          "visits": 103
+        },
+        {
+          "url": "https://irimsv.net/",
+          "visits": 52
+        },
+        {
+          "url": "https://irimsv.net/print-resources",
+          "visits": 51
+        },
+        {
+          "url": "https://irimsv.net/print-resources?tab=division",
+          "visits": 40
+        },
+        {
+          "url": "https://irimsv.net/print-resources?tab=school",
+          "visits": 38
+        }
+      ]
+    },
+    "tiktok": {
+      "url": "https://www.tiktok.com",
+      "host": "www.tiktok.com",
+      "aliases": [],
+      "source": "history",
+      "visits": 455,
+      "top_urls": [
+        {
+          "url": "https://www.tiktok.com/",
+          "visits": 19
+        },
+        {
+          "url": "https://www.tiktok.com/foryou",
+          "visits": 12
+        },
+        {
+          "url": "https://www.tiktok.com/@_samakatuwid",
+          "visits": 11
+        },
+        {
+          "url": "https://www.tiktok.com/@marksierracc/video/7656208450598358293",
+          "visits": 10
+        },
+        {
+          "url": "https://www.tiktok.com/@hleli_2k/video/7654977412538567956",
+          "visits": 8
+        }
+      ]
+    },
+    "facebook": {
+      "url": "https://www.facebook.com",
+      "host": "www.facebook.com",
+      "aliases": [],
+      "source": "history",
+      "visits": 430,
+      "top_urls": [
+        {
+          "url": "https://www.facebook.com/",
+          "visits": 103
+        },
+        {
+          "url": "https://www.facebook.com/messages/t/6126373990819324",
+          "visits": 48
+        },
+        {
+          "url": "https://www.facebook.com/messages/e2ee/t/8477031229055345",
+          "visits": 36
+        },
+        {
+          "url": "https://www.facebook.com/stories/110348907096034/UzpfSVNDOjEwNDIyMzIwMDE1NjMzNTA=/?bucket_count=9&source=story_tray",
+          "visits": 19
+        },
+        {
+          "url": "https://www.facebook.com/messages/e2ee/t/7581748791944219",
+          "visits": 12
+        }
+      ]
+    },
+    "google": {
+      "url": "https://gemini.google.com",
+      "host": "gemini.google.com",
+      "aliases": [],
+      "source": "history",
+      "visits": 16,
+      "top_urls": [
+        {
+          "url": "https://gemini.google.com/app?is_sa=1&is_sa=1&android-min-version=301356232&ios-min-version=322.0&campaign_id=bkws&utm_source=sem&utm_medium=paid-media&utm_campaign=bkws&pt=9008&mt=8&ct=p-growth-sem-bkws&gclsrc=aw.ds&gad_source=1&gad_campaignid=22437864436&gbraid=0AAAAApk5BhlzefCRQn90GBjRV6JAR2m69&gclid=Cj0KCQjwxvjRBhC2ARIsAI7KJa1uAJyUaR_NS05L91SXJyretghTNvNIAZRRgy3kJAgoL6JmuN6U4YQaAoepEALw_wcB",
+          "visits": 3
+        },
+        {
+          "url": "https://gemini.google.com/app/e6fc34ab4859f806?is_sa=1&is_sa=1&android-min-version=301356232&ios-min-version=322.0&campaign_id=bkws&utm_source=sem&utm_medium=paid-media&utm_campaign=bkws&pt=9008&mt=8&ct=p-growth-sem-bkws&gclsrc=aw.ds&gad_source=1&gad_campaignid=22437864436&gbraid=0AAAAApk5BhlzefCRQn90GBjRV6JAR2m69&gclid=Cj0KCQjwxvjRBhC2ARIsAI7KJa1uAJyUaR_NS05L91SXJyretghTNvNIAZRRgy3kJAgoL6JmuN6U4YQaAoepEALw_wcB",
+          "visits": 3
+        },
+        {
+          "url": "https://gemini.google.com/app?hl=en-PH&utm_campaign=gemini_students_landing_page&icid=gemini_students_landing_page&utm_source=gemini&utm_medium=web&_gl=1*183gkke*_gcl_au*NTYwMjc0OTY2LjE3ODI0MzAwMTc.*_ga*MTQ1MjIzMDYyMy4xNzgyNDMwMDE3*_ga_WC57KJ50ZZ*czE3ODI0MzAwMTYkbzEkZzAkdDE3ODI0MzAwMTYkajYwJGwwJGgw",
+          "visits": 2
+        },
+        {
+          "url": "https://gemini.google.com/?hl=en-PH&utm_campaign=gemini_students_landing_page&icid=gemini_students_landing_page&utm_source=gemini&utm_medium=web&_gl=1*183gkke*_gcl_au*NTYwMjc0OTY2LjE3ODI0MzAwMTc.*_ga*MTQ1MjIzMDYyMy4xNzgyNDMwMDE3*_ga_WC57KJ50ZZ*czE3ODI0MzAwMTYkbzEkZzAkdDE3ODI0MzAwMTYkajYwJGwwJGgw",
+          "visits": 1
+        },
+        {
+          "url": "https://gemini.google.com/usage?hl=en-PH&utm_campaign=gemini_students_landing_page&icid=gemini_students_landing_page&utm_source=gemini&utm_medium=web&_gl=1*183gkke*_gcl_au*NTYwMjc0OTY2LjE3ODI0MzAwMTc.*_ga*MTQ1MjIzMDYyMy4xNzgyNDMwMDE3*_ga_WC57KJ50ZZ*czE3ODI0MzAwMTYkbzEkZzAkdDE3ODI0MzAwMTYkajYwJGwwJGgw",
+          "visits": 1
+        }
+      ]
+    },
+    "youtube": {
+      "url": "https://music.youtube.com",
+      "host": "music.youtube.com",
+      "aliases": [],
+      "source": "history",
+      "visits": 251,
+      "top_urls": [
+        {
+          "url": "https://music.youtube.com/",
+          "visits": 59
+        },
+        {
+          "url": "https://music.youtube.com/watch?v=MHCsrKA9gh8",
+          "visits": 6
+        },
+        {
+          "url": "https://music.youtube.com/watch?v=JwAjANmjajc&list=RDAMVMJwAjANmjajc",
+          "visits": 5
+        },
+        {
+          "url": "https://music.youtube.com/watch?v=Q7XCPxZ6zqg&list=RDAMVMQ7XCPxZ6zqg",
+          "visits": 5
+        },
+        {
+          "url": "https://music.youtube.com/watch?v=j_MlBCb9-m8&list=RDAMVMj_MlBCb9-m8",
+          "visits": 5
+        }
+      ]
+    },
+    "chatgpt": {
+      "url": "https://chatgpt.com",
+      "host": "chatgpt.com",
+      "aliases": [],
+      "source": "history",
+      "visits": 144,
+      "top_urls": [
+        {
+          "url": "https://chatgpt.com/",
+          "visits": 67
+        },
+        {
+          "url": "https://chatgpt.com/#pricing",
+          "visits": 4
+        },
+        {
+          "url": "https://chatgpt.com/c/6a3d26c6-f9cc-83ec-9024-884b677c50f1",
+          "visits": 4
+        },
+        {
+          "url": "https://chatgpt.com/c/6a35276b-3f68-83ec-bdf2-0bca4b8e44a6",
+          "visits": 2
+        },
+        {
+          "url": "https://chatgpt.com/c/6a368bcb-c248-83ec-9e15-d1d2303c0578",
+          "visits": 2
+        }
+      ]
+    },
+    "github": {
+      "url": "https://github.com",
+      "host": "github.com",
+      "aliases": [],
+      "source": "history",
+      "visits": 93,
+      "top_urls": [
+        {
+          "url": "https://github.com/samakatuwid00?tab=repositories",
+          "visits": 18
+        },
+        {
+          "url": "https://github.com/samakatuwid00",
+          "visits": 12
+        },
+        {
+          "url": "https://github.com/samakatuwid00/my-app",
+          "visits": 12
+        },
+        {
+          "url": "https://github.com/samakatuwid00/eurasian",
+          "visits": 4
+        },
+        {
+          "url": "https://github.com/samakatuwid00/leave_card_project",
+          "visits": 3
+        }
+      ]
+    },
+    "grok": {
+      "url": "https://grok.com",
+      "host": "grok.com",
+      "aliases": [],
+      "source": "history",
+      "visits": 91,
+      "top_urls": [
+        {
+          "url": "https://grok.com/",
+          "visits": 13
+        },
+        {
+          "url": "https://grok.com/c/73454b0f-385b-4e99-921b-9fe288a1151b?rid=b1f5a31c-8efe-4aa2-818b-b9716eb19a0f",
+          "visits": 5
+        },
+        {
+          "url": "https://grok.com/c/7ce6e281-1de8-4487-9fe2-a11425bd706b?rid=ebb1bd8c-457f-4b30-90f1-d246e1e3509a",
+          "visits": 5
+        },
+        {
+          "url": "https://grok.com/c/7ce6e281-1de8-4487-9fe2-a11425bd706b?rid=60819daa-a80f-4c21-8340-6f67c9ab6eac",
+          "visits": 5
+        },
+        {
+          "url": "https://grok.com/c/7ce6e281-1de8-4487-9fe2-a11425bd706b",
+          "visits": 4
+        }
+      ]
+    },
+    "filemanager": {
+      "url": "https://filemanager.ai",
+      "host": "filemanager.ai",
+      "aliases": [],
+      "source": "history",
+      "visits": 90,
+      "top_urls": [
+        {
+          "url": "https://filemanager.ai/new3/index.php?home=%2Fhtdocs",
+          "visits": 21
+        },
+        {
+          "url": "https://filemanager.ai/new3/index.php",
+          "visits": 19
+        },
+        {
+          "url": "https://filemanager.ai/new3/index.php?home=%2Feurasian.free.nf%2Fhtdocs",
+          "visits": 7
+        },
+        {
+          "url": "https://filemanager.ai/new3/index.php?home=%2Feurasian.free.nf",
+          "visits": 6
+        },
+        {
+          "url": "https://filemanager.ai/new3/index.php?home=%2Fhtdocs%2Fconfig",
+          "visits": 5
+        }
+      ]
+    },
+    "z": {
+      "url": "https://chat.z.ai",
+      "host": "chat.z.ai",
+      "aliases": [],
+      "source": "history",
+      "visits": 75,
+      "top_urls": [
+        {
+          "url": "https://chat.z.ai/",
+          "visits": 49
+        },
+        {
+          "url": "https://chat.z.ai/c/9131d67e-1fe4-45bc-b43a-9b6dd40559f4",
+          "visits": 3
+        },
+        {
+          "url": "https://chat.z.ai/c/dd3ec90a-3fea-4007-8545-cac2c0ae36db",
+          "visits": 3
+        },
+        {
+          "url": "https://chat.z.ai/c/9dd2a373-4075-4265-849a-012971f4b2d9",
+          "visits": 2
+        },
+        {
+          "url": "https://chat.z.ai/auth",
+          "visits": 1
+        }
+      ]
+    },
+    "infinityfree": {
+      "url": "https://dash.infinityfree.com",
+      "host": "dash.infinityfree.com",
+      "aliases": [],
+      "source": "history",
+      "visits": 58,
+      "top_urls": [
+        {
+          "url": "https://dash.infinityfree.com/accounts/if0_42266675",
+          "visits": 15
+        },
+        {
+          "url": "https://dash.infinityfree.com/accounts/if0_42266675/domains/eurasian.freehosting.dev",
+          "visits": 15
+        },
+        {
+          "url": "https://dash.infinityfree.com/accounts/if0_42266675/filemanager?path=htdocs",
+          "visits": 5
+        },
+        {
+          "url": "https://dash.infinityfree.com/accounts/if0_42266675/domains/eurasian.free.nf",
+          "visits": 4
+        },
+        {
+          "url": "https://dash.infinityfree.com/accounts/if0_42266675/site-builders",
+          "visits": 3
+        }
+      ]
+    },
+    "deepseek": {
+      "url": "https://chat.deepseek.com",
+      "host": "chat.deepseek.com",
+      "aliases": [],
+      "source": "history",
+      "visits": 56,
+      "top_urls": [
+        {
+          "url": "https://chat.deepseek.com/",
+          "visits": 28
+        },
+        {
+          "url": "https://chat.deepseek.com/a/chat/s/473b5dcc-e835-4b35-a04b-8a891998cd10",
+          "visits": 5
+        },
+        {
+          "url": "https://chat.deepseek.com/sign_in",
+          "visits": 3
+        },
+        {
+          "url": "https://chat.deepseek.com/a/chat/s/bea767cf-463c-4ba7-9a6f-c816a53df1c3",
+          "visits": 2
+        },
+        {
+          "url": "https://chat.deepseek.com/a/chat/s/0a72ae8f-4878-4792-b021-68f4b319a153",
+          "visits": 2
+        }
+      ]
+    },
+    "backiee": {
+      "url": "https://backiee.com",
+      "host": "backiee.com",
+      "aliases": [],
+      "source": "history",
+      "visits": 48,
+      "top_urls": [
+        {
+          "url": "https://backiee.com/",
+          "visits": 3
+        },
+        {
+          "url": "https://backiee.com/#google_vignette",
+          "visits": 2
+        },
+        {
+          "url": "https://backiee.com/popular-wallpapers",
+          "visits": 2
+        },
+        {
+          "url": "https://backiee.com/popular-wallpapers/weekly?page=10",
+          "visits": 2
+        },
+        {
+          "url": "https://backiee.com/search/black+cars",
+          "visits": 2
+        }
+      ]
+    },
+    "claude": {
+      "url": "https://claude.ai",
+      "host": "claude.ai",
+      "aliases": [],
+      "source": "history",
+      "visits": 41,
+      "top_urls": [
+        {
+          "url": "https://claude.ai/new",
+          "visits": 12
+        },
+        {
+          "url": "https://claude.ai/login/app-google-auth?open_in_browser=1",
+          "visits": 9
+        },
+        {
+          "url": "https://claude.ai/login/popup-google-auth",
+          "visits": 6
+        },
+        {
+          "url": "https://claude.ai/login?from=logout",
+          "visits": 2
+        },
+        {
+          "url": "https://claude.ai/logout",
+          "visits": 1
+        }
+      ]
+    },
+    "vercel": {
+      "url": "https://vercel.com",
+      "host": "vercel.com",
+      "aliases": [],
+      "source": "history",
+      "visits": 39,
+      "top_urls": [
+        {
+          "url": "https://vercel.com/",
+          "visits": 5
+        },
+        {
+          "url": "https://vercel.com/samakatuwid00s-projects",
+          "visits": 4
+        },
+        {
+          "url": "https://vercel.com/samakatuwid00s-projects/my-app/C4qMH23xBe8TyvUQ3dGvmN2krbqW",
+          "visits": 3
+        },
+        {
+          "url": "https://vercel.com/samakatuwid00s-projects/irms",
+          "visits": 3
+        },
+        {
+          "url": "https://vercel.com/new?teamSlug=samakatuwid00s-projects",
+          "visits": 2
+        }
+      ]
+    },
+    "figma": {
+      "url": "https://www.figma.com",
+      "host": "www.figma.com",
+      "aliases": [],
+      "source": "history",
+      "visits": 34,
+      "top_urls": [
+        {
+          "url": "https://www.figma.com/community/search?query=hotel&resource_type=files&editor_type=all&price=all&sort_by=relevancy&creators=all",
+          "visits": 2
+        },
+        {
+          "url": "https://www.figma.com/community/file/1137515761666273869/hotel-booking-website-ui",
+          "visits": 2
+        },
+        {
+          "url": "https://www.figma.com/community/file/1137515761666273869",
+          "visits": 2
+        },
+        {
+          "url": "https://www.figma.com/proto/nzRUoFhkGgBMyOjzLszkW8/Hotel-booking-website-UI-Community?node-id=2-107&t=9Vsx7OUqOZxtGZKA-0&scaling=min-zoom&content-scaling=fixed&page-id=0%3A1&fuid=1198251940900621145",
+          "visits": 2
+        },
+        {
+          "url": "https://www.figma.com/community?utm_source=chatgpt.com",
+          "visits": 1
+        }
+      ]
+    },
+    "glowupui": {
+      "url": "https://glowupui.io",
+      "host": "glowupui.io",
+      "aliases": [],
+      "source": "history",
+      "visits": 33,
+      "top_urls": [
+        {
+          "url": "https://glowupui.io/templates",
+          "visits": 15
+        },
+        {
+          "url": "https://glowupui.io/templates/clean-hero-landing-page-submit",
+          "visits": 4
+        },
+        {
+          "url": "https://glowupui.io/templates/mugshot-ai-brutalist-hero-section-with-file-uploader-polaroid-visual",
+          "visits": 3
+        },
+        {
+          "url": "https://glowupui.io/templates/animated-dark-chat-box",
+          "visits": 3
+        },
+        {
+          "url": "https://glowupui.io/templates/split-hero-with-leaderboard",
+          "visits": 3
+        }
+      ]
+    },
+    "paypal": {
+      "url": "https://www.paypal.com",
+      "host": "www.paypal.com",
+      "aliases": [],
+      "source": "history",
+      "visits": 32,
+      "top_urls": [
+        {
+          "url": "https://www.paypal.com/myaccount/summary",
+          "visits": 5
+        },
+        {
+          "url": "https://www.paypal.com/signin?ctxId=progonbd-pul-b0fbb69c-80df-43ce-a20f-10c0cda1bd52",
+          "visits": 3
+        },
+        {
+          "url": "https://www.paypal.com/restore/dashboard?source=web_ca",
+          "visits": 3
+        },
+        {
+          "url": "https://www.paypal.com/ph/welcome/signup",
+          "visits": 2
+        },
+        {
+          "url": "https://www.paypal.com/myaccount/transfer/?from=Header",
+          "visits": 2
+        }
+      ]
+    },
+    "bing": {
+      "url": "https://www.bing.com",
+      "host": "www.bing.com",
+      "aliases": [],
+      "source": "history",
+      "visits": 21,
+      "top_urls": [
+        {
+          "url": "https://www.bing.com/?form=SPHPRE1&bbtnserp=1&bbtnfrm=WSBEDG",
+          "visits": 4
+        },
+        {
+          "url": "https://www.bing.com/search?q=google+chrome&filters=ufn%3a%22Google+Chrome%22+sid%3a%2279e515f6-5b00-082e-776b-8a6b6112fe92%22&asbe=EP&form=WSBEDG&qs=MB&cvid=1aa7e90af9ac4200b5e06ba2d49e59d3&pq=goog&cc=PH&setlang=en-US&nclid=364DCD414555DCD9088196AD0849421C&ts=1781693471420&PC=WSBQUF",
+          "visits": 3
+        },
+        {
+          "url": "https://www.bing.com/search?q=visual+studio&filters=ufn%3a%22Visual+Studio%22+sid%3a%22752323e2-57bd-15b1-a603-3b8667360a80%22&asbe=EP&form=WSBEDG&qs=MB&cvid=9b21b3e769944dd7a3c0e305beda410d&pq=visual&cc=PH&setlang=en-US&nclid=1E1CD62D826A436A0FD9203595D20F2D&ts=1787125242310&PC=WSBQUF",
+          "visits": 3
+        },
+        {
+          "url": "https://www.bing.com/search?q=obis&form=WSBEDG&qs=EP&cvid=fceb5e1f79c0470f8250210bc61c7327&pq=obis&cc=PH&setlang=en-US&nclid=364DCD414555DCD9088196AD0849421C&ts=1784961375085&PC=WSBQUF",
+          "visits": 2
+        },
+        {
+          "url": "https://www.bing.com/search?q=obdi&form=WSBEDG&qs=SW&cvid=09e3c92d2e3749698c9e86a35bd9aced&pq=obdi&cc=PH&setlang=en-US&nclid=364DCD414555DCD9088196AD0849421C&ts=1785997911034&PC=WSBQUF",
+          "visits": 2
+        }
+      ]
+    },
+    "irimsv-library": {
+      "url": "https://irimsv-library.net",
+      "host": "irimsv-library.net",
+      "aliases": [],
+      "source": "history",
+      "visits": 19,
+      "top_urls": [
+        {
+          "url": "http://irimsv-library.net/irimsv-lms",
+          "visits": 16
+        },
+        {
+          "url": "http://irimsv-library.net/",
+          "visits": 3
+        }
+      ]
+    },
+    "opencode": {
+      "url": "https://opencode.ai",
+      "host": "opencode.ai",
+      "aliases": [],
+      "source": "history",
+      "visits": 19,
+      "top_urls": [
+        {
+          "url": "https://opencode.ai/go",
+          "visits": 6
+        },
+        {
+          "url": "https://opencode.ai/",
+          "visits": 3
+        },
+        {
+          "url": "https://opencode.ai/workspace/wrk_01KW1H9C0CS229Q6Y7PX067FFN",
+          "visits": 3
+        },
+        {
+          "url": "https://opencode.ai/zen",
+          "visits": 2
+        },
+        {
+          "url": "https://opencode.ai/download",
+          "visits": 2
+        }
+      ]
+    },
+    "nullschool": {
+      "url": "https://earth.nullschool.net",
+      "host": "earth.nullschool.net",
+      "aliases": [],
+      "source": "history",
+      "visits": 19,
+      "top_urls": [
+        {
+          "url": "https://earth.nullschool.net/",
+          "visits": 1
+        },
+        {
+          "url": "https://earth.nullschool.net/#2026/08/15/2100Z/wind/surface/level/orthographic=-236.30,12.33,1611",
+          "visits": 1
+        },
+        {
+          "url": "https://earth.nullschool.net/#2026/08/17/2100Z/wind/surface/level/orthographic=-236.30,12.33,1611",
+          "visits": 1
+        },
+        {
+          "url": "https://earth.nullschool.net/#current/wind/surface/level/orthographic=-240.00,0.00,571",
+          "visits": 1
+        },
+        {
+          "url": "https://earth.nullschool.net/#2026/08/15/0500Z/wind/surface/level/orthographic=-236.30,12.33,1611",
+          "visits": 1
+        }
+      ]
+    },
+    "runwayml": {
+      "url": "https://app.runwayml.com",
+      "host": "app.runwayml.com",
+      "aliases": [],
+      "source": "history",
+      "visits": 18,
+      "top_urls": [
+        {
+          "url": "https://app.runwayml.com/video-tools/teams/mrniko0719/ai-tools/generate?utm_source=chatgpt.com&_gl=1*ph9q8i*_gcl_au*MTYzMTI0OTQxNy4xNzgxOTM1MTkz*_ga*NDIyODUzNzE0LjE3ODE5MzUxOTQ.*_ga_CPKYPL7M14*czE3ODE5MzUxOTQkbzEkZzAkdDE3ODE5MzUxOTQkajYwJGwwJGgw&mode=tools&tool=video",
+          "visits": 3
+        },
+        {
+          "url": "https://app.runwayml.com/video-tools/teams/mrniko0719/ai-tools/generate?mode=tools&tool=video&sessionId=a806c101-e22a-436e-af2b-04235b3ce9b2",
+          "visits": 3
+        },
+        {
+          "url": "https://app.runwayml.com/video-tools/teams/guest/ai-tools/generate?utm_source=chatgpt.com&_gl=1*ph9q8i*_gcl_au*MTYzMTI0OTQxNy4xNzgxOTM1MTkz*_ga*NDIyODUzNzE0LjE3ODE5MzUxOTQ.*_ga_CPKYPL7M14*czE3ODE5MzUxOTQkbzEkZzAkdDE3ODE5MzUxOTQkajYwJGwwJGgw&mode=tools&tool=video",
+          "visits": 2
+        },
+        {
+          "url": "https://app.runwayml.com/?utm_source=chatgpt.com&_gl=1*ph9q8i*_gcl_au*MTYzMTI0OTQxNy4xNzgxOTM1MTkz*_ga*NDIyODUzNzE0LjE3ODE5MzUxOTQ.*_ga_CPKYPL7M14*czE3ODE5MzUxOTQkbzEkZzAkdDE3ODE5MzUxOTQkajYwJGwwJGgw",
+          "visits": 1
+        },
+        {
+          "url": "https://app.runwayml.com/home?utm_source=chatgpt.com&_gl=1*ph9q8i*_gcl_au*MTYzMTI0OTQxNy4xNzgxOTM1MTkz*_ga*NDIyODUzNzE0LjE3ODE5MzUxOTQ.*_ga_CPKYPL7M14*czE3ODE5MzUxOTQkbzEkZzAkdDE3ODE5MzUxOTQkajYwJGwwJGgw",
+          "visits": 1
+        }
+      ]
+    },
+    "eduleave": {
+      "url": "https://eduleave.com",
+      "host": "eduleave.com",
+      "aliases": [],
+      "source": "history",
+      "visits": 18,
+      "top_urls": [
+        {
+          "url": "https://eduleave.com/welcome",
+          "visits": 6
+        },
+        {
+          "url": "https://eduleave.com/register",
+          "visits": 4
+        },
+        {
+          "url": "https://eduleave.com/login",
+          "visits": 4
+        },
+        {
+          "url": "https://eduleave.com/admin/dashboard",
+          "visits": 2
+        },
+        {
+          "url": "https://eduleave.com/admin/teacher_leave_cards",
+          "visits": 1
+        }
+      ]
+    },
+    "cursor": {
+      "url": "https://cursor.com",
+      "host": "cursor.com",
+      "aliases": [],
+      "source": "history",
+      "visits": 16,
+      "top_urls": [
+        {
+          "url": "https://cursor.com/",
+          "visits": 4
+        },
+        {
+          "url": "https://cursor.com/loginDeepControl?challenge=qAugMEY-hbKIzuhR4tgq90l2ZNLjwRTgicl8NirPjvk&uuid=fbcdae01-d198-4113-a120-b81e19ee354d&mode=login&supportsSelectedTeamLogin=true&surface=glass",
+          "visits": 3
+        },
+        {
+          "url": "https://cursor.com/loginDeepControl?challenge=vob3IIptxzhFqib__8Vxnp7fkPhY5WXiGPsl3e1lfNw&uuid=69bccfc8-4006-49f0-9b96-015a190ef63f&mode=login&supportsSelectedTeamLogin=true&surface=glass",
+          "visits": 3
+        },
+        {
+          "url": "https://cursor.com/agents",
+          "visits": 2
+        },
+        {
+          "url": "https://cursor.com/loginDeepPage",
+          "visits": 1
+        }
+      ]
+    },
+    "mobbin": {
+      "url": "https://mobbin.com",
+      "host": "mobbin.com",
+      "aliases": [],
+      "source": "history",
+      "visits": 16,
+      "top_urls": [
+        {
+          "url": "https://mobbin.com/discover/apps/ios/latest",
+          "visits": 4
+        },
+        {
+          "url": "https://mobbin.com/search/apps/web?content_type=screens&q=hotel",
+          "visits": 3
+        },
+        {
+          "url": "https://mobbin.com/search/apps/web?content_type=flows&q=hotel",
+          "visits": 3
+        },
+        {
+          "url": "https://mobbin.com/?utm_source=chatgpt.com",
+          "visits": 1
+        },
+        {
+          "url": "https://mobbin.com/signup",
+          "visits": 1
+        }
+      ]
+    },
+    "4kwallpapers": {
+      "url": "https://4kwallpapers.com",
+      "host": "4kwallpapers.com",
+      "aliases": [],
+      "source": "history",
+      "visits": 11,
+      "top_urls": [
+        {
+          "url": "https://4kwallpapers.com/?page=3",
+          "visits": 3
+        },
+        {
+          "url": "https://4kwallpapers.com/cars/brabus-bodo-dark-26537.html",
+          "visits": 3
+        },
+        {
+          "url": "https://4kwallpapers.com/",
+          "visits": 1
+        },
+        {
+          "url": "https://4kwallpapers.com/#google_vignette",
+          "visits": 1
+        },
+        {
+          "url": "https://4kwallpapers.com/?page=2",
+          "visits": 1
+        }
+      ]
+    },
+    "com": {
+      "url": "https://accounts.google.com.ph",
+      "host": "accounts.google.com.ph",
+      "aliases": [],
+      "source": "history",
+      "visits": 10,
+      "top_urls": [
+        {
+          "url": "https://accounts.google.com.ph/accounts/SetSID",
+          "visits": 3
+        },
+        {
+          "url": "https://accounts.google.com.ph/accounts/SetSID?ssdc=1&sidt=ALWU2cvUE5uT%2Brf208jnP1loPdRn1P5bmW3iunLj5EEuvYVPC0f8WbrAIRTTscPqHnHBVGKjS4W/hAXLvasBbydcssX3GHuEwFTcEZORRnyFUcHOxWRoSNPL0hvXVMRxERk2TiXInOv2uT7IC3nNcOsUCdWjs4A71HCa9ne2mRXZRPpnl0jmM52oOFLd8K7se6HCBBBI/sSRgY2G5oNIvbaEw73lRxYum8OfbJWYjXb9ePU1l5QFuJvXWuWY41kmhK2mztkHXRc7X4oVeqAu8ab31bi1DYI5qWMpyCipSlOrhPHTnDfoLgKtYgaceMV1KMe2Vw5KNd2jkAu9PIjfstOq1QJXbqv28N3IYYv89O0bQ72ucr4TJs7Qj5VWB%2BokfjooXsRXcRPnX/qrfkuLN8%2BuscJlY13wMYkClPBdMKRdA3Y4ixp0YuiCifqg0SaSqch%2BGHesyERv7R0TVoZqWu0KKXLR0gBDT7cTeULBrMwJeo7s2x/Wm9g9loAvsuJrjb5CJL/NL0tCuHy%2BSlLqBzd5VEBq41f0MgVXF6fvy/cmjBhc/XeASGZiIzerKtiyGyQTn46KYeGxCiNH7yCrQAk1cCNwvZMfr%2BDx5dvWNpchQFDETHOI7DEAOqmy3zGITgMfPaI62upk3I2F%2BWx9wAEjgtduAb6eNnMyErxF%2Bqe4vKuSdSFMAb3rc2GJzypfmDahe1jMd9ujvKQ0uj%2Bznek9ZxYobdktQjozPFDf9qHz45hnqRyex4RPEkJPUBTlsyJ8dkUJrYfG&continue=https://accounts.google.com/signin/oauth/consent?authuser%3D1%26part%3DAJi8hAMYzktpiF9kNjDi1t5an5W1-Cweaert-UxgmaDThPbNYp1mMhieHecHqzgqh_XD6A5_O1va7qKew8AKjRvrTRQxys1yXKjJMvdaV3oy0zX6VpMM2nlns8Hy1CwUXPuibQYikP46Z1kA0l-vSzfOLnFFZzTBqM2LHlOdFVWEM8DcxL4jMby9TL7oh77oHeSHKIgC_RhT4orPDCc6kr4LQFbi3Qq8gX5yyzg0qhK5sqEjfG-cenuMlCEF0rfvbJGs64x_abjTxdX386ihawqbOI5dGTt9lIXCDsT2G2sVJRqt5uriQ6P_68s3eMWknXnCIaWfVATb1FyWjIUABbByq1HGbeQtFNwaaJo7TRoD-mFF68yarjeF0QDqofwKillFJ_al-k3ZAvs9gdGkY9mMZ8Cfzioipwz3eGmepoEAWTxRw7mvhWv_SiseuLGgXLPTEtaaEq7qaAcYCRIdygjbXtAFD86q_g%26flowName%3DGeneralOAuthFlow%26as%3DS605896884:1781697186183228%26client_id%3D1078992815106-brpsupgvhheqg35tupphbh0qk9c32nq8.apps.googleusercontent.com%26requestPath%3D/signin/oauth/consent%23",
+          "visits": 1
+        },
+        {
+          "url": "https://accounts.google.com.ph/accounts/SetSID?ssdc=1&sidt=ALWU2cv6ZEMjIAnvGpyEkSSTuduqVj%2BY519wD0yED1AktXulEASsJn36ufghYsDIrjQBT5TyWjkHbTp1PGqsF80%2Bcx83hsWXFd5AwTvGPg7YQk3Nzm0PRP5ZOX5X839xluCX0E1jTj3n2YylSOOsSSFMkU6cCCW87iA5CQt2kDsSh8hn43cCGugr8whsuf2zs%2BguVFZfbJAWTF2R1n9wNHLTrvzEmUWzxdT%2BJ66RtO1f15moV3Iv8Il0kErEJsNUegtxuJJQsCqji3PLcQliRQNDc8Mb3nS6ADloDyBQb2EbZzUGIXRo%2BVwp432xOS3wI9/TiGPmPjM9kfGVz6eYhbli3bedd9sMmd3XRj5ho5qdNAES/uQXM8/obtbU90GiVY9AGmiHYhlYNUg3ue%2BPAv1WLhkUpm82ruKqWsgDpW0/50BvWc5WVLP9XcUUBrw45rLfT58rDTbUhmm%2BSPccyA75xFUrJBf7Rn/AWzj%2BqQ10%2B5869zGAcXfpNacZ2BWqZ%2BGA8RJJxPMs1sxfMf4PijB6y5Kto7wgW%2BSl9gipWoEixcficET/cWim3nSjtlhc3WwbBG5hjDZbE/l/LS9fgxBBUCSgugdVDxbxOgswOpr%2BmGUdltR5Y85ykMU2rXL/oieaYWv1jtIcILfqqaljnLmTL%2B7uh6hkJJvD8VXNR5Kx4M4m4TItX5R8/qGxSuQSL2t0WPebkXqw7MxOGQwwADJ/WpfdI4nMOp9cl2vWZEN4fknLEGEq4OHHn%2BCGXT8YKP30c3z6819G&continue=https://accounts.google.com/signin/oauth/consent?authuser%3D1%26part%3DAJi8hAMd2Yi4nvNYFbxaW2OIehubMM5HVl8AltunE--WuzDDiTiaSkGN_mXcgaugkcGY_2TR8dZS-RgI834RtbMfjp1P2Jw8TeFWTkysJXz8p_dsSiNGVcxIareh1ieys5tNW9tbDANg9tY27RN-D3ogMIkZEWAS-GL94Emg8FjNoLF65FAFD_8ySIglEw2FnK7X93mxvNMz6AenN8xl7LsTTO0_0Hm60DqE7xt9jKjG5L2fhyARPF3f5Lh14T8ClRGDAq4dRVyNnQz1OI2SHuDYpQf6c65BxFaL04_vPTnIrnf0aMeruyn0d6P19eUYxXyx_-VX5gZNWgrEMBDicCdYVxuOXPXzXZZGdBa7voOPGqDG7HVwWYWZ-6q9Jcu1_JLc29wC6bl0ncHr0QeiXg6t37sqF-qgogqnrvL7yZ9K25rwa6MMdokQBkYCv8-te_O4yHqdgre4HWyexGzGlcXRexPmfXczsL8ejmtiq__VGGXaxzIdJVw%26flowName%3DGeneralOAuthFlow%26as%3DS906039454:1781700246296679%26client_id%3D808146626909-aaokorph2nd0ul0g1l957p7dh3s2535n.apps.googleusercontent.com%26requestPath%3D/signin/oauth/consent%23",
+          "visits": 1
+        },
+        {
+          "url": "https://accounts.google.com.ph/accounts/SetSID?ssdc=1&sidt=ALWU2cvYhB6aH%2B%2B5/Os6W/lyybZecfUWsEOb/XQpI/62/DLW2OxVZdeD%2B2oGgIsD3C3M%2Bo28GLKcHiGW9OJIPC8hZBRA%2BZxCwTGNcO9SiOlaWqLRArUP5yY2PGei6TDuyQ40zvxJuoGCBC%2Bc9NaqCYGf4xQmcx%2BjFhzro%2B2MR0mlsXrhq%2BTtaCIY08dOJSCmqigS6ZwvfX1wRAFbWlCWQhhPrxAtqIl/qotb6RMXd4AF4w7Xa2Hr/zNAwCjcuo/XmpjJTCXG6ZWIwWbnQMjRO8WqDKt3aIdoLLwxUttx2NImBrPGZF3GkIDld3QpcKN3yH7jQCybC3Ti4X%2BE/%2BDWKaQ9q1DKJLPe3LjYh6YcSGAmDZwzg8NRXG3hWovdQ%2Bx2eUUP6Wx/9Ts5BysF0q13ribOnEhixIyGTg457LkQN4R%2BqZqfnPUYzZubO63I8Yqcts0GAwKu0%2BTRH/ovTEle/0QDjdgoyRDeBq6TpypGFfLAN8IvQDH7uzLIEpPSk7qF2YwpOMN%2BnCYdPQ5z5WPtBuD6E58PcjP07U6oVaHpaFPmcgVvMRx1zhP8uLZ9nu1YnKpoYqTofga%2B73pOR5VZZM%2BizHOG6I/yjXNtXWVljjKLbI2ZIJiCDPuTtHy9lx1K3NgxAh7f47GpFAcqBHoMnMX/Mx6dtP7EKb7UbTlkfQjHdAZyB14dEIrpMnqHF/92qnwnybaX8mMrKhzgQzmBD%2BXHNXpkWTQXoiZrEVEEl4i%2BEPMEm6asQIziCgilvgrYNcWO1%2BpArIrs&continue=https://accounts.google.com/signin/oauth/consent?authuser%3D1%26part%3DAJi8hAOhfxBeJCyi1eES4i1w2-syMjHJGUdPziqPzaQLAkbdOfD-tRLPxb4Ou7It6jd2mbFjpRMA6_nrhvhR4Jsp466zdYko60bb4q_w8kBTwI1yEm1w8W0UkTA01mHb0JIGmxyWez2k2iZFHGFXCFXEkjaP_t1fHcBuzxLYe-Alb2ngXwYJ25vkiIGSYthn-76rKPJ4KfUlHODlD4t7ZBMIKVQkDYtKKtTGXetizsBa9tPUkXI5X-QRoD6FSolxdCrrkXKVySbIUETL-qTntq3pX7jicXphKAa5zs7v6gjqRul2cHfEFx7dGtKK1VEAmR25IWmR9NwU95Rq-dbk5FQph78QE4gtIDCm5UdAtTrlsN7SjjBVmGRf7a_F54IKk9JErPr8VspxGz9qFw-EmYBF0hIX__L_zV-QcX44b25UnbxjwlN0rUSdgowKwWh8RZ_4AO_KNWxulifbtjvXopv-fqGLw3bDbQ%26flowName%3DGeneralOAuthFlow%26as%3DS1109746241:1781847647084285%26client_id%3D205977709770-3d0am349pfuhpv45soo1qt5o6h7cbofk.apps.googleusercontent.com%26requestPath%3D/signin/oauth/consent%23",
+          "visits": 1
+        },
+        {
+          "url": "https://accounts.google.com.ph/accounts/SetSID?ssdc=1&sidt=ALWU2ctbzoeyUSuJPV7/XBc%2BZthOHAYFBxfaoJyBOB8quHfW6iI8DJgHanDGHNZf%2BAkgJg%2BtvqZot/uc/avtui0ih7PyqVK1TNsk/UFb3RgGytBKGYEXlZPL6vAgrQySXNK39FnDwzVSt7E8OD2KH8JhteGxnBzjiuiXKSEzECxmWgqhAPlWxN2fekQPH0J83n7Gb0r%2BI1qO2f03wThO8shZgtrngn5xQmXt4I4H20rj6t34T1Lz/r6cMvijIs1uo0UU8qsG12FANczFpCOTKEsKjsWFYEWqaUikrPDV3o4AOovwl5zQ0WnaFNJOd2jfalT0XLOv8x2fz6FaSL8ihdNR6I7/KNFZLXe0SklHkgjJGBa%2Bx7xrIJK7esGTjSmECsdO59iHJawJs8Rv1rAJHDaMnk57RtPkCnUAzAlOBd6Daia8Up4mIClxzjiRhzNjsXDFU8sEGNW4na6%2Bm/2QyS6RK7L3zVOAEtUvIqrbBEtEHqRIkbkvFyXzIq2qreaDcYgsm%2BIuA66oDcA9FG5wg%2Biw42XTJoc%2BtWcefcAbucT2KUwr8jgGp7ZMpvh%2BVO53rdMkdvb1vDJ3pznIDYHrEv%2BteTaMhbpqOgV92mmNbHUt5Lz1qu7716DVVW1BF0TQXKU2XwYVSV%2BZBRBh2B9SGnVd4OaPASwtTDr4kFSzxqVgjsiFYqFezuwrZr5CUZ7g0vZKPv8W3K/Kd0y5WNwJmc95F0jyL044EmpGvFpiofp0zUAvDOPSd7s2CwQ7DZ3Pq9Gif/G4bxUI&continue=https://accounts.google.com/signin/oauth/consent?authuser%3D1%26part%3DAJi8hAOd0vyN-yty2gIbzOxB6Z3nF-W5MroNzOEfY3mQBpGLU3ASXz8PIMIvaM6rYlkuJG7ldqf34eQ6iriXdffgeEKe0dzsPB3bMBAe8sgP0XkKNTivAV5RS84oCb2GeOHa8j6rpvCkcgZWzTUl-uSXYQPnEbLYHDaRyZUGfmKqhm-sdzeqj5Cl5VeQL_sSuhF42KlyEvOerE2QWYMdgmpI5HtBZ1VUQAxVUYquLkHZpmk9PxH9zAhmXcnByLHWHQ_b5kWZPxOXhNqixNgMiIG5OEKDT6xk_b3R6khTi_0hwX07Js-LvBcDyFdioyQLkJTlphpk35ANXVKw7dMASKfIcVwK5Ocr6MmOXvlYGjw70AAL8uML0-PIXNStwkay1byrX4BUUYyR8KsawOdblD67Wfk44RZmfrz0f0JOJWlnDFB6CvcOx5faCqX_FeCKjCP42Omj7v3Sw32rCQm9MPwhoQV06dwyxQ%26flowName%3DGeneralOAuthFlow%26as%3DS-1774874216:1782044178140525%26client_id%3D1062961139910-l2m55cb9h51u5cuc9c56eb3fevouidh9.apps.googleusercontent.com%26requestPath%3D/signin/oauth/consent%23",
+          "visits": 1
+        }
+      ]
+    },
+    "microsoft": {
+      "url": "https://copilot.microsoft.com",
+      "host": "copilot.microsoft.com",
+      "aliases": [],
+      "source": "history",
+      "visits": 10,
+      "top_urls": [
+        {
+          "url": "https://copilot.microsoft.com/",
+          "visits": 4
+        },
+        {
+          "url": "https://copilot.microsoft.com/chats/iXdNduzFsv58qvwyKAFDP",
+          "visits": 4
+        },
+        {
+          "url": "https://copilot.microsoft.com/chats/G9cXN9HRcmfnmJDyFC6nm",
+          "visits": 2
+        }
+      ]
+    },
+    "live": {
+      "url": "https://login.live.com",
+      "host": "login.live.com",
+      "aliases": [],
+      "source": "history",
+      "visits": 10,
+      "top_urls": [
+        {
+          "url": "https://login.live.com/oauth20_authorize.srf?client_id=14638111-3389-403d-b206-a6a71d9f8f16&scope=140e65af-45d1-4427-bf08-3e7295db6836%2fChatAI.ReadWrite+openid+profile+offline_access&redirect_uri=https%3a%2f%2fcopilot.microsoft.com&response_type=code&state=eyJpZCI6IjAxOWVlY2Y5LTQ4ZTAtNzI0NC04ODlmLWI5ZTFlZGE4MDEyYyIsIm1ldGEiOnsiaW50ZXJhY3Rpb25UeXBlIjoicmVkaXJlY3QifX0%3d&response_mode=fragment&nonce=019eecf9-48e0-7944-8f32-b503f9046793&code_challenge=tGoBSZw7g04bUliFSAjt949p1Vkuqhiv0OzmcQCc7JQ&code_challenge_method=S256&x-client-SKU=msal.js.browser&x-client-Ver=4.30.0&uaid=1b47287101c74fef8c8fa78198d5a826&msproxy=1&issuer=mso&tenant=common&ui_locales=en-GB&client_info=1&epctrc=mt%2fKmAQ7r50FZy%2bPJibm0diXuPRYomgb2gIBVBR3dfE%3d6%3a1%3aCANARY%3aEJzKRiYvPV1x3mULMkbuVOWJip%2fqIjA%2f5KE7nnaJkzE%3d&epct=PAQABDgEAAAAdDD7nC9b5Q7JPd_okEQRFRXZvU3RzQXJ0aWZhY3RzCAAAAAAAChCf68SdaU2vqMxlCIJ-wzbLBNya8rRNOZ2BUaK5kBhCEia0hYRrawLsDw9sJG8YcJDJjLfsLzN5KntBBQLq7VmOIsl3IZhsnw7xM7Mxy43CraZKYte-1tk4k6JPjYf8BMXkFf5yOZi8QlS9CHSvjMmkf_TjmvLkJjA70K5C0gcO0nK7Jtgg4tkaTLKoFE3XY2EeuIic9l7hFQ76UPbk2iAA&jshs=2&nopa=2&fl=easi2_nowld&cobrandid=8c0b039e-5a73-4399-9b56-7e237be2cd06&lw=1&coa=1&clidata=1&jsh=&jshp=&username=depednaga18%40outlook.com&login_hint=depednaga18%40outlook.com",
+          "visits": 5
+        },
+        {
+          "url": "https://login.live.com/ppsecure/post.srf?nopa=2&username=depednaga18%40outlook.com&client_id=14638111-3389-403d-b206-a6a71d9f8f16&cobrandid=8c0b039e-5a73-4399-9b56-7e237be2cd06&contextid=A8ACB54EB82F00A1&opid=E6DE4C4BA5284157&bk=1782092306&uaid=1b47287101c74fef8c8fa78198d5a826&pid=15216",
+          "visits": 1
+        },
+        {
+          "url": "https://login.live.com/ppsecure/post.srf?lc=2057&nopa=2&username=depednaga18%40outlook.com&client_id=14638111-3389-403d-b206-a6a71d9f8f16&cobrandid=8c0b039e-5a73-4399-9b56-7e237be2cd06&mkt=EN-GB&opid=E6DE4C4BA5284157&opidt=1782092334&uaid=1b47287101c74fef8c8fa78198d5a826",
+          "visits": 1
+        },
+        {
+          "url": "https://login.live.com/login.srf?wa=wsignin1.0&rpsnv=198&checkda=1&ct=1782468361&rver=7.5.2234.0&wp=MBI_SSL&wreply=https:%2F%2Faccount.microsoft.com%2Fauth%2Fcomplete-silent-signin%3Fru%3Dhttps%253A%252F%252Faccount.microsoft.com%252F%253Fref%253Docpp%2526refd%253Daccount.microsoft.com&lc=1033&id=292666",
+          "visits": 1
+        },
+        {
+          "url": "https://login.live.com/oauth20_authorize.srf?client_id=81feaced-5ddd-41e7-8bef-3e20a2689bb7&scope=service%3a%3aaccount.microsoft.com%3a%3aMBI_SSL+openid+profile+offline_access&redirect_uri=https%3a%2f%2faccount.microsoft.com%2fauth%2fcomplete-signin-oauth&response_type=code&state=H4sIAAAAAAAEAA3EOYKCMAAAwL_YUgTQJVBYcIlEuUQuO-5kBQOCEHn97hSzw150CEuVzPZn2p-CyWhOrcmQZT1DzSwXH9r8Zvp2qL22TB8efLaMyfMBWAbQbenSyhoAuDWPqyvQwIrRLfX4xkv16UQk_NrScj3Pmh4uwFm6SS76NqqDyo7FgcZgiyMrq99KAGDL6Z919ORYaPxy76vY9XQiEEnXWxmvlThbSFUBV3ddSY1fxyfYHCIC5xqYIwbrRNlbO2fsTWHf4svh6yRpIfVg7ZlaoHvKgxoxRL4fHnsijTk5JAp3eOUXv4v-32inNFU-ibojGrBX3CBxSO0Eo2QlBOKrzLmy8_7JYopYKzgbmXN4z4uBmVfIzqFamiu3aENo-NEYwVLw2uNx9wfnI3W4WgEAAA&prompt=none&login_hint=depednaga18%40outlook.com&x-client-SKU=MSAL.Desktop&x-client-Ver=4.79.2.0&uaid=216a33438f5a4f9ebc3058597d380226&msproxy=1&issuer=mso&tenant=consumers&ui_locales=en-US&client_info=1&epctrc=MNzsl98VRbombWSBkuPHBOHK2wa7PrbTJF0GPAfwjwk%3d0%3a1%3aCANARY%3ar%2fScWf%2fco%2fBzcqEQMMh3t%2bL3DzUjq73aFX3seqGXZZE%3d&epct=PAQABDgEAAAAdDD7nC9b5Q7JPd_okEQRFRXZvU3RzQXJ0aWZhY3RzCAAAAAAAhUAKMBSD0kczniV85zU4lrMVb8KP5kzGjzJp20gHzXH0K0v3j5-XNn1VzKOOZLwnhsX0XEay-kLezUoubTTfvx1pfifDLNT_1q1kMoSJluANw0DaVjZzKp_5Pvowr-Ye4sIgTnXqxD-VKmZBp67w5-kNOoxZKgbsDQr1pDGwwmf6atnMluXzdHzr3pmKxJv1e3IYYR4eWIdtvbVBAtijuCAA&jshs=0#",
+          "visits": 1
+        }
+      ]
+    },
+    "email": {
+      "url": "https://mail.google.com",
+      "aliases": [
+        "gmail",
+        "mail"
+      ],
+      "source": "manual",
+      "host": "mail.google.com",
+      "visits": null,
+      "top_urls": []
+    }
+  },
+  "last_scan": "2026-08-24T12:11:11",
+  "watermark_chrome_us": 13431598876543891
+}
