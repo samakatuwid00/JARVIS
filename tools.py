@@ -1093,6 +1093,78 @@ _DESTRUCTIVE_RE = re.compile(
 # Module-level latch so a confirm only releases the EXACT pending task.
 _PENDING_DESTRUCTIVE = {"task": None}
 
+# Phase 14: same latch pattern for desktop-control actions. EVERY
+# desktop_control call is gated — no lexical detection, unconditional.
+_PENDING_DESKTOP = {"task": None, "foreground": False}
+
+
+# Hard-blocked content classes: never executed even with confirmation.
+# Mirrors cua-driver policy; checked on the task text before release.
+_DESKTOP_BLOCKED_RE = re.compile(
+    r"""(?ix)
+      \b(password|passwd|passcode|pin|credit\s*card|cvv|otp|2fa)\b
+    | \b(pay|payment|checkout|purchase|buy)\b.*\b(now|confirm|submit)\b
+    | \b(allow|grant|accept)\b.*\b(permission|dialog|uac|admin)\b
+    | \b(format|wipe)\b.*\b(disk|drive)\b
+    """)
+
+
+def desktop_control(task: str, confirm: bool = False,
+                    foreground: bool = False) -> str:
+    """Operate a desktop app via Hermes computer_use (Phase 14).
+
+    Every action requires voice confirmation: the first call returns
+    NEEDS_CONFIRM describing exactly what will be done; only a second call
+    with confirm=True releases THAT task (latched). Background delivery by
+    default; foreground takeover only when explicitly requested.
+    """
+    task = str(task or "").strip()
+    if not task:
+        return "[Error] No desktop action given."
+
+    if _DESKTOP_BLOCKED_RE.search(task):
+        return ("[Blocked] That action touches credentials, payments or "
+                "system dialogs — I won't do it even with confirmation.")
+
+    fg = bool(foreground)
+
+    # Confirmation gate: unconditional for this tool.
+    if not confirm:
+        _PENDING_DESKTOP["task"] = task
+        _PENDING_DESKTOP["foreground"] = fg
+        mode = "in the FOREGROUND (takes over your mouse)" if fg \
+            else "in the background"
+        return (f"NEEDS_CONFIRM: I will: {task} ({mode}). "
+                "Say 'confirm' to proceed.")
+
+    # Latch check: a confirm releases ONLY the exact pending action.
+    if _PENDING_DESKTOP.get("task") != task:
+        return ("[Error] Nothing pending matches that action. "
+                "State it again so I can re-confirm what will happen.")
+
+    pending_fg = _PENDING_DESKTOP.get("foreground", False)
+    _PENDING_DESKTOP["task"] = None
+    _PENDING_DESKTOP["foreground"] = False
+
+    instruction = (
+        "Use your computer_use tooling to perform this desktop action and "
+        "report what you actually did with evidence from a post-action "
+        "capture. Delivery: " + ("foreground" if pending_fg else "background")
+        + (" (do NOT raise windows or steal focus; use background input "
+           "delivery)." if not pending_fg else ".")
+        + " Never touch password fields, payment UIs or OS permission dialogs. "
+        + "TASK: " + task)
+    result = delegate_to_hermes(
+        instruction, timeout=300, max_turns=15, confirm=False,
+        raw_task=task)
+    tag = "[desktop-confirmed" + (", foreground" if pending_fg else "") + "]"
+    return f"{result} {tag}" if not str(result).startswith("[Error]") else result
+
+
+def _desktop_control_tool(**kw):
+    return desktop_control(kw.get("task"), _truthy(kw.get("confirm", False)),
+                           _truthy(kw.get("foreground", False)))
+
 
 # Phase 4: fire-and-forget acknowledgment token. When Hermes is delegated in the
 # background, think() returns this immediately so the voice/mic path stays live;
@@ -2125,6 +2197,26 @@ TOOLS = [
         }
     },
     {
+        "name": "desktop_control",
+        "description": ("Operate a desktop application (click, type, scroll, read "
+                        "screens) via Hermes computer_use. EVERY action requires "
+                        "user confirmation first — call once to state the action, "
+                        "again with confirm=true after the user approves. "
+                        "Background delivery by default; foreground only when the "
+                        "user explicitly asked for takeover."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task": {"type": "string", "description": "The desktop action to perform"},
+                "confirm": {"type": "boolean",
+                            "description": "True only AFTER the user approved this exact action"},
+                "foreground": {"type": "boolean",
+                               "description": "True only if user explicitly asked for foreground takeover"}
+            },
+            "required": ["task"]
+        }
+    },
+    {
         "name": "search_chatgpt_history",
         "description": "Search past ChatGPT conversations by keyword. Read-only.",
         "input_schema": {
@@ -2363,6 +2455,7 @@ TOOL_MAP = {
         kw["name"], kw["url"], kw.get("aliases")),
     "search_sessions": lambda **kw: search_sessions(
         kw["query"], int(kw.get("limit", 10) or 10)),
+    "desktop_control": _desktop_control_tool,
     "open_application": lambda **kw: open_application(
         kw["app"], kw.get("action"), kw.get("query")),
     "ask_chatgpt": _ask_chatgpt,

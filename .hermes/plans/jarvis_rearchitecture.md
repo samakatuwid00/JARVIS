@@ -383,6 +383,56 @@ own voice transcripts, not just the last-6-turn window.
 - Tool registered; grounding hook present; sessions/ gitignored (verified via
   git check-ignore); py_compile clean on all three touched files.
 
+## Phase 14 — Scoped desktop control  [DONE 2026-08-24]
+
+Goal: JARVIS can operate desktop apps (click, type, scroll, read screens)
+safely — every action voice-confirmed, background-first, foreground only on
+explicit request.
+
+### Decisions (agreed with user 2026-08-24)
+- EVERY desktop action requires voice confirmation (like destructive ops) —
+  no lexical detection needed, the gate is unconditional for this tool.
+- Delivery is BACKGROUND-ONLY by default (never steals cursor/focus).
+  Foreground takeover permitted ONLY when the user explicitly asks for it
+  ("bring it to front", "take over", "in foreground").
+- Capability-based app utilization (direct SQL past DBeaver GUI etc.) is
+  PARKED as a follow-up phase — not part of 14.
+
+### Architecture: B-first (delegate to Hermes computer_use)
+- New tool `desktop_control(task, foreground=False)` in tools.py.
+- First call returns NEEDS_CONFIRM with the exact planned action; second call
+  with confirm=true releases it (reuses the existing module-level pending-task
+  latch — a stale confirm cannot release a different action).
+- Execution path: delegate() -> hermes backend with instruction that Hermes
+  uses its computer_use tooling (element-indexed clicks, background delivery).
+  No new Python deps; ~50 lines.
+- foreground=true additionally sets raise_window on the driver side AND is
+  recorded in the audit log (confirmed + foreground flags).
+
+### Safety rails
+- Hard-blocked regardless of confirmation: typing into password fields,
+  payment UIs, OS permission dialogs (mirrors cua-driver policy).
+- Every completed action returns post-action evidence (capture description),
+  per Phase 12 honesty rules — no unverified success claims.
+- All calls flow through execute_tool() -> audit.jsonl automatically.
+
+### Out of scope (future phases)
+- Native pywinauto/uiautomation fast paths (only if latency hurts).
+- Capability routing: registry gains capabilities[] + data_sources{} so
+  "what columns does X have" bypasses the GUI entirely (DBeaver ->
+  information_schema query). Parked at user's direction.
+
+### Verification gate — PASSED (durable, re-runnable, exit 0, 12/12)
+scripts/hermes-verify-phase14-durable.py (kept in-repo as durable evidence;
+does NOT self-delete). Covers: unconditional NEEDS_CONFIRM on first call,
+exact-task latch (wrong-task confirm rejected), blocked content classes
+(credentials/payment refused even WITH confirm), latch survives blocked
+attempts, foreground flag propagates into message + latch, empty task error,
+tool registration + schema fields, py_compile clean. NO live desktop action
+is executed by the gate — it stops at the confirm boundary by design.
+Live end-to-end (real Hermes computer_use round-trip) remains a human step:
+restart JARVIS and voice-confirm one harmless action.
+
 ## Phase 7 — OPTIONAL follow-ups (not part of original 6)
 - Step-level HUD streaming via hermes serve WebSocket (/api/pub) — milestone events only
   today.
