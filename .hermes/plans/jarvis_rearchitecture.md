@@ -433,6 +433,34 @@ is executed by the gate — it stops at the confirm boundary by design.
 Live end-to-end (real Hermes computer_use round-trip) remains a human step:
 restart JARVIS and voice-confirm one harmless action.
 
+## Phase 14b — Launch-worthiness filter (app registry junk purge)  [DONE 2026-08-24]
+
+Problem (user-reported + quantified): of 975 registry entries, many were not
+launchable apps — directory bins (5), MSI 'file.exe,0' icon strings (13),
+documents (.txt/.chm/.html) (5), %TEMP% installer leftovers, Package Cache
+entries, missing exes (~7). "open winrar help" would startfile WinRAR.chm.
+
+### Delivered
+- machine_capabilities._is_launchable(): bin must be an EXISTING .exe/.lnk;
+  strips ',N' DisplayIcon suffixes; rejects dirs, docs, Package Cache, %TEMP%.
+- _scan_registry(): never writes a bare InstallLocation dir as bin (skips);
+  validates DisplayIcon candidates before storing.
+- write_registry(): filters scan() output through _is_launchable AND only
+  merges old entries that are still launchable (junk cannot resurrect).
+- tools.open_application(): drops any resolved entry whose bin fails the check
+  before startfile-ing it.
+- Rescan executed: registry now 863/863 launchable (was 975 w/ ~30+ junk).
+
+### Voice audit findings (reported to user, fixes pending approval)
+STT: whisper medium.en on CPU int8 + beam_size=5 = dominant latency (2-6s).
+TTS: edge-tts cloud round-trip, no streaming; TTS_RATE +20% sounds rushed.
+Proposed: small.en model, beam_size=1, speech_pad_ms 400->250, rate +10%.
+
+### Verification gate — PASSED (fresh run, exit 0, 17/17, self-deleting)
+_is_launchable units (9), post-rescan registry state clean (0 bad bins of
+863), junk keys gone, resolver validation wired, known app resolves, both
+changed files compile.
+
 ## Phase 7 — OPTIONAL follow-ups (not part of original 6)
 - Step-level HUD streaming via hermes serve WebSocket (/api/pub) — milestone events only
   today.

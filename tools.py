@@ -1391,10 +1391,100 @@ def _detect_backend(task: str) -> str:
         intent = resolve_intent(task, load_corpus())
         be = verb_backend(intent.verb)
         if be and be in ("music", "desktop", "web", "manus", "chatgpt", "native"):
+            # Object-aware guard: make/build/create/generate map to manus for
+            # MEDIA generation, but code-shaped objects (websites, scripts,
+            # apps) are coding work - never send those to Manus.
+            if be == "manus" and re.search(
+                    r"\b(code|website|web ?site|html|css|javascript|js|"
+                    r"script|api|program|landing page|web ?page|site|"
+                    r"web ?app|react|laravel|python file)\b", task, re.I):
+                return "hermes"
             return be
     except Exception:
         pass
     return "hermes"
+
+
+# Explicit harness invocation: "create a website USING OPENCODE",
+# "search my vault VIA BROWSER-SESSION". When the user names the tool,
+# JARVIS must not second-guess - auto-detection is skipped entirely.
+_EXPLICIT_HARNESS_RE = re.compile(
+    r"\b(?:using|via|with|through|on)\s+(?:the\s+)?"
+    r"(opencode|open\s?code|[a-z]+[- ](?:agent|runner|operator|curator|session))\b",
+    re.I)
+
+_KNOWN_AGENTS = ("app-launcher", "music-agent", "browser-session",
+                 "project-runner", "media-creator", "desktop-operator",
+                 "registry-curator")
+
+
+def _explicit_specialist(task: str):
+    """Detect an explicit harness/agent mention in the utterance.
+
+    Returns (forced: bool, agent_or_None, cleaned_task). When forced, the
+    caller must run the specialist tier and report its result verbatim -
+    including failures - because the user chose this tool deliberately.
+    """
+    t = task.lower()
+    # Named agent wins outright ("via project-runner", "with music agent").
+    for name in _KNOWN_AGENTS:
+        if name in t or name.replace("-", " ") in t:
+            return True, name, task
+    m = _EXPLICIT_HARNESS_RE.search(task)
+    if m and re.sub(r"[\s-]", "", m.group(1)) == "opencode":
+        cleaned = (task[:m.start()] + " " + task[m.end():]).strip(" ,.()")
+        return True, None, (cleaned or task)
+    return False, None, task
+
+
+def _run_specialist(task: str, agent: str | None = None, timeout: int = 300) -> str:
+    """Run a task through the OpenCode specialist tier (jarvis-demo/opencode.json).
+
+    Each agent there is a scoped md-defined worker on an OmniRoute model with a
+    restricted toolset - the middle tier between local fast-path tools and the
+    full Hermes harness. Falls back to None (caller routes to hermes) on any
+    harness failure so JARVIS never breaks when opencode is absent.
+    """
+    import shutil
+    import subprocess
+    oc = shutil.which("opencode")
+    if oc is None:
+        return "[specialist] OpenCode not installed; route to hermes."
+    # npm shims are .cmd files - CreateProcess can't exec them directly.
+    cmd = [oc, "run"]
+    if agent:
+        cmd += ["--agent", agent]
+    cmd.append(task)
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              timeout=timeout, cwd=os.path.dirname(os.path.abspath(__file__)))
+    except subprocess.TimeoutExpired:
+        return f"[specialist:{agent or 'build'}] timed out after {timeout}s."
+    out = (proc.stdout or "").strip()
+    if proc.returncode != 0 and not out:
+        return f"[specialist] failed: {(proc.stderr or 'unknown error')[:300]}"
+    # strip the "agent · model" header line opencode prints
+    lines = [l for l in out.splitlines() if l.strip() and not l.startswith(">")]
+    return "\n".join(lines).strip() or "(empty response)"
+
+
+_SPECIALIST_ROUTES = (
+    # (regex on lowercase task, opencode agent name) - first match wins.
+    (r"\b(vault|second brain|obsidian notes?)\b", "browser-session"),
+    (r"\b(chatgpt|chat gpt)\b.*\b(history|search|past)\b", "browser-session"),
+    (r"\b(dev server|irims|portfolio project|start .* project)\b", "project-runner"),
+    (r"\b(generate|create|make)\b.*\b(image|video|logo|thumbnail|document)\b", "media-creator"),
+)
+
+
+def _pick_specialist(task: str) -> str | None:
+    """Choose a specialist agent for tasks the fast-path can't handle.
+    Returns None when nothing matches strongly enough (→ hermes keeps it)."""
+    t = task.lower()
+    for pat, agent in _SPECIALIST_ROUTES:
+        if re.search(pat, t):
+            return agent
+    return None
 
 
 # Local / direct backends (no Hermes spawn). Each returns a string result.
@@ -1534,6 +1624,15 @@ def delegate(
         if cw is not None:
             cw.append(task, "command")
 
+    # ---- Explicit harness invocation (user names the tool) ----------------
+    # "create a website using opencode", "via project-runner", ...
+    # Runs BEFORE auto-detection; the user's choice is authoritative, so
+    # failures are reported verbatim instead of silently falling to Hermes.
+    forced, forced_agent, cleaned = _explicit_specialist(task)
+    if forced:
+        result = _run_specialist(cleaned, forced_agent, timeout=timeout)
+        return result
+
     if backend is None:
         backend = _detect_backend(task)
 
@@ -1541,6 +1640,17 @@ def delegate(
     handler = _LOCAL_DISPATCH.get(backend)
     if handler:
         return handler(task)
+
+    # Specialist tier: unmatched tasks with a strong domain match go to a
+    # scoped OpenCode agent (~5s) before escalating to the full Hermes
+    # harness (~25s). Hermes stays the floor - any specialist failure or
+    # non-match falls through to it unchanged.
+    if backend == "hermes":
+        agent = _pick_specialist(task)
+        if agent:
+            result = _run_specialist(task, agent, timeout=timeout)
+            if not result.startswith("[specialist]"):
+                return result
 
     # Hermes path: full agent with confirm gate + grounding
     if grounded:
@@ -1716,6 +1826,12 @@ def open_application(app: str, action: str = None, query: str = None) -> str:
             except Exception:
                 _resolve = None
         entry = _resolve(requested) if _resolve else None
+    # Phase 14b: never launch a non-launchable bin. If the registry handed us a
+    # directory / document / MSI icon string, drop the entry and keep searching
+    # via aliases + raw name instead of startfile-ing junk.
+    from machine_capabilities import _is_launchable as _launchable
+    if entry and not _launchable(entry.get("bin")):
+        entry = None
     binp = entry.get("bin") if entry else None
     name = entry.get("name", requested) if entry else requested
 

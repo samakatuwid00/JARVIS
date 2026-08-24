@@ -106,8 +106,19 @@ def classify_intent(text: str) -> str:
         return "greeting"
     if re.search(r"\b(thanks|thank you|cheers|appreciate it|ty)\b", t):
         return "thanks"
-    if re.search(r"\b(time|clock|date|day|today|now)\b", t) and re.search(r"\b(what|tell|is|the)\b", t):
-        return "time"
+    # time: ONLY short, question-shaped time queries. A bare vocabulary match
+    # hijacked content questions ("...best practices we can do right NOW based
+    # on claude docs stored in vault?" -> answered the clock). Question-shape
+    # patterns + a word-count cap keep long sentences out; domain markers
+    # (vault/search/notes/...) escape to deeper classifiers entirely.
+    if not re.search(r"\b(vault|search|notes?|docs?|files?|practices|read|find|list)\b", t):
+        if len(t.split()) <= 8 and re.search(
+            r"\bwhat('?s| is)? (the )?(time|clock)\b|"
+            r"\b(what|which) (day|date) (is it|is today)\b|"
+            r"\b(today'?s|current) (date|day|time)\b|"
+            r"\b(tell me|say) the (time|clock|date)\b|"
+            r"^time\s*(please)?\??$", t):
+            return "time"
     if re.fullmatch(r"(help|what can you do\??|commands\??|options\??)", t):
         return "help"
     # report / launch: JARVIS-specific side-routes (compose_report, launch_project).

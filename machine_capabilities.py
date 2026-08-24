@@ -145,6 +145,31 @@ def _resolve_lnk(path: str):
         return None
 
 
+def _is_launchable(path) -> bool:
+    """Phase 14b: launch-worthiness check for a resolved bin path.
+
+    A bin is launchable iff it is an EXISTING .exe or .lnk file. Everything
+    else the old scanner wrote (directories, .txt/.chm/.html docs, MSI
+    'file.exe,0' icon strings, %TEMP% installer leftovers) is junk that makes
+    open_application open Notepad/Explorer or throw instead of the app.
+    """
+    if not path or not isinstance(path, str):
+        return False
+    p = path.split(",")[0].strip()          # strip DisplayIcon ',0' suffixes
+    low = p.lower()
+    if not low.endswith((".exe", ".lnk")):
+        return False
+    if "package cache" in low:
+        return False
+    temp = os.environ.get("TEMP", "").lower()
+    if temp and low.startswith(temp):
+        return False                         # installer leftovers in %TEMP%
+    try:
+        return os.path.isfile(p)
+    except OSError:
+        return False
+
+
 def _scan_registry():
     """Scan Windows uninstall registry keys for installed apps."""
     import winreg
@@ -187,15 +212,20 @@ def _scan_registry():
                              "confidence": "medium", "version": None}
                     if exe and exe.lower().endswith(".ico"):
                         exe = None
+                    # Phase 14b: only write launchable bins. Prefer a real exe
+                    # in InstallLocation; never fall back to the bare directory.
                     if loc and os.path.isdir(loc):
                         exes = [f for f in os.listdir(loc)
                                 if f.lower().endswith(".exe") and "uninstall" not in f.lower()]
                         if exes:
                             entry["bin"] = os.path.join(loc, exes[0])
                         else:
-                            entry["bin"] = loc
+                            continue          # directory with no exe = not an app
                     elif exe:
-                        entry["bin"] = exe
+                        cand = exe.split(",")[0].strip()   # strip ',0' icon refs
+                        if not _is_launchable(cand):
+                            continue
+                        entry["bin"] = cand
                     else:
                         continue
                     out[key_name] = entry
@@ -324,14 +354,19 @@ def write_manifest() -> str:
 
 def write_registry() -> str:
     """Full scan → app_registry.json. Returns summary string."""
-    manifest = scan()
-    # Merge: existing capabilities.json entries override (more reliable)
+    manifest = {k: v for k, v in scan().items()
+                if _is_launchable(v.get("bin"))}   # Phase 14b junk filter
+    # Merge: existing capabilities.json entries override (more reliable),
+    # but only launchable ones — old junk must not resurrect.
     if os.path.exists(MANIFEST_PATH):
         try:
             with open(MANIFEST_PATH, encoding="utf-8") as f:
                 old = json.load(f).get("apps", {})
             for k, v in old.items():
-                if k not in manifest or v.get("confidence") == "high":
+                if k not in manifest and _is_launchable(v.get("bin")):
+                    manifest[k] = v
+                elif k in manifest and v.get("confidence") == "high" \
+                        and _is_launchable(v.get("bin")):
                     manifest[k] = v
         except Exception:
             pass
