@@ -1413,9 +1413,37 @@ _EXPLICIT_HARNESS_RE = re.compile(
     r"(opencode|open\s?code|[a-z]+[- ](?:agent|runner|operator|curator|session))\b",
     re.I)
 
-_KNOWN_AGENTS = ("app-launcher", "music-agent", "browser-session",
-                 "project-runner", "media-creator", "desktop-operator",
-                 "registry-curator")
+def _explicit_specialist(task: str):
+    """Detect an explicit harness/agent mention in the utterance.
+
+    Returns (forced: bool, agent_or_None, cleaned_task). When forced, the
+    caller must run the specialist tier and report its result verbatim -
+    including failures - because the user chose this tool deliberately.
+    """
+def _known_agents() -> tuple:
+    """Dynamic agent lookup - scans opencode.json's agent map at call time.
+
+    The registry file is the single source of truth: add an agent there and
+    JARVIS can route to it with zero code changes. Falls back to an empty
+    tuple when the config is missing/unparseable (explicit-name matching
+    then simply finds nothing, and auto-routing still works).
+    """
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               "opencode.json"), encoding="utf-8") as f:
+            agents = json.load(f).get("agent", {})
+        return tuple(agents.keys())
+    except Exception:
+        return ()
+
+
+# Explicit harness invocation: "create a website USING OPENCODE",
+# "search my vault VIA BROWSER-SESSION". When the user names the tool,
+# JARVIS must not second-guess - auto-detection is skipped entirely.
+_EXPLICIT_HARNESS_RE = re.compile(
+    r"\b(?:using|via|with|through|on)\s+(?:the\s+)?"
+    r"(opencode|open\s?code|[a-z]+[- ](?:agent|runner|operator|curator|session))\b",
+    re.I)
 
 
 def _explicit_specialist(task: str):
@@ -1426,14 +1454,18 @@ def _explicit_specialist(task: str):
     including failures - because the user chose this tool deliberately.
     """
     t = task.lower()
+    known = _known_agents()
     # Named agent wins outright ("via project-runner", "with music agent").
-    for name in _KNOWN_AGENTS:
+    for name in known:
         if name in t or name.replace("-", " ") in t:
             return True, name, task
     m = _EXPLICIT_HARNESS_RE.search(task)
     if m and re.sub(r"[\s-]", "", m.group(1)) == "opencode":
         cleaned = (task[:m.start()] + " " + task[m.end():]).strip(" ,.()")
-        return True, None, (cleaned or task)
+        # Bare "using opencode": no named agent. Let JARVIS decide which
+        # specialist fits the TASK CONTENT (dynamic registry lookup) instead
+        # of dropping to opencode's built-in default agent.
+        return True, _pick_specialist(cleaned), (cleaned or task)
     return False, None, task
 
 
@@ -1701,23 +1733,44 @@ def write_to_notepad(content: str, filename: str = "") -> str:
 # Spoken name -> what Windows can actually launch. A user says "open Microsoft
 # Word"; ShellExecute needs "winword". Without this the model passes the human
 # name through verbatim and every Office app fails to open.
-APP_ALIASES = {
+# Phase 14b: data now lives in app_aliases.json (editable without code changes);
+# this dict is the loaded cache with a built-in fallback if the file is missing.
+_ALIASES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "app_aliases.json")
+_APP_ALIASES_FALLBACK = {
     "word": "winword", "microsoft word": "winword", "ms word": "winword",
-    "excel": "excel", "microsoft excel": "excel", "ms excel": "excel",
-    "powerpoint": "powerpnt", "microsoft powerpoint": "powerpnt",
-    "power point": "powerpnt", "ms powerpoint": "powerpnt",
-    "outlook": "outlook", "microsoft outlook": "outlook",
-    "notepad": "notepad.exe", "note pad": "notepad.exe",
-    "calculator": "calc", "calc": "calc",
-    "paint": "mspaint", "ms paint": "mspaint",
-    "file explorer": "explorer", "explorer": "explorer", "files": "explorer",
-    "command prompt": "cmd", "cmd": "cmd", "terminal": "cmd",
-    "task manager": "taskmgr",
-    "edge": "msedge", "microsoft edge": "msedge",
-    "chrome": "chrome", "google chrome": "chrome",
-    "brave": "brave", "brave browser": "brave",
-    "settings": "ms-settings:",
+    "excel": "excel", "powerpoint": "powerpnt", "notepad": "notepad.exe",
+    "calculator": "calc", "paint": "mspaint", "explorer": "explorer",
+    "cmd": "cmd", "task manager": "taskmgr", "edge": "msedge",
+    "chrome": "chrome", "brave": "brave", "settings": "ms-settings:",
 }
+
+
+def _load_aliases() -> dict:
+    try:
+        with open(_ALIASES_PATH, encoding="utf-8") as f:
+            return json.load(f).get("aliases", _APP_ALIASES_FALLBACK)
+    except Exception:
+        return dict(_APP_ALIASES_FALLBACK)
+
+
+APP_ALIASES = _load_aliases()
+
+
+def reload_aliases() -> int:
+    """Re-read app_aliases.json (e.g. after a manual edit). Returns entry count."""
+    global APP_ALIASES
+    APP_ALIASES = _load_aliases()
+    return len(APP_ALIASES)
+
+
+def _product_exe_map():
+    """Friendly product phrase -> exe stem, from app_aliases.json."""
+    try:
+        with open(_ALIASES_PATH, encoding="utf-8") as f:
+            return json.load(f).get("product_exe", {})
+    except Exception:
+        return {"word": "winword", "excel": "excel", "edge": "msedge"}
 
 
 # Leading verbs/filler the voice model often includes in the app argument.
@@ -1778,13 +1831,7 @@ def open_application(app: str, action: str = None, query: str = None) -> str:
             # ("microsoft word" vs key "winword"). Map to the exe stem and
             # retry exact/substring before falling to token scoring.
             if not entry:
-                _PRODUCT_EXE = {
-                    "word": "winword", "excel": "excel", "powerpoint": "powerpnt",
-                    "outlook": "outlook", "onenote": "onenote", "access": "msaccess",
-                    "teams": "teams", "edge": "msedge", "paint": "mspaint",
-                    "calculator": "calculator", "vs code": "code",
-                    "visual studio code": "code", "vscode": "code",
-                }
+                _PRODUCT_EXE = _product_exe_map()
                 for phrase, exe_stem in _PRODUCT_EXE.items():
                     if phrase in n:
                         if exe_stem in apps:
@@ -1941,10 +1988,7 @@ def close_application(app: str) -> str:
                         entry = apps[key]
                         break
             if not entry:
-                _PRODUCT_EXE = {
-                    "word": "winword", "excel": "excel", "powerpoint": "powerpnt",
-                    "outlook": "outlook", "onenote": "onenote", "edge": "msedge",
-                }
+                _PRODUCT_EXE = _product_exe_map()
                 for phrase, exe_stem in _PRODUCT_EXE.items():
                     if phrase in n and exe_stem in apps:
                         entry = apps[exe_stem]
