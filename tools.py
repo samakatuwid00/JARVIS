@@ -14,6 +14,56 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+# Phase 1: Structured audit trail (load-bearing before concurrency).
+# Every delegation + every file read/write lands here as JSONL: timestamp,
+# caller, args (redacted), result (truncated), confirm-gate decision. Stdlib only.
+_AUDIT_PATH = Path(__file__).parent / "logs" / "audit.jsonl"
+_AUDIT_LOCK = threading.Lock()
+_AUDIT_SECRET_RE = re.compile(
+    r"""(?i)([A-Z0-9_-]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL)[A-Z0-9_-]*)(["']?\s*[=:]\s*)(["']?)([^\s"',;]+)"""
+)
+
+def _audit_log(caller: str, task: str, decision: str, result: str = "", confirm: bool = False, extra: dict = None):
+    """Append one structured audit entry. Never raises; audit must not break a turn."""
+    try:
+        rec = {
+            "ts": datetime.datetime.now().isoformat(timespec="milliseconds"),
+            "caller": caller,
+            "task": (task or "")[:500],
+            "decision": decision,
+            "confirm": bool(confirm),
+            "result": (result or "")[:800],
+        }
+        if extra:
+            rec.update(extra)
+        # redact secrets in task/result
+        for k in ("task", "result"):
+            if rec[k]:
+                rec[k] = _AUDIT_SECRET_RE.sub(lambda m: f"{m.group(1)}=<redacted>", rec[k])
+        _AUDIT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with _AUDIT_LOCK:
+            with open(_AUDIT_PATH, "a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+def _quarantine_external(text: str, label: str = "external") -> str:
+    """Wrap external text (browser/chat/file) as data, quarantining instruction-like spans.
+    
+    Uses guard.sanitize_web_text() so downstream models treat it as data, not directions.
+    Logs quarantine hits to audit trail.
+    """
+    if not text:
+        return text
+    try:
+        import guard
+        cleaned = guard.sanitize_web_text(text, label=label)
+        if cleaned != text and guard.is_suspicious(text):
+            _audit_log("guard", f"quarantine:{label}", "quarantined", f"hits in {label}", extra={"label": label})
+        return cleaned
+    except Exception:
+        return text
+
 # Thread-local progress callback — set by brain_gemini.think() so tools can
 # stream mid-task status ("Searching YouTube Music...") back to the WS layer.
 _tools_tls = threading.local()
@@ -71,11 +121,44 @@ def run_shell(command: str) -> str:
         return f"[Error] {str(e)}"
 
 
+# Phase 7: Scoped file access — only these roots are readable/writable without extra confirm.
+# Writes outside these require allowlist confirm; reads outside are blocked and logged.
+_ALLOWED_ROOTS = [
+    Path.home() / "Documents",
+    Path.home() / "Desktop",
+    Path.home() / "Downloads",
+    Path.home() / "Documents" / "Second Brain",
+    Path.home() / "Documents" / "Portfolio",
+    Path(__file__).parent,  # jarvis-demo itself (configs, logs) — scoped
+]
+
+def _is_allowed_path(p: Path) -> bool:
+    """True if p is under any allowed root (resolved, case-insensitive on Windows)."""
+    try:
+        rp = p.resolve()
+        for root in _ALLOWED_ROOTS:
+            try:
+                if rp.is_relative_to(root.resolve()):
+                    return True
+                # Windows case-insensitive prefix check
+                if str(rp).lower().startswith(str(root.resolve()).lower()):
+                    return True
+            except Exception:
+                continue
+        return False
+    except Exception:
+        return False
+
 def read_file(path: str) -> str:
-    """Read a file's contents, tolerating non-UTF-8 text encodings."""
+    """Read a file's contents, scoped to allowed roots, quarantined, audited."""
     try:
         p = Path(path).expanduser()
+        # Scope check before touching disk (Phase 7)
+        if not _is_allowed_path(p if p.is_absolute() else _resolve_write_path(str(p))):
+            _audit_log("read_file", str(p), "blocked_scope", result="outside allowed roots")
+            return f"[Blocked] Path outside allowed scope: {p}. Allowed: Documents, Desktop, Downloads, Second Brain, Portfolio, or jarvis-demo."
         if not p.exists():
+            _audit_log("read_file", str(p), "not_found")
             return f"[Error] File not found: {path}"
         if p.is_dir():
             return f"[Error] That is a directory, not a file: {path}"
@@ -83,18 +166,24 @@ def read_file(path: str) -> str:
             return "[Error] File too large (>1MB)"
 
         raw = p.read_bytes()
-        # NUL bytes in the first block mean this is binary, not mis-encoded text.
         if b"\x00" in raw[:4096]:
             return (f"[Error] {p.name} is a binary file, not text. I can only read "
                     "plain text files - PDFs, Word documents, images and archives "
                     "need a converter I do not have.")
         for enc in ("utf-8", "utf-8-sig", "cp1252", "latin-1"):
             try:
-                return raw.decode(enc)
+                text = raw.decode(enc)
+                break
             except UnicodeDecodeError:
                 continue
-        return raw.decode("utf-8", "replace")
+        else:
+            text = raw.decode("utf-8", "replace")
+        # Phase 1b: quarantine external file content before it enters model context
+        q = _quarantine_external(text, label=f"file:{p.name}")
+        _audit_log("read_file", str(p), "executed", result=f"{len(q)} chars", extra={"allowed": True})
+        return q
     except Exception as e:
+        _audit_log("read_file", str(path), "error", result=str(e))
         return f"[Error] {str(e)}"
 
 
@@ -135,27 +224,34 @@ def _resolve_write_path(path: str) -> Path:
 
 
 def write_file(path: str, content: str, overwrite: bool = False) -> str:
-    """Write content to a file. Refuses to clobber an existing file unless told to.
-
-    JARVIS is driven by speech, and a misheard filename should not silently
-    destroy an existing file, so replacing one is an explicit opt-in.
-
-    A filename with no directory lands in Documents (see _resolve_write_path),
-    not in whatever directory the server happens to be running from.
-    """
+    """Write content to a file, scoped and audited (Phase 7). Overwrite needs confirm via allowlist."""
     try:
         p = _resolve_write_path(path)
+        # Phase 7: scope check — writes must be under allowed roots
+        if not _is_allowed_path(p):
+            _audit_log("write_file", str(p), "blocked_scope", result="outside allowed roots", extra={"overwrite": overwrite})
+            return f"[Blocked] Write outside allowed scope: {p}. Allowed: Documents, Desktop, Downloads, Second Brain, Portfolio, jarvis-demo."
         if p.exists() and not overwrite:
             size = p.stat().st_size
+            _audit_log("write_file", str(p), "blocked_exists", extra={"size": size, "overwrite": overwrite})
             return (f"[Blocked] {p.name} already exists ({size:,} bytes) and I did not "
                     "overwrite it. Confirm you want it replaced and I will.")
+        # Phase 1c+7: audit every write (args redacted, content truncated)
+        _audit_log("write_file", str(p), "executed" if not p.exists() or overwrite else "blocked", result=f"{len(content)} chars", extra={"overwrite": overwrite, "allowed": True})
         p.parent.mkdir(parents=True, exist_ok=True)
         existed = p.exists()
+        # quarantine content that looks like embedded instruction? No — this is outbound, but log if suspicious
+        try:
+            import guard
+            if guard.is_suspicious(content):
+                _audit_log("write_file", str(p), "suspicious_content_quarantined", result=content[:200])
+        except Exception:
+            pass
         p.write_text(content, encoding="utf-8")
         verb = "Replaced" if existed else "Written to"
-        # Report the resolved path: saying "notes.txt" leaves the user hunting.
         return f"{verb} {p} ({len(content)} chars)"
     except Exception as e:
+        _audit_log("write_file", str(path), "error", result=str(e))
         return f"[Error] {str(e)}"
 
 
@@ -181,9 +277,14 @@ def _redact(line: str) -> str:
 
 
 def search_files(query: str, path: str = ".", max_results: int = 20) -> str:
-    """Search file contents recursively for a string. Case-insensitive."""
+    """Search file contents recursively — scoped to allowed roots (Phase 7), quarantined, audited."""
     try:
         root = Path(path).expanduser()
+        check_root = root if root.is_absolute() else (_resolve_write_path(str(root)) if str(root) not in (".", "") else Path.home() / "Documents")
+        if not _is_allowed_path(check_root):
+            _audit_log("search_files", str(root), "blocked_scope")
+            return f"[Blocked] Path outside allowed scope: {root}. Allowed: Documents, Desktop, Downloads, Second Brain, Portfolio."
+        _audit_log("search_files", str(root), "executed", extra={"query": query[:100]})
         if not root.exists():
             return f"[Error] Path not found: {path}"
 
@@ -236,9 +337,15 @@ def search_files(query: str, path: str = ".", max_results: int = 20) -> str:
 
 
 def list_directory(path: str = ".") -> str:
-    """List directory contents."""
+    """List directory contents — scoped to allowed roots (Phase 7), audited."""
     try:
         p = Path(path).expanduser()
+        # Resolve relative to allowed roots: bare "." means Documents for voice safety
+        check_p = p if p.is_absolute() else (_resolve_write_path(str(p)) if str(p) not in (".", "") else Path.home() / "Documents")
+        if not _is_allowed_path(check_p):
+            _audit_log("list_directory", str(p), "blocked_scope")
+            return f"[Blocked] Path outside allowed scope: {p}. Allowed: Documents, Desktop, Downloads, Second Brain, Portfolio."
+        _audit_log("list_directory", str(p), "executed")
         items = []
         for item in sorted(p.iterdir()):
             prefix = "[dir]" if item.is_dir() else "[file]"
@@ -246,6 +353,7 @@ def list_directory(path: str = ".") -> str:
             items.append(f"{prefix} {item.name} ({size:,} bytes)" if size else f"{prefix} {item.name}/")
         return "\n".join(items) or "(empty directory)"
     except Exception as e:
+        _audit_log("list_directory", str(path), "error", result=str(e))
         return f"[Error] {str(e)}"
 
 
@@ -1074,10 +1182,30 @@ _HERMES_FULL_TOOLSETS = (
     "delegation,cronjob,computer_use"
 )
 
-# Lexical guard: a task matching any of these is genuinely destructive and MUST
-# be confirmed before Hermes is launched with it (scope A). Narrow on purpose —
-# "create/write a NEW file" (e.g. manifest, a remembered note) is SAFE and must
-# NOT be gated, so we only match delete/overwrite/install/git-push/kill/sudo/deploy.
+# Phase 1: Allowlist foundation — flip from destructive blocklist to safe allowlist.
+# Previously: gate only if destructive verb matched. Now: gate UNLESS safe.
+# Safe = read/compute + deterministic local actions that never mutate state.
+# Everything state-changing (create/write/delete/install/deploy) requires confirm.
+# This is load-bearing before concurrency + real file access (Phases 2 + 7).
+_SAFE_ALLOWLIST_RE = re.compile(
+    r"""(?ix)
+      ^\s*(what|who|how|why|when|where|which|explain|tell|describe|summarize|define)\b
+    | \b(read|list|show|search|find|lookup|lookup|query|get|check|status|help)\b
+    | \b(open|launch|play|stop)\b.{0,40}\b(app|music|song|file|folder|site|project)?\b
+    | \b(remember|recall|history|previous)\b
+    | \b(rescan|refresh|scan)\b.{0,20}\b(apps?|sites?)\b
+    | \b(time|date|weather)\b
+    | ^\s*(hello|hi|hey|thanks|thank you)\b
+    """
+)
+# File-mutating verbs — even if allowlist matches, these need confirm (Phase 7).
+_MUTATING_RE = re.compile(
+    r"""(?ix)
+      \b(create|make|build|generate|write|save|update|overwrite|clobber|replace|delete|remove|erase|wipe|purge|trash|format|drop|unlink|install|pip\s+install|npm\s+(i|install)|git\s+(push|reset|clean|checkout|rm)|chmod|chown|mkfs|sudo|deploy|migrate)\b
+    """
+)
+
+# Legacy destructive regex kept for audit classification (not gating).
 _DESTRUCTIVE_RE = re.compile(
     r"""(?ix)
       \b(rm|del|delete|remove|erase|wipe|purge|shred|trash|format|drop|unlink)\b
@@ -1089,6 +1217,19 @@ _DESTRUCTIVE_RE = re.compile(
     | \b(deploy|migrate\s+database|drop\s+database)\b
     """
 )
+
+def _is_safe_task(task: str) -> bool:
+    """True if task is pre-approved safe (allowlist) and not mutating."""
+    t = (task or "").strip()
+    if not t:
+        return False
+    # Mutating always needs confirm, even if phrase looks safe.
+    if _MUTATING_RE.search(t):
+        return False
+    # Informational Q&A without explicit verb is safe if it ends with ? or is short question.
+    if t.endswith("?") and len(t.split()) <= 20:
+        return True
+    return bool(_SAFE_ALLOWLIST_RE.search(t))
 
 # Module-level latch so a confirm only releases the EXACT pending task.
 _PENDING_DESTRUCTIVE = {"task": None}
@@ -1166,6 +1307,166 @@ def _desktop_control_tool(**kw):
                            _truthy(kw.get("foreground", False)))
 
 
+# ---------------------------------------------------------------------------
+# OpenCLI integration (Phase 3.6): "turn any website into a CLI" via the user's
+# logged-in Chrome. Built 2026-08-26 from an OpenCLI Facebook post the user
+# wanted JARVIS to use. OpenCLI is a third-party npm CLI (jackwener/OpenCLI,
+# Apache-2.0); JARVIS shells out to it.
+#
+# SAFETY MODEL (mirrors Phase 14 desktop_control):
+#   - EVERY write / logged-in-site action requires an explicit confirm gate.
+#   - Public-site READ commands (wikipedia, arxiv, github trending, etc.) run
+#     through audit but are treated as low-risk (no login needed; the daemon
+#     serves them). They still require a one-shot confirm the FIRST time a
+#     session touches the tool, so the user is never surprised JARVIS is driving
+#     a browser.
+#   - Hard-blocked: credentials / payments / anything the _DESKTOP_BLOCKED_RE
+#     already forbids (reused) — JARVIS never types into login/payment fields
+#     even with confirm.
+#   - Delivery is background by default (--window background).
+# ---------------------------------------------------------------------------
+import re as _re
+
+_OPENCLI_WRITE_RE = _re.compile(
+    r"\b(add-friend|join-group|login|post|send|comment|reply|upload|create|delete|"
+    r"remove|follow|unfollow|like|share|message|dm|publish|submit|write|update|"
+    r"marketplace|inbox|settings|account|profile edit|set-)\b", _re.IGNORECASE)
+_OPENCLI_SAFE_READ_RE = _re.compile(
+    r"\b(feed|search|summary|page|random|trending|recent|whoami|notifications|"
+    r"profile|list|get|read|events|friends|groups|memories|paper|author|status|"
+    r"listings)\b", _re.IGNORECASE)
+# Sites whose adapters imply driving a LOGGED-IN session even on a "read".
+_OPENCLI_SENSITIVE_SITE_RE = _re.compile(
+    r"\b(facebook|instagram|twitter|x\b|reddit|linkedin|weibo|douyin|xiaohongshu|"
+    r"zhihu|tiktok|github|gmail|notion|discord|telegram|wechat|slack|bank|gov)\b",
+    _re.IGNORECASE)
+
+# Module-level latch: a confirm releases ONLY the exact pending command.
+_PENDING_OPENCLI = {"command": None}
+
+
+def _opencli_classify(command: str):
+    """Return (kind, needs_confirm) where kind in {read, write, sensitive-read}."""
+    cmd = command.strip()
+    low = cmd.lower()
+    # A bare `opencli <site>` with no subcommand + a sensitive site => sensitive.
+    if _OPENCLI_SENSITIVE_SITE_RE.search(low):
+        # explicit read verb on a sensitive site still needs confirm (it reads
+        # YOUR data); anything with a write verb is a hard write.
+        if _OPENCLI_WRITE_RE.search(low):
+            return "write", True
+        return "sensitive-read", True
+    if _OPENCLI_WRITE_RE.search(low):
+        return "write", True
+    if _OPENCLI_SAFE_READ_RE.search(low) or low.split():
+        return "read", True  # first-touch confirm; public reads are low risk
+    return "read", True
+
+
+def run_opencli(command: str, confirm: bool = False,
+                foreground: bool = False) -> str:
+    """Run an OpenCLI command (turn a website into a CLI via logged-in Chrome).
+
+    First call returns NEEDS_CONFIRM with the exact command + risk class.
+    Second call with confirm=true runs it. Unconditional gate (Phase 14 style):
+    JARVIS must never silently drive a browser/site.
+    """
+    command = str(command or "").strip()
+    if not command:
+        return "[Error] No OpenCLI command given (e.g. 'reddit search python')."
+
+    if _DESKTOP_BLOCKED_RE.search(command):
+        return ("[Blocked] That OpenCLI command touches credentials, payments or "
+                "system dialogs — I won't run it even with confirmation.")
+
+    kind, needs_confirm = _opencli_classify(command)
+    risk = {"read": "public read", "sensitive-read": "LOGGED-IN read",
+            "write": "WRITE/action"}[kind]
+
+    if not confirm:
+        _PENDING_OPENCLI["command"] = command
+        return (f"NEEDS_CONFIRM [OpenCLI · {risk}]: I will run: `opencli {command}`. "
+                f"Say 'confirm' to proceed. This may operate your browser/sites.")
+
+    if _PENDING_OPENCLI.get("command") != command:
+        return ("[Error] Nothing pending matches that OpenCLI command. "
+                "State it again so I can re-confirm what will run.")
+
+    _PENDING_OPENCLI["command"] = None
+
+    import subprocess
+    import shlex
+    # `--window` is only valid for the `opencli browser ...` primitive, NOT for
+    # site/app adapters (they reject it with "unknown option '--window'").
+    # Default delivery is background for browser primitives; site adapters run
+    # in whatever session the daemon/extension has bound.
+    is_browser_primitive = command.lower().startswith("browser")
+    base = f"opencli {command}" + (
+        f" --window {'foreground' if foreground else 'background'}"
+        if is_browser_primitive else "")
+    # shell=True is required on Windows to resolve the opencli .cmd shim.
+    # Build a shell command that preserves multi-word quoted args as ONE
+    # argument. shlex.split() discards the user's quotes, so we use a
+    # quote-aware splitter and then double-quote any token that contains a
+    # space (Node/Commander needs double quotes, not shlex's single quotes).
+    def _split_keep_quotes(s):
+        out, cur, q = [], "", None
+        for ch in s:
+            if q:
+                cur += ch
+                if ch == q:
+                    q = None
+            elif ch in ('"', "'"):
+                q = ch
+                cur += ch
+            elif ch.isspace():
+                if cur:
+                    out.append(cur); cur = ""
+            else:
+                cur += ch
+        if cur:
+            out.append(cur)
+        return out
+
+    def _win_quote(tok):
+        if " " in tok and not (tok.startswith('"') and tok.endswith('"')):
+            return f'"{tok}"'
+        return tok
+
+    raw_tokens = _split_keep_quotes(base)
+    # For site/app adapters (NOT the `browser` primitive), everything after
+    # the 2nd token is free text (a title/query) that OpenCLI wants as ONE
+    # quoted argument. Rejoin trailing tokens so "Web scraping" -> "Web scraping".
+    if not is_browser_primitive and len(raw_tokens) > 3:
+        head = raw_tokens[:3]
+        tail = " ".join(raw_tokens[3:])
+        raw_tokens = head + [f'"{tail}"']
+    shell_cmd = " ".join(_win_quote(t) for t in raw_tokens)
+    try:
+        proc = subprocess.run(shell_cmd, shell=True, capture_output=True,
+                              text=True, timeout=180)
+        out = (proc.stdout or "").strip()
+        err = (proc.stderr or "").strip()
+        if proc.returncode != 0:
+            tail = (err or out or "no output")[-600:]
+            _audit_log("run_opencli", command, "fail", result=f"rc={proc.returncode} {tail}")
+            return f"[OpenCLI error rc={proc.returncode}] {tail}"
+        # Evidence: only quote a bounded, real slice.
+        shown = out[:1500]
+        _audit_log("run_opencli", command, "ok", result=shown[:240])
+        tag = f"[opencli-{kind}]"
+        return f"{tag} {shown}" + ("" if len(out) <= 1500 else f"\n…({len(out)-1500} more chars)")
+    except subprocess.TimeoutExpired:
+        return f"[OpenCLI timeout] `opencli {command}` exceeded 180s."
+    except Exception as e:  # pragma: no cover - defensive
+        return f"[OpenCLI error] {type(e).__name__}: {e}"
+
+
+def _run_opencli_tool(**kw):
+    return run_opencli(kw.get("command"), _truthy(kw.get("confirm", False)),
+                       _truthy(kw.get("foreground", False)))
+
+
 # Phase 4: fire-and-forget acknowledgment token. When Hermes is delegated in the
 # background, think() returns this immediately so the voice/mic path stays live;
 # the real answer arrives later via the on_done callback.
@@ -1234,41 +1535,70 @@ def delegate_to_hermes(task: str, timeout: int = 300, max_turns: int = 15,
     except (TypeError, ValueError):
         max_turns = 6
 
-    destructive = bool(_DESTRUCTIVE_RE.search(gate_target))
-
-    # --- Destruction path: enforce the approval gate structurally -----------
-    if destructive:
+    # Phase 1: Allowlist gate — only pre-approved safe tasks run without confirm.
+    # Mutating/file-changing tasks always need confirm (load-bearing before Phases 2+7).
+    is_safe = _is_safe_task(gate_target)
+    needs_confirm = not is_safe
+    _audit_log("delegate_to_hermes", gate_target, "safe" if is_safe else "needs_confirm", confirm=confirm, extra={"is_safe": is_safe, "needs_confirm": needs_confirm, "timeout": timeout, "max_turns": max_turns})
+    # Phase 2: session registry — every delegation gets a job ID, non-blocking, proactive.
+    import jobs as _jobs
+    # create job early so waiting-on-confirm is also tracked (queryable, not hidden in latch)
+    jid = _jobs.create(gate_target[:200], tier="hermes", background=background)
+    if needs_confirm:
         if not confirm:
             _PENDING_DESTRUCTIVE["task"] = task
-            return ("[NEEDS_CONFIRM] That task would change or delete something "
-                    "on this machine. If you want me to proceed, say or type "
-                    "'confirm' and I'll run it through Hermes: "
-                    f"\"{task}\"")
-        # confirm=True: only release it if it matches the latched task, so a
-        # stray "confirm" can't authorize a different destructive command.
+            _jobs.update(jid, state="waiting-on-confirm", note="needs confirm — say 'confirm' to run", summary=f"Waiting for confirm: {gate_target[:120]}")
+            _audit_log("delegate_to_hermes", gate_target, "NEEDS_CONFIRM", confirm=False, extra={"jid": jid})
+            return (f"[NEEDS_CONFIRM:{jid}] That task changes state or isn't on the pre-approved safe list. "
+                    "If you want me to proceed, say or type 'confirm' and I'll run it through Hermes: "
+                    f"\"{task}\" (job {jid})")
         if _PENDING_DESTRUCTIVE["task"] != task:
             _PENDING_DESTRUCTIVE["task"] = task
+            _jobs.update(jid, state="waiting-on-confirm", note="latch mismatch — re-issue exact task then confirm")
+            _audit_log("delegate_to_hermes", gate_target, "NEEDS_CONFIRM_latch_mismatch", confirm=True, extra={"jid": jid})
             return ("[NEEDS_CONFIRM] Please re-issue the exact task and then "
                     "confirm, so I run the right one.")
-        _PENDING_DESTRUCTIVE["task"] = None  # consumed
+        _PENDING_DESTRUCTIVE["task"] = None
+        _jobs.update(jid, state="running", note="confirmed — launching Hermes")
+        _audit_log("delegate_to_hermes", gate_target, "confirmed", confirm=True, extra={"jid": jid})
+    else:
+        _jobs.update(jid, state="running", note="safe — launching Hermes")
 
     # --- Execution path -----------------------------------------------------
-    # Phase 4: fire-and-forget. Launch Hermes in a daemon thread, return the
-    # "working" ack NOW, and deliver the real answer via on_done when it lands.
+    # Phase 2+4: non-blocking. Front never blocks; status via jobs registry + WS listener.
     if background and callable(on_done):
+        jid_bg = jid
         def _bg():
+            j = jid_bg
             try:
                 result = _run_hermes_sync(task, timeout, max_turns, progress_cb)
+                if result.startswith("[Error]"):
+                    _jobs.update(j, state="error", error=result[:500], result=result, summary=result[:120])
+                    _audit_log("delegate_to_hermes", gate_target, "background_error", result=result, confirm=confirm, extra={"jid": j})
+                else:
+                    _jobs.update(j, state="done", result=result, summary=result[:200])
+                    _audit_log("delegate_to_hermes", gate_target, "background_done", result=result, confirm=confirm, extra={"jid": j})
             except Exception as e:
                 result = f"[Error] Hermes background task failed: {type(e).__name__}: {e}"
+                _jobs.update(j, state="error", error=str(e)[:500], result=result, summary=str(e)[:120])
+                _audit_log("delegate_to_hermes", gate_target, "background_error", result=result, confirm=confirm, extra={"jid": j})
             try:
                 on_done(result)
             except Exception as e:
                 print(f"[HERMES] on_done callback raised: {e}", flush=True)
         threading.Thread(target=_bg, daemon=True).start()
-        return HERMES_BACKGROUND_ACK
+        _audit_log("delegate_to_hermes", gate_target, "background_queued", confirm=confirm, extra={"jid": jid})
+        return f"{HERMES_BACKGROUND_ACK} (job {jid})"
 
-    return _run_hermes_sync(task, timeout, max_turns, progress_cb)
+    # sync path — still tracked in registry so HUD shows it even while blocked
+    _jobs.update(jid, state="running", note="sync execution")
+    result = _run_hermes_sync(task, timeout, max_turns, progress_cb)
+    if result.startswith("[Error]"):
+        _jobs.update(jid, state="error", error=result[:500], result=result, summary=result[:120])
+    else:
+        _jobs.update(jid, state="done", result=result, summary=result[:200])
+    _audit_log("delegate_to_hermes", gate_target, "executed", result=result, confirm=confirm, extra={"jid": jid})
+    return result
 
 
 # ── Grounded Hermes delegation (Pillar C: memory layer) ─────────────────────
@@ -1329,50 +1659,31 @@ def _app_context(task: str) -> str:
 
 
 def delegate_to_hermes_grounded(task: str, timeout: int = 300, max_turns: int = 15,
-                                confirm: bool = False, background: bool = False,
-                                on_done=None, progress_cb=None) -> str:
-    """Delegate a task to Hermes WITH JARVIS's memory context attached.
-
-    Prepends: the durable profile (who the user is, machine facts, harness
-    contract), the recent session window (so Hermes isn't amnesiac between
-    turns), an app-location block (so it can drive installed apps by exact path),
-    and a grounding instruction (cite the Second Brain vault, do not
-    fabricate). The actual execution/confirm-gate is delegate_to_hermes.
-
-    Use this instead of delegate_to_hermes for any general JARVIS task so the
-    harness remembers context and stays grounded against hallucinations.
+                                 confirm: bool = False, background: bool = False,
+                                 on_done=None, progress_cb=None) -> str:
+    """Delegate to Hermes WITH per-delegate context assembly (Phase 4).
+    Uses context_assembler.assemble_brief for hermes formatting, logs brief.
     """
-    from session_store import recent_summary
-    profile = _load_profile()
-    recent = recent_summary(6)
-    appctx = _app_context(task)
-    # Phase 13: recall-shaped queries pull matching past turns into context.
-    recall_block = ""
-    if re.search(r"\b(remember|last time|did i|what did i|previously|"
-                 r"before|history of (?:my|our) (?:chats?|conversations?))\b",
-                 task, re.I):
-        try:
-            import session_index as si
-            si.rebuild()
-            hits = si.search_sessions(task, 3)
-            if hits:
-                recall_block = ("[PAST SESSION MATCHES]\n" + si.format_hits(hits)
-                                + "\n\n")
-        except Exception:
-            pass
-    prefix = (
-        "CONTEXT (JARVIS persistent memory):\n"
-        f"[PROFILE]\n{profile}\n\n"
-        f"[RECENT SESSION]\n{recent}\n\n"
-        + (f"{recall_block}" if recall_block else "")
-        + f"[KNOWLEDGE BASE] {_VAULT_HINT}\n"
-        "Ground factual answers in the Second Brain vault (semantic search it) and "
-        "cite the source note name. If the vault has nothing relevant, say so rather "
-        "than inventing. Respect the user's stated preferences in [PROFILE].\n\n"
-    )
-    if appctx:
-        prefix += appctx + "\n"
-    prefix += "TASK:\n"
+    try:
+        import context_assembler as ca
+        prefix = ca.assemble_brief(task, delegate="hermes")
+    except Exception:
+        # fallback to legacy assembly if assembler missing
+        from session_store import recent_summary
+        profile = _load_profile()
+        recent = recent_summary(6)
+        appctx = _app_context(task)
+        prefix = (
+            "CONTEXT (JARVIS persistent memory):\n"
+            f"[PROFILE]\n{profile}\n\n"
+            f"[RECENT SESSION]\n{recent}\n\n"
+            + f"[KNOWLEDGE BASE] {_VAULT_HINT}\n"
+            "Ground factual answers in the Second Brain vault (semantic search it) and "
+            "cite the source note name. If nothing relevant, say so. Respect [PROFILE].\n\n"
+        )
+        if appctx:
+            prefix += appctx + "\n"
+        prefix += "TASK:\n"
     return delegate_to_hermes(prefix + task, timeout=timeout, max_turns=max_turns,
                               confirm=confirm, raw_task=task,
                               background=background, on_done=on_done,
@@ -1383,21 +1694,94 @@ def delegate_to_hermes_grounded(task: str, timeout: int = 300, max_turns: int = 
 # Collapses delegate_task / delegate_to_hermes / delegate_to_hermes_grounded
 # into ONE function. The router picks the backend; delegate() executes.
 
+_DELEGATE_REGISTRY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "delegate_registry.json")
+_DELEGATE_CACHE = None
+_DELEGATE_CACHE_MTIME = 0
+
+def _load_delegate_registry():
+    """Load delegate_registry.json with mtime cache. Returns dict or None."""
+    global _DELEGATE_CACHE, _DELEGATE_CACHE_MTIME
+    try:
+        mtime = os.path.getmtime(_DELEGATE_REGISTRY_PATH)
+        if _DELEGATE_CACHE is not None and mtime == _DELEGATE_CACHE_MTIME:
+            return _DELEGATE_CACHE
+        with open(_DELEGATE_REGISTRY_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        _DELEGATE_CACHE = data
+        _DELEGATE_CACHE_MTIME = mtime
+        return data
+    except Exception:
+        return None
+
 def _detect_backend(task: str) -> str:
-    """Auto-detect backend from task text using intake's verb→backend map.
-    Returns 'hermes' for anything that doesn't match a local tool."""
+    """Auto-detect backend using declarative delegate_registry.json + intake verb map.
+    Coding intent (code/website/html/react) routes to opencode before generic fallback."""
+    # Phase 3.6: OpenCLI ("turn any website into a CLI" via logged-in Chrome).
+    # Route to the opencli backend when the user explicitly names OpenCLI, or
+    # names a known OpenCLI site adapter (facebook/reddit/github/...) in a
+    # scrape/use/read context. Keeps it out of the generic hermes/manus paths.
+    _OPENCLI_EXPLICIT_RE = re.compile(
+        r"\b(opencli|open[- ]?cli|using opencli|via opencli|with opencli)\b", re.I)
+    _OPENCLI_SITE_RE = re.compile(
+        r"\b(facebook|instagram|twitter|\bx\b|reddit|linkedin|weibo|douyin|"
+        r"xiaohongshu|zhihu|tiktok|github|gmail|notion|discord|telegram|wechat|"
+        r"slack|amazon|youtube|wikipedia|arxiv|hackernews|spotify|medium|"
+        r"producthunt|stackoverflow|steam|imdb|pinterest|substack|devto|"
+        r"google|bing|duckduckgo)\b", re.I)
+    if _OPENCLI_EXPLICIT_RE.search(task):
+        return "opencli"
+    # "scrape/read/use <site>" with a known OpenCLI adapter -> opencli backend
+    if _OPENCLI_SITE_RE.search(task) and re.search(
+            r"\b(scrape|scraping|use|read|get|pull|fetch|summary|search|feed|"
+            r"trending|whoami|notifications|post|comment|dm|message|marketplace)\b",
+            task, re.I):
+        return "opencli"
+    # Phase 5: coding heuristic — catches "code a website" even when intake verb misses "code"
+    if re.search(r"\b(code|debug|refactor|implement|fix\s+(the\s+)?code|build\s+(a\s+)?(website|site|app|api)|create\s+(a\s+)?(website|web\s*app|react|laravel|python\s+file|html\s+page))\b", task, re.I) or \
+       (re.search(r"\b(website|web\s*site|html|react|laravel|python\s+file|javascript|api)\b", task, re.I) and re.search(r"\b(create|make|build|generate|code|implement)\b", task, re.I)):
+        return "opencode"
+    # Try registry verb_map first (declarative, no hardcoded list)
+    reg = _load_delegate_registry()
+    if reg:
+        verb_map = reg.get("verb_map", {})
+        # Use intake to resolve verb
+        try:
+            from intake import resolve_intent, load_corpus
+            intent = resolve_intent(task, load_corpus())
+            verb = (intent.verb or "").lower()
+            handle = verb_map.get(verb)
+            if handle:
+                # Map handle -> delegate id that handles it (highest priority first)
+                delegates = sorted(reg.get("delegates", []), key=lambda d: d.get("priority", 0), reverse=True)
+                for d in delegates:
+                    if handle in d.get("handles", []) or handle == d.get("id"):
+                        be = d.get("id")
+                        # Manus guard: media vs code/filesystem -> hermes floor
+                        if be == "manus" and re.search(
+                                r"\b(code|website|web ?site|html|css|javascript|js|script|api|program|landing page|web ?page|site|web ?app|react|laravel|python file|folder|directory|file|documents?|downloads?|organize|rename|move|copy|verify)\b", task, re.I):
+                            return "hermes"
+                        return be
+                # handle found but no delegate? return handle itself for local dispatch
+                if handle in ("music", "desktop", "web", "chatgpt", "manus"):
+                    if handle == "manus" and re.search(r"\b(code|website|file|folder|organize)\b", task, re.I):
+                        return "hermes"
+                    return handle
+        except Exception:
+            pass
+    # Fallback: legacy intake verb_backend (hardcoded list kept for compat)
     try:
         from intake import verb_backend, resolve_intent, load_corpus
         intent = resolve_intent(task, load_corpus())
         be = verb_backend(intent.verb)
         if be and be in ("music", "desktop", "web", "manus", "chatgpt", "native"):
-            # Object-aware guard: make/build/create/generate map to manus for
-            # MEDIA generation, but code-shaped objects (websites, scripts,
-            # apps) are coding work - never send those to Manus.
             if be == "manus" and re.search(
                     r"\b(code|website|web ?site|html|css|javascript|js|"
                     r"script|api|program|landing page|web ?page|site|"
                     r"web ?app|react|laravel|python file)\b", task, re.I):
+                return "hermes"
+            if be == "manus" and re.search(
+                    r"\b(folder|directory|file|documents?|downloads?|desktop|"
+                    r"organize|rename|move|copy|verify)\b", task, re.I):
                 return "hermes"
             return be
     except Exception:
@@ -1469,20 +1853,98 @@ def _explicit_specialist(task: str):
     return False, None, task
 
 
-def _run_specialist(task: str, agent: str | None = None, timeout: int = 300) -> str:
-    """Run a task through the OpenCode specialist tier (jarvis-demo/opencode.json).
+# ---------------------------------------------------------------------------
+# External CLI agent tier (Phase 16.5): gemini-cli / codex / claude.
+# Data-driven via cli_agents.json; binaries resolved at CALL TIME so
+# installing a CLI later needs zero code changes. "using gemini" / "via
+# chatgpt" forces this tier with NO Hermes fallback (user's rule).
+_CLI_AGENTS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "cli_agents.json")
 
-    Each agent there is a scoped md-defined worker on an OmniRoute model with a
-    restricted toolset - the middle tier between local fast-path tools and the
-    full Hermes harness. Falls back to None (caller routes to hermes) on any
-    harness failure so JARVIS never breaks when opencode is absent.
+
+def _cli_registry() -> dict:
+    try:
+        with open(_CLI_AGENTS_PATH, encoding="utf-8") as f:
+            return {k: v for k, v in json.load(f).items() if not k.startswith("_")}
+    except Exception:
+        return {}
+
+
+def _explicit_cli_agent(task: str):
+    """Detect 'using/via/with <cli-name>' for an external CLI tier.
+
+    Returns (forced: bool, name_or_None, cleaned_task). Only matches when the
+    user explicitly names the CLI — auto-detection NEVER sends work here
+    (Hermes stays the default executor).
     """
-    import shutil
+    m = re.search(r"\b(?:using|via|with|through)\s+(?:the\s+)?"
+                  r"(gemini(?:\s*cli)?|chatgpt(?:\s*cli)?|codex|claude(?:\s*code)?)\b",
+                  task, re.I)
+    if not m:
+        return False, None, task
+    spoken = re.sub(r"\s+", " ", m.group(1).lower().strip())
+    reg = _cli_registry()
+    for key in reg:
+        if spoken == key or spoken == f"{key} cli" or \
+           (key == "claude" and spoken == "claude code"):
+            cleaned = (task[:m.start()] + " " + task[m.end():]).strip(" ,.()")
+            return True, key, (cleaned or task)
+    return False, None, task
+
+
+def _run_cli_agent(task: str, name: str, timeout: int = 300) -> str:
+    """Run a one-shot prompt through an external CLI agent with per-delegate brief (Phase 4/5)."""
+    import shutil as _shutil
+    import subprocess
+    spec = _cli_registry().get(name)
+    if not spec:
+        return f"[cli:{name}] not in cli_agents.json."
+    # Phase 4: brief for ideation delegates
+    try:
+        import context_assembler as ca
+        brief = ca.assemble_brief(task, delegate=name)
+        task = brief + task
+    except Exception:
+        pass
+    exe = _shutil.which(spec.get("bin", ""))
+    if exe is None:
+        return (f"[cli:{name}] '{spec.get('bin')}' is not installed on PATH, sir. "
+                f"Install it and I'll route to it with no other changes.")
+    cmd = [exe]
+    flag = spec.get("prompt_flag")
+    if flag:
+        cmd.append(flag)
+    cmd.append(task)
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              timeout=timeout,
+                              cwd=os.path.dirname(os.path.abspath(__file__)))
+    except subprocess.TimeoutExpired:
+        return f"[cli:{name}] timed out after {timeout}s."
+    out = (proc.stdout or "").strip()
+    if not out and proc.returncode != 0:
+        err = (proc.stderr or "").strip()
+        # npm .cmd shims often print usage noise; surface the real error only.
+        return f"[cli:{name}] failed ({proc.returncode}): {err[:300] or 'no output'}"
+    return out.strip() or "(empty response)"
+
+
+def _run_specialist(task: str, agent: str | None = None, timeout: int = 300) -> str:
+    """Run a task through the OpenCode specialist tier with per-delegate brief (Phase 4)."""
+    import shutil, jobs as jobreg
     import subprocess
     oc = shutil.which("opencode")
     if oc is None:
         return "[specialist] OpenCode not installed; route to hermes."
-    # npm shims are .cmd files - CreateProcess can't exec them directly.
+    try:
+        import context_assembler as ca
+        brief = ca.assemble_brief(task, delegate=agent or "opencode")
+        task = brief + task
+    except Exception:
+        pass
+    # Phase 2: registry — sync specialist also tracked as job for proactive reporting
+    jid = jobreg.create(task[:200], tier="specialist", agent=agent, background=False)
+    jobreg.update(jid, state="running", note=f"sync specialist {agent or 'build'}")
     cmd = [oc, "run"]
     if agent:
         cmd += ["--agent", agent]
@@ -1494,10 +1956,224 @@ def _run_specialist(task: str, agent: str | None = None, timeout: int = 300) -> 
         return f"[specialist:{agent or 'build'}] timed out after {timeout}s."
     out = (proc.stdout or "").strip()
     if proc.returncode != 0 and not out:
-        return f"[specialist] failed: {(proc.stderr or 'unknown error')[:300]}"
-    # strip the "agent · model" header line opencode prints
+        err = (proc.stderr or 'unknown error')[:300]
+        jobreg.update(jid, state="error", error=err, summary=err[:120])
+        return f"[specialist] failed: {err}"
     lines = [l for l in out.splitlines() if l.strip() and not l.startswith(">")]
-    return "\n".join(lines).strip() or "(empty response)"
+    body = "\n".join(lines).strip() or "(empty response)"
+    # Phase 6: check if delegate needs clarification (missing context)
+    try:
+        import context_assembler as ca
+        if ca.delegate_needs_clarification(body):
+            jobreg.update(jid, state="waiting-on-confirm", note="delegate needs clarification", summary=body[:120])
+            return body
+    except Exception:
+        pass
+    jobreg.update(jid, state="done", result=body[-4000:], summary=body.splitlines()[-1][:200] if body else "done")
+    return body
+
+
+# ---------------------------------------------------------------------------
+# Specialist grounding + background execution (async specialist tier)
+# ---------------------------------------------------------------------------
+
+def _specialist_context(task: str, max_hits: int = 3) -> str:
+    """Assemble a vault-grounding block for a specialist brief.
+
+    Queries the Second Brain (semantic when available, keyword fallback) for
+    content matching the task and returns a context block to prepend. The
+    block LEAVES the orchestrator at spawn — the worker quotes provided facts
+    instead of inventing them; the orchestrator keeps nothing.
+    """
+    try:
+        result = execute_tool("search_vault_semantic",
+                              {"query": task, "limit": max_hits})
+        if not result or "[Error" in result[:20] or "no results" in result.lower():
+            raise ValueError(result)
+    except Exception:
+        try:
+            result = execute_tool("search_vault", {"query": task, "limit": max_hits})
+        except Exception:
+            return ""
+    if not result or "[Error" in result[:20] or "no results" in result.lower():
+        return ""
+    # Trim to a budget so briefs stay lean.
+    text = result.strip()
+    if len(text) > 2400:
+        text = text[:2400] + "\n…(truncated)"
+    return ("[CONTEXT FROM SECOND BRAIN - ground ONLY in these facts; "
+            "if something needed is missing here, say so plainly]\n"
+            + text + "\n[END CONTEXT]\n\n")
+
+
+_BG_SPECIALISTS: dict[str, dict] = {}   # jid -> {proc, agent}
+_BG_LOCK = threading.Lock()
+
+
+def _run_specialist_bg(task: str, agent: str | None, timeout: int,
+                       on_done=None) -> tuple[str, str]:
+    """Spawn a specialist as a non-blocking process; returns (ack, jid). Phase 4 brief via context_assembler."""
+    import shutil
+    import subprocess
+    import jobs as jobreg
+    oc = shutil.which("opencode")
+    if oc is None:
+        return ("[specialist] OpenCode not installed; route to hermes.", "")
+    # Phase 4: per-delegate brief (opencode gets code-focused vault slice)
+    try:
+        import context_assembler as ca
+        brief = ca.assemble_brief(task, delegate=agent or "opencode")
+        full_task = brief + task
+    except Exception:
+        grounded = _specialist_context(task)
+        full_task = (grounded + task) if grounded else task
+
+    jid = jobreg.create(task, tier="specialist", agent=agent, background=True)
+    cmd = [oc, "run"]
+    if agent:
+        cmd += ["--agent", agent]
+    cmd.append(full_task)
+
+    try:
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, encoding="utf-8", errors="replace",
+            cwd=os.path.dirname(os.path.abspath(__file__)))
+    except Exception as e:
+        jobreg.update(jid, state="error", error=str(e)[:200])
+        return f"[specialist] failed to launch: {e}", jid
+
+    with _BG_LOCK:
+        _BG_SPECIALISTS[jid] = {"proc": proc, "agent": agent}
+
+    def _watch():
+        import threading as _t  # noqa: F401 (clarity)
+        try:
+            out, err = proc.communicate(timeout=timeout)
+            rc = proc.returncode
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            try:
+                out, err = proc.communicate(timeout=5)
+            except Exception:
+                out, err = "", ""
+            summary = (out or "").strip().splitlines()[-1][:200] if (out or "").strip() \
+                else f"timed out after {timeout}s"
+            jobreg.update(jid, state="timeout", error=f"timed out after {timeout}s",
+                          summary=summary)
+            if on_done:
+                on_done(f"[specialist:{agent or 'build'}] timed out after {timeout}s.")
+            with _BG_LOCK:
+                _BG_SPECIALISTS.pop(jid, None)
+            return
+        finally:
+            with _BG_LOCK:
+                _BG_SPECIALISTS.pop(jid, None)
+
+        stdout = (out or "").strip()
+        # strip opencode's "> agent · model" header line
+        body = "\n".join(l for l in stdout.splitlines()
+                         if l.strip() and not l.startswith(">")).strip()
+        if rc == 0 and body:
+            summary = body.splitlines()[-1][:200]
+            jobreg.update(jid, state="done", result=body[-4000:], summary=summary)
+            if on_done:
+                on_done(body)
+        else:
+            reason = ((err or "").strip() or "non-zero exit")[-300:]
+            jobreg.update(jid, state="error", error=reason,
+                          summary=summary if False else (body.splitlines()[-1][:200] if body else "failed"))
+            if on_done:
+                on_done(f"[specialist:{agent or 'build'}] failed: {reason}")
+
+    threading.Thread(target=_watch, daemon=True,
+                     name=f"spec-watcher-{jid}").start()
+    jobreg.update(jid, state="running",
+                  note=f"dispatched to {agent or 'default build agent'}")
+    label = agent or "build agent"
+    ack = (f"Working on it in the background, sir — {label} has the task. "
+           "I'll speak up when it's done.")
+    return f"⟳ SPECIALIST_BACKGROUND:{ack}", jid
+
+
+def run_autonomous(goal: str, timeout: int = 1800) -> str:
+    """Phase 15: launch a supervised autonomous Hermes job — allowlist-gated (Phase 1)."""
+    import autonomous
+    goal = str(goal or "").strip()
+    if not goal:
+        return "[Error] No goal given for autonomous run."
+    # Phase 1: autonomous goals that mutate state need confirm (allowlist flip)
+    if not _is_safe_task(goal):
+        if not _PENDING_DESTRUCTIVE.get("autonomous") or _PENDING_DESTRUCTIVE["autonomous"] != goal:
+            _PENDING_DESTRUCTIVE["autonomous"] = goal
+            _audit_log("run_autonomous", goal, "NEEDS_CONFIRM")
+            return ("[NEEDS_CONFIRM] That goal could change state on this machine and isn't on the safe allowlist. "
+                    f"Say 'confirm' to let me run it autonomously: \"{goal}\"")
+        _PENDING_DESTRUCTIVE.pop("autonomous", None)
+        _audit_log("run_autonomous", goal, "confirmed")
+    ack, jid = autonomous.start_goal(goal, timeout=timeout,
+                                     progress_cb=getattr(_tools_tls, "cb", None))
+    _audit_log("run_autonomous", goal, "queued", extra={"jid": jid})
+    return ack
+
+
+def job_control(action: str, jid: str | None = None) -> str:
+    """Phase 15/16: status query / stop for autonomous jobs."""
+    import autonomous
+    action = str(action or "").strip().lower()
+    if action == "stop":
+        # Voice path ("stop the task") arrives WITHOUT an id — resolve the
+        # single active job instead of failing on None.
+        if jid is None:
+            js = autonomous.active_jobs()
+            jid = js[0] if js else None
+        return (autonomous.cancel(jid) and "Stopped, sir."
+                or "[Error] No running autonomous job to stop.")
+    if action == "status":
+        return autonomous.latest_status(jid)
+    return f"[Error] Unknown job_control action '{action}' (use status|stop)."
+
+
+# Phase 18: durable memory writes. "remember X" appends a bullet to
+# jarvis-profile.md under ## Remembered — deduped, capped at _REMEMBER_CAP
+# lines so the profile injected into JARVIS_SYSTEM can't grow unbounded.
+_PROFILE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "jarvis-profile.md")
+_REMEMBER_HEADING = "## Remembered"
+_REMEMBER_CAP = 40
+
+
+def remember_fact(text: str) -> str:
+    """Append a durable fact to jarvis-profile.md. Returns a spoken confirmation."""
+    fact = re.sub(r"^(please\s+)?(remember( that)?|note that|"
+                  r"keep in mind( that)?|don'?t forget( that)?)\s*", "",
+                  str(text or "").strip(), flags=re.I).strip().rstrip(".")
+    if not fact:
+        return "[Error] Nothing to remember — say 'remember' followed by the fact."
+    fact = fact[0].upper() + fact[1:]
+    line = f"- {fact}"
+    try:
+        content = open(_PROFILE_PATH, encoding="utf-8").read() \
+                  if os.path.exists(_PROFILE_PATH) else "# JARVIS Profile\n"
+    except OSError as e:
+        return f"[Error] Could not read profile: {e}"
+    if any(l.lower() == line.lower() for l in content.splitlines()):
+        return f"Already noted, sir: {fact}."
+    if _REMEMBER_HEADING not in content:
+        content = content.rstrip("\n") + f"\n\n{_REMEMBER_HEADING}\n{line}\n"
+    else:
+        lines = content.splitlines()
+        idx = lines.index(_REMEMBER_HEADING)
+        kept = [l for l in lines[idx + 1:] if l.startswith("- ")]
+        kept.append(line)
+        kept = kept[-_REMEMBER_CAP:]
+        lines = lines[:idx + 1] + kept
+        content = "\n".join(lines) + "\n"
+    try:
+        open(_PROFILE_PATH, "w", encoding="utf-8").write(content)
+    except OSError as e:
+        return f"[Error] Could not write profile: {e}"
+    return f"Noted, sir. I'll remember: {fact}."
 
 
 _SPECIALIST_ROUTES = (
@@ -1520,6 +2196,87 @@ def _pick_specialist(task: str) -> str | None:
 
 
 # Local / direct backends (no Hermes spawn). Each returns a string result.
+def _dispatch_opencli(task: str, confirm: bool) -> str:
+    """Translate a natural phrase into an OpenCLI command, then run_opencli().
+
+    Maps common phrases to the right `opencli <site> <subcommand>` form and
+    forwards the confirm gate. This is the bridge from delegate() -> run_opencli.
+    """
+    t = task.strip()
+    low = t.lower()
+
+    # Explicit "opencli <site> <subcommand>" already well-formed -> pass through.
+    m = re.match(r"^open[- ]?cli\s+(.+)$", low)
+    if m:
+        return run_opencli(m.group(1).strip(), confirm=confirm)
+
+    # site + verb -> opencli <site> <sub>
+    SITE = {
+        "facebook": "facebook", "fb": "facebook", "instagram": "instagram",
+        "ig": "instagram", "twitter": "twitter", "x": "twitter",
+        "reddit": "reddit", "linkedin": "linkedin", "github": "github",
+        "youtube": "youtube", "yt": "youtube", "wikipedia": "wikipedia",
+        "wiki": "wikipedia", "arxiv": "arxiv", "hackernews": "hackernews",
+        "hn": "hackernews", "spotify": "spotify", "medium": "medium",
+        "producthunt": "producthunt", "stackoverflow": "stackoverflow",
+        "steam": "steam", "imdb": "imdb", "pinterest": "pinterest",
+        "substack": "substack", "devto": "devto", "amazon": "amazon",
+        "google": "google", "bing": "bing", "duckduckgo": "duckduckgo",
+        "tiktok": "tiktok", "zhihu": "zhihu", "douyin": "douyin",
+        "xiaohongshu": "xiaohongshu", "weibo": "weibo", "notion": "notion",
+        "discord": "discord", "telegram": "telegram", "wechat": "wechat",
+        "slack": "slack",
+    }
+    found_site = None
+    for key, val in SITE.items():
+        if re.search(rf"\b{re.escape(key)}\b", low):
+            found_site = val
+            break
+
+    if found_site:
+        if "trending" in low:
+            sub = "trending"
+        elif re.search(r"\b(feed|timeline|home)\b", low):
+            sub = "feed"
+        elif re.search(r"\b(notif|alert)\b", low):
+            sub = "notifications"
+        elif re.search(r"\b(friend|friends)\b", low):
+            sub = "friends"
+        elif re.search(r"\b(group|groups)\b", low):
+            sub = "groups"
+        elif re.search(r"\b(market|marketplace)\b", low):
+            sub = "marketplace-listings"
+        elif re.search(r"\b(summar|y|about|info|profile)\b", low):
+            sub = "summary" if found_site in ("wikipedia", "arxiv") else "profile"
+        elif re.search(r"\b(search|find|scrape|lookup)\b", low):
+            sub = "search"
+        elif re.search(r"\b(post|publish|send|comment|dm|message|reply|create|upload)\b", low):
+            sub = "post" if found_site == "facebook" else "search"
+        elif re.search(r"\b(whoami|me|account)\b", low):
+            sub = "whoami"
+        else:
+            # No explicit verb: wikipedia/arxiv default to summary; everything
+            # else defaults to feed (most sites have a feed/timeline).
+            sub = "summary" if found_site in ("wikipedia", "arxiv") else "feed"
+        # Extract a query tail when present (e.g. "...search python" -> query).
+        # Strip the site name first so it isn't doubled into the query.
+        stripped = re.sub(rf"\b{re.escape(found_site)}\b", "", low).strip()
+        q = ""
+        qm = re.search(r"(?:search|find|scrape|lookup|summary|about|profile|post|read|for)\s+(?:for\s+|on\s+|about\s+)?(.+)$", stripped)
+        if qm and sub in ("search", "summary", "profile", "post"):
+            q = qm.group(1).strip()
+        cmd = f"{found_site} {sub}".rstrip()
+        if q and sub in ("search", "summary", "profile", "post"):
+            # Site adapters take the query as a single positional argument; a
+            # multi-word query must be quoted so it isn't split into N args.
+            q_quoted = f'"{q}"' if " " in q else q
+            cmd = f"{found_site} {sub} {q_quoted}"
+        return run_opencli(cmd, confirm=confirm)
+
+    # Fallback: hand the whole thing to opencli as a raw command attempt.
+    return run_opencli(t, confirm=confirm)
+
+
 _LOCAL_DISPATCH = {
     "music": lambda task: (
         execute_tool("stop_music", {}) if "stop" in task.lower()
@@ -1530,6 +2287,7 @@ _LOCAL_DISPATCH = {
     "chatgpt": lambda task: execute_tool("ask_chatgpt",
                                          {"prompt": task, "submit": True}),
     "manus": lambda task: __import__("manus_agent").delegate_to_manus(task),
+    "opencli": lambda task: _dispatch_opencli(task, confirm),
 }
 
 
@@ -1656,35 +2414,76 @@ def delegate(
         if cw is not None:
             cw.append(task, "command")
 
+    # ---- Explicit external-CLI invocation ("using gemini", "via chatgpt") ----
+    # Runs BEFORE everything else; the user's choice is authoritative and
+    # failures are reported VERBATIM — no silent Hermes fallback.
+    cli_forced, cli_name, cli_task = _explicit_cli_agent(task)
+    if cli_forced:
+        result = _run_cli_agent(cli_task, cli_name, timeout=timeout)
+        if cw is not None:
+            cw.append(task, "command", tool=f"cli:{cli_name}", result=result[:200])
+        return result
+
     # ---- Explicit harness invocation (user names the tool) ----------------
     # "create a website using opencode", "via project-runner", ...
     # Runs BEFORE auto-detection; the user's choice is authoritative, so
     # failures are reported verbatim instead of silently falling to Hermes.
     forced, forced_agent, cleaned = _explicit_specialist(task)
     if forced:
+        if background:
+            ack, jid = _run_specialist_bg(cleaned, forced_agent,
+                                          timeout=timeout, on_done=on_done)
+            return ack
         result = _run_specialist(cleaned, forced_agent, timeout=timeout)
         return result
 
     if backend is None:
         backend = _detect_backend(task)
 
-    # Fast path: local tools (no Hermes spawn)
+    # Fast path: local tools (no Hermes spawn) — includes registry-driven handles
     handler = _LOCAL_DISPATCH.get(backend)
     if handler:
+        # Phase 1 audit: local dispatches also logged
+        _audit_log(f"delegate:{backend}", task[:200], "local_dispatch", extra={"backend": backend})
         return handler(task)
 
-    # Specialist tier: unmatched tasks with a strong domain match go to a
-    # scoped OpenCode agent (~5s) before escalating to the full Hermes
-    # harness (~25s). Hermes stays the floor - any specialist failure or
-    # non-match falls through to it unchanged.
+    # Phase 5: CLI delegates (gemini/claude/codex) — explicit or via registry handles
+    if backend in ("gemini", "claude", "codex"):
+        result = _run_cli_agent(task, backend, timeout=timeout)
+        # CLI delegates also tracked in jobs for proactive reporting
+        try:
+            import jobs as _jr
+            jid = _jr.create(task[:200], tier="cli", agent=backend, background=False)
+            if result.startswith("[cli:") and "failed" in result.lower():
+                _jr.update(jid, state="error", error=result[:300], summary=result[:120])
+            else:
+                _jr.update(jid, state="done", result=result[-4000:], summary=result.splitlines()[-1][:200] if result else "done")
+        except Exception:
+            pass
+        return result
+
+    # Specialist tier: opencode or hermes floor with domain match
+    if backend == "opencode":
+        # Direct opencode delegate (verb code/debug/refactor)
+        if background:
+            ack, jid = _run_specialist_bg(task, None, timeout=timeout, on_done=on_done)
+            return ack
+        result = _run_specialist(task, None, timeout=timeout)
+        if not result.startswith("[specialist]"):
+            return result
+        # fall through to hermes if opencode failed/unavailable
     if backend == "hermes":
         agent = _pick_specialist(task)
         if agent:
+            if background:
+                ack, jid = _run_specialist_bg(task, agent,
+                                              timeout=timeout, on_done=on_done)
+                return ack
             result = _run_specialist(task, agent, timeout=timeout)
             if not result.startswith("[specialist]"):
                 return result
 
-    # Hermes path: full agent with confirm gate + grounding
+    # Hermes path: full agent with confirm gate + grounding (Phase 4 brief)
     if grounded:
         return delegate_to_hermes_grounded(
             task, timeout=timeout, max_turns=max_turns,
@@ -1807,41 +2606,123 @@ def open_application(app: str, action: str = None, query: str = None) -> str:
     import os as _os
     system = platform.system()
     requested = _clean_app_name(app)
+
+    # 0) Shell folders: "open documents folder" / "open downloads" is a File
+    # Explorer navigation, not an app launch. Resolve BEFORE app matching so
+    # the registry can never misread 'folder' as a substring app name.
+    _n0 = requested.lower().strip()
+    _n0 = re.sub(r"\b(folders?|directory|dir)\b", "", _n0).strip()  # drop 'folder'
+    _n0 = _n0.rstrip("s").strip()                                    # tolerate plurals
+    _SHELL_DIRS = {
+        "document": "~/Documents", "download": "~/Downloads",
+        "picture": "~/Pictures", "music": "~/Music",
+        "video": "~/Videos", "desktop": "~/Desktop",
+    }
+    if _n0 in _SHELL_DIRS:
+        p = _os.path.expanduser(_SHELL_DIRS[_n0])
+        if _os.path.isdir(p):
+            try:
+                _os.startfile(p)          # Windows: opens in File Explorer
+            except AttributeError:        # non-Windows fallback
+                import subprocess as _sp
+                _sp.Popen(["xdg-open" if system == "Linux" else "open", p])
+            return f"Opened your {_n0}s folder in File Explorer, sir."
+        return f"I couldn't find the {_n0}s folder on this machine, sir."
+
     target = APP_ALIASES.get(requested.lower(), requested)
 
     # 1) Try app_registry.json first (fresh scan), then capabilities.json.
     entry = None
     try:
-        from machine_capabilities import load_registry
+        from machine_capabilities import load_registry, resolve_normalized
         reg = load_registry()
         if reg:
             n = requested.lower().strip()
             apps = reg.get("apps", {})
-            # exact match, then substring
+            # 1a) exact, then normalized ('snipping tool' == 'snippingtool').
+            # Lookup-only: no guessing before these two run.
             for key in (n, requested.lower()):
                 if key in apps:
                     entry = apps[key]
                     break
             if not entry:
+                nk = resolve_normalized(apps, n)
+                if nk:
+                    entry = apps[nk]
+            # 1b) WORD-BOUNDARY substring. Raw 'in' matching once opened
+            # fold.exe for "documents folder" ('fold' sits inside the word
+            # 'folder'); \b...\b requires the key to be a whole word.
+            # 2026-08-25: most-specific wins — longest matching whole-word key
+            # ('git bash' beats 'git').
+            if not entry:
+                import re as _re
+                # Reverse containment (spoken ⊆ key) allowed only for
+                # multi-word requests: single generic words ('updater')
+                # must not hijack a random app whose NAME contains them.
+                cands = []
                 for key in apps:
-                    if n in key or key in n:
-                        entry = apps[key]
-                        break
+                    if _re.search(rf"\b{_re.escape(key)}\b", n):
+                        cands.append(key)
+                    elif (len(n.split()) >= 2
+                          and _re.search(rf"\b{_re.escape(n)}\b", str(key))):
+                        cands.append(key)
+                if cands:
+                    best = max(cands, key=lambda k: (len(k), ))
+                    entry = apps[best]
             # Friendly product names whose exe keys share no word with them
             # ("microsoft word" vs key "winword"). Map to the exe stem and
             # retry exact/substring before falling to token scoring.
+            # 2026-08-25: substring `stem in key` was raw keyword guessing —
+            # 'code' matched INSIDE 'frcode' and launched Git's locate helper
+            # for "open vscode". Now: exact stem only; if absent, look for the
+            # stem as a PATH component (...\bin\code.cmd) among launchable
+            # entries, preferring the shortest key.
             if not entry:
+                from machine_capabilities import (
+                    _is_launchable as _stem_launchable)
                 _PRODUCT_EXE = _product_exe_map()
                 for phrase, exe_stem in _PRODUCT_EXE.items():
                     if phrase in n:
                         if exe_stem in apps:
                             entry = apps[exe_stem]
                             break
-                        for key in apps:
-                            if exe_stem in key:
-                                entry = apps[key]
-                                break
-                        if entry:
+                        # stem not a key: accept the stem as a PATH component
+                        # (...\Microsoft VS Code\bin\code.cmd) or exact file
+                        # (Code.exe is 'code' case-insensitively) — never a
+                        # bare substring of an unrelated key name.
+                        by_path = [
+                            (key, apps[key]["bin"]) for key in apps
+                            if apps[key].get("bin") and re.search(
+                                rf"[\\/]{_re.escape(exe_stem)}(\.[a-z0-9]+)?[\\/]"
+                                rf"|\\b{_re.escape(exe_stem)}\.(?:exe|cmd|lnk)$",
+                                str(apps[key]["bin"]), re.I)
+                            # exclude helper/tunnel/CLI siblings of the app
+                            # dir from the path-component match; prefer the
+                            # main GUI exe by scoring: shorter key = better,
+                            # and 'tunnel'/'helper' bins demoted.
+                            and not re.search(r"tunnel|helper|crash",
+                                              str(apps[key]["bin"]), re.I)
+                            and _stem_launchable(apps[key].get("bin"))]
+                        if by_path:
+                            best_key = min(by_path, key=lambda kv: len(kv[0]))
+                            entry = {"bin": best_key[1], "kind": "gui",
+                                     "name": best_key[0]}
+                            break
+                        # last resort: same stem rule against key NAMES as
+                        # whole words ('vs code' -> 'visual studio code'),
+                        # excluding component bins (tunnel/helper/crash) and
+                        # preferring the key that is NOT itself a component.
+                        by_word = [key for key in apps
+                                   if re.search(
+                                       rf"\b{_re.escape(exe_stem)}\b",
+                                       str(key), re.I)
+                                   and not re.search(
+                                       r"tunnel|helper|crash|setup|update",
+                                       str(apps[key].get("bin", "")), re.I)
+                                   and _stem_launchable(apps[key].get("bin"))]
+                        if by_word:
+                            best_key = min(by_word, key=len)
+                            entry = apps[best_key]
                             break
             # Token-overlap scoring: fraction of the registry key's words found
             # in the request ("microsoft office home 2024" vs "office 2024").
@@ -1876,11 +2757,29 @@ def open_application(app: str, action: str = None, query: str = None) -> str:
     # Phase 14b: never launch a non-launchable bin. If the registry handed us a
     # directory / document / MSI icon string, drop the entry and keep searching
     # via aliases + raw name instead of startfile-ing junk.
+    # 2026-08-25: this ALSO drops component exes (installer/updater/helper) —
+    # capabilities.json fallback can still surface them ('updater' ->
+    # LibreOffice updater.exe), so re-check here, never trust the source.
     from machine_capabilities import _is_launchable as _launchable
     if entry and not _launchable(entry.get("bin")):
         entry = None
     binp = entry.get("bin") if entry else None
     name = entry.get("name", requested) if entry else requested
+
+    # Phase 3.5 runtime enforcement: consult the apps' compiled_rules.
+    # Rules compile + store (see rules_compiler.py) but nothing enforced them
+    # until now. A hard rule blocks the launch outright; a soft rule surfaces
+    # as a reminder the caller can render to the user.
+    try:
+        from rules_engine import evaluate_app_rules, format_rule_notices
+        _verdict = evaluate_app_rules(entry, action)
+        if not _verdict["allowed"]:
+            _blocks = "\n".join(_verdict["blocks"])
+            return (f"[Blocked] {name} was not opened.\n{_blocks}")
+        _notices = format_rule_notices(_verdict["notices"])
+    except Exception:
+        # Enforcement must never break a launch; fail open.
+        _notices = ""
 
     # 2) Spotify (or other music) search: reliable URI opens the Search pane.
     if action == "search" and "spotify" in name.lower():
@@ -1888,8 +2787,11 @@ def open_application(app: str, action: str = None, query: str = None) -> str:
         uri = "spotify:search:" + q.replace(" ", "%20")
         try:
             _os.startfile(uri)
-            return (f"Opened Spotify search for '{q}'. The Search pane is showing "
-                    f"results for '{q}' — pick the track and press play.")
+            _smsg = (f"Opened Spotify search for '{q}'. The Search pane is showing "
+                     f"results for '{q}' — pick the track and press play.")
+            if _notices:
+                _smsg += f"\n\n{_notices}"
+            return _smsg
         except Exception as e:
             return f"[Error] Could not open Spotify search URI: {e}"
 
@@ -1902,7 +2804,10 @@ def open_application(app: str, action: str = None, query: str = None) -> str:
             subprocess.run(["open", "-a", cand])
         else:
             subprocess.run(["xdg-open", cand])
-        return f"Opened {name}" + (f" from {binp}" if binp else "")
+        _msg = f"Opened {name}" + (f" from {binp}" if binp else "")
+        if _notices:
+            _msg += f"\n\n{_notices}"
+        return _msg
     except Exception as e:
         # Last chance: strip/add .exe before giving up.
         alt = cand[:-4] if cand.lower().endswith(".exe") else cand + ".exe"
@@ -2001,6 +2906,19 @@ def close_application(app: str) -> str:
     binp = (entry or {}).get("bin") or ""
     exe_name = os.path.splitext(os.path.basename(binp.strip('"')))[0] if binp else ""
     name = (entry or {}).get("name", requested)
+
+    # Phase 3.5 runtime enforcement (close path): consult the app's
+    # compiled_rules for a hard "must not close" guard. Like open_application,
+    # a HARD rule blocks outright; soft rules are reminders (not applicable to
+    # closing, which is a single irreversible action, so only hard guards act).
+    try:
+        from rules_engine import evaluate_app_rules, format_rule_notices
+        _close_verdict = evaluate_app_rules(entry, "close")
+        if not _close_verdict["allowed"]:
+            return " ".join(_close_verdict["blocks"])
+        _close_notices = format_rule_notices(_close_verdict["notices"])
+    except Exception:
+        _close_notices = ""
 
     if not exe_name:
         # No registry entry: try the raw name as an image name.
@@ -2357,6 +3275,40 @@ TOOLS = [
         }
     },
     {
+        "name": "run_autonomous",
+        "description": ("Launch a MULTI-STEP goal that runs autonomously in the "
+                        "background (Hermes plans, executes, verifies each step, "
+                        "reports evidence). Use for goals needing several actions: "
+                        "'organize my downloads folder', 'build a landing page', "
+                        "'research X and write it up'. Returns immediately; JARVIS "
+                        "speaks progress and the final result. NOT for single quick "
+                        "actions — use delegate/open_application for those."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "goal": {"type": "string", "description": "The complete self-contained goal to accomplish"},
+                "timeout": {"type": "integer", "description": "Max seconds for the whole goal (default 1800)"}
+            },
+            "required": ["goal"]
+        }
+    },
+    {
+        "name": "job_control",
+        "description": ("Control or query running autonomous jobs. action='status' "
+                        "speaks recent progress of the latest job; action='stop' "
+                        "cancels it. Use when the user asks about or wants to stop "
+                        "a background task."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["status", "stop"],
+                           "description": "Query progress or cancel"},
+                "jid": {"type": "string", "description": "Optional job id; defaults to latest active"}
+            },
+            "required": ["action"]
+        }
+    },
+    {
         "name": "desktop_control",
         "description": ("Operate a desktop application (click, type, scroll, read "
                         "screens) via Hermes computer_use. EVERY action requires "
@@ -2374,6 +3326,29 @@ TOOLS = [
                                "description": "True only if user explicitly asked for foreground takeover"}
             },
             "required": ["task"]
+        }
+    },
+    {
+        "name": "run_opencli",
+        "description": ("Run an OpenCLI command — 'turn any website into a CLI' via the "
+                        "user's logged-in Chrome (jackwener/OpenCLI). Use for site "
+                        "automation the user named (e.g. 'reddit search python', "
+                        "'github trending', 'facebook feed'). EVERY action requires "
+                        "confirmation: call once to preview the exact command + risk "
+                        "class (public read / LOGGED-IN read / WRITE), again with "
+                        "confirm=true after approval. Never call for credentials or "
+                        "payments. Background delivery by default."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "command": {"type": "string",
+                            "description": "The OpenCLI sub-command, e.g. 'reddit search python' or 'github trending'"},
+                "confirm": {"type": "boolean",
+                            "description": "True only AFTER the user approved this exact command"},
+                "foreground": {"type": "boolean",
+                               "description": "True only if user explicitly asked for foreground browser takeover"}
+            },
+            "required": ["command"]
         }
     },
     {
@@ -2616,6 +3591,7 @@ TOOL_MAP = {
     "search_sessions": lambda **kw: search_sessions(
         kw["query"], int(kw.get("limit", 10) or 10)),
     "desktop_control": _desktop_control_tool,
+    "run_opencli": _run_opencli_tool,
     "open_application": lambda **kw: open_application(
         kw["app"], kw.get("action"), kw.get("query")),
     "ask_chatgpt": _ask_chatgpt,
@@ -2638,6 +3614,10 @@ TOOL_MAP = {
         kw["topic"], kw.get("output_path"), _truthy(kw.get("verbatim", False))),
     "rescan_applications": lambda **kw: rescan_applications(),
     "close_application": lambda **kw: close_application(kw["app"]),
+    "run_autonomous": lambda **kw: run_autonomous(
+        kw["goal"], int(kw.get("timeout", 1800) or 1800)),
+    "job_control": lambda **kw: job_control(
+        kw["action"], kw.get("jid")),
     "delegate_task": lambda **kw: delegate_task(kw["task"], kw.get("agent", "claude")),
     "delegate_to_hermes": lambda **kw: delegate_to_hermes(
         kw["task"], int(kw.get("timeout", 300) or 300),
@@ -2657,31 +3637,52 @@ TOOL_MAP = {
 
 
 def execute_tool(name: str, arguments: dict) -> str:
-    """Execute a tool by name with arguments."""
+    """Execute a tool by name with arguments. Quarantines external text, audits structured."""
     if name not in TOOL_MAP:
+        _audit_log(f"execute_tool:{name}", json.dumps(arguments, default=str)[:500], "unknown_tool", result=f"[Error] Unknown tool: {name}")
         return f"[Error] Unknown tool: {name}"
-    # Audit line: makes a hung or misrouted tool call visible in the server log.
     print(f"[TOOL] {name} args={json.dumps(arguments, default=str)[:200]}", flush=True)
     start = time.monotonic()
     confirmed = _truthy(arguments.get("confirm", False))
+    # Phase 1b: quarantine instruction-like content in arguments that came from external sources
+    # (e.g., pasted browser text). This is data, not directions.
+    try:
+        import guard
+        for k, v in list(arguments.items()):
+            if isinstance(v, str) and len(v) > 20 and guard.is_suspicious(v):
+                arguments[k] = guard.sanitize_web_text(v, label=f"tool:{name}:{k}")
+    except Exception:
+        pass
     try:
         result = TOOL_MAP[name](**arguments)
+        # Phase 1b: quarantine external tool results before they enter model context
+        if name in ("search_web", "open_site", "ask_chatgpt", "ask_ai", "search_chatgpt_history", "open_chatgpt_conversation", "search_vault", "search_vault_semantic", "read_vault_note", "search_sessions"):
+            result = _quarantine_external(result, label=f"tool:{name}")
+        # Also quarantine any result that looks like injection regardless of tool
+        else:
+            try:
+                import guard
+                if guard.is_suspicious(result):
+                    result = guard.sanitize_web_text(result, label=f"tool:{name}")
+            except Exception:
+                pass
     except Exception as e:
         result = f"[Tool Error] {name}: {str(e)}"
-        print(f"[TOOL] {name} raised {type(e).__name__} after "
-              f"{time.monotonic() - start:.1f}s", flush=True)
+        dur = time.monotonic() - start
+        print(f"[TOOL] {name} raised {type(e).__name__} after {dur:.1f}s", flush=True)
+        _audit_log(f"execute_tool:{name}", json.dumps(arguments, default=str)[:500], "error", result=result, confirm=confirmed, extra={"duration_ms": int(dur*1000)})
         try:
             import audit
-            audit.log_call(name, arguments, time.monotonic() - start, result,
-                           confirmed=confirmed)
+            audit.log_call(name, arguments, dur, result, confirmed=confirmed, decision="error")
         except Exception:
             pass
         return result
-    print(f"[TOOL] {name} done in {time.monotonic() - start:.1f}s", flush=True)
+    dur = time.monotonic() - start
+    print(f"[TOOL] {name} done in {dur:.1f}s", flush=True)
+    _audit_log(f"execute_tool:{name}", json.dumps(arguments, default=str)[:500], "executed", result=result, confirm=confirmed, extra={"duration_ms": int(dur*1000)})
     try:
         import audit
-        audit.log_call(name, arguments, time.monotonic() - start, result,
-                       confirmed=confirmed)
+        audit.log_call(name, arguments, dur, result, confirmed=confirmed, decision="executed")
     except Exception:
         pass
     return result

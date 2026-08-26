@@ -102,7 +102,12 @@ def classify_intent(text: str) -> str:
     stripped = t.rstrip("= ").strip()
     if re.fullmatch(r"[\d\s\.\+\-\*/\(\)\%\^]+", stripped) and re.search(r"\d", stripped):
         return "math"
-    if re.search(r"\b(hi|hello|hey|good\s*(morning|afternoon|evening)|yo|hiya|greetings)\b", t):
+    # greeting: only when the utterance is ESSENTIALLY just a greeting — short
+    # and no action verb/filename present. "create hello.txt" must NOT land here.
+    if len(t.split()) <= 4 and \
+       re.search(r"\b(hi|hello|hey|hiya|greetings|good\s*(morning|afternoon|evening)|yo)\b", t) and \
+       not re.search(r"\b(create|make|open|write|find|play|run|delete|search|build|"
+                     r"send|close|stop|launch)\b|[\w]+\.\w{2,4}\b", t):
         return "greeting"
     if re.search(r"\b(thanks|thank you|cheers|appreciate it|ty)\b", t):
         return "thanks"
@@ -134,6 +139,24 @@ def classify_intent(text: str) -> str:
     if re.search(r"\b(rescan|refresh|scan)\b", t) and \
        re.search(r"\b(apps?|software|programs?|installed)\b", t):
         return "rescan"
+    # job_status / job_stop (Phase 16): voice control of autonomous jobs.
+    # MUST sit BEFORE the close_app and stop-music checks: "stop the task" is
+    # not a music stop nor an app close, and "status" alone is not a search.
+    # Both require an explicit task/job/goal noun (or a bare status question)
+    # so ordinary sentences never hijack here.
+    if re.search(
+            r"\b(status|progress|update)\b.{0,30}\b(tasks?|jobs?|goals?|hermes)\b|"
+            r"\b(tasks?|jobs?|goal)\b.{0,30}\b(status|progress|done|finished|going)\b|"
+            r"^(what'?s|what is|any|is there an?)\s+(the\s+)?(status|progress|update)\b",
+            t):
+        return "job_status"
+    if re.search(r"\b(stop|cancel|abort|halt)\b.{0,20}\b(tasks?|jobs?|goal)s?\b", t):
+        return "job_stop"
+    # remember (Phase 18): durable memory write to jarvis-profile.md.
+    # IMPERATIVE-ONLY anchor (^) so questions ("do you remember my email?")
+    # never hijack here — those are RECALL and stay on the session-search path.
+    if re.match(r"^(please\s+)?(remember|note that|keep in mind( that)?|don'?t forget( that)?)\b", t):
+        return "remember"
     # close_app: JARVIS-local side-route — close a NAMED application via
     # close_application (registry lookup + graceful taskkill). Detect BEFORE
     # the music-stop check so 'close spotify' closes the app, not its music.
@@ -175,6 +198,21 @@ def classify_intent(text: str) -> str:
        re.search(r"\b(app|application|software|tool|program)\b", t):
         return "app_reference"
     return "general"
+
+
+# Phase 15: a goal is "multi-step" when it chains actions or names a concrete
+# artifact to build/organize. Deliberately conservative — single quick actions
+# keep the fast delegate() path.
+_MULTISTEP_RE = re.compile(
+    r"\b(then|after that|and (also )?(create|make|write|verify|check)|"
+    r"step by step|organize|clean up)\b|"
+    r"\b(create|make|build|generate|organize|set ?up)\b.{0,40}\b"
+    r"(folder|directory|file|document|report|page|website|list|backup)\b", re.I)
+
+
+def _is_multistep_goal(text: str) -> bool:
+    return bool(_MULTISTEP_RE.search(text or ""))
+
 
 def fast_path_answer(text: str):
     """Answer a trivial intent locally. Returns (answer, intent) or (None, intent)
@@ -407,6 +445,19 @@ TOOL_DECLARATIONS = [
             "query": {"type": "STRING", "description": "Search query"}
         }, "required": ["query"]}),
 
+    _make_tool("run_opencli",
+        "Run an OpenCLI command - 'turn any website into a CLI' via the user's logged-in "
+        "Chrome (jackwener/OpenCLI). Use for site automation the user named (e.g. "
+        "'reddit search python', 'github trending', 'facebook feed'). EVERY action requires "
+        "confirmation: call once to preview the exact command + risk class (public read / "
+        "LOGGED-IN read / WRITE), again with confirm=true after approval. Never call for "
+        "credentials or payments. Background delivery by default.",
+        {"type": "object", "properties": {
+            "command": {"type": "STRING", "description": "OpenCLI sub-command, e.g. 'reddit search python'"},
+            "confirm": {"type": "BOOLEAN", "description": "True only AFTER the user approved this exact command"},
+            "foreground": {"type": "BOOLEAN", "description": "True only if user explicitly asked for foreground browser takeover"}
+        }, "required": ["command"]}),
+
     _make_tool("write_to_notepad",
         "Put text into a Notepad window for the user to read or keep. Use this for any "
         "request to write something in Notepad, jot a note, or show text in Notepad. "
@@ -531,6 +582,26 @@ TOOL_DECLARATIONS = [
             "timeout": {"type": "INTEGER", "description": "Max seconds to wait (15-600, default 300)"},
             "max_turns": {"type": "INTEGER", "description": "Max agent iterations (1-30, default 15)"}
         }, "required": ["task"]}),
+
+    _make_tool("run_autonomous",
+        "Launch a MULTI-STEP goal that runs autonomously in the background: Hermes "
+        "plans, executes, verifies each step and reports evidence. Use for goals like "
+        "'organize my downloads folder', 'build a landing page', 'research X and write "
+        "it up'. Returns immediately with an acknowledgment; progress is spoken as it "
+        "lands. NOT for single quick actions.",
+        {"type": "object", "properties": {
+            "goal": {"type": "STRING", "description": "The complete self-contained goal"},
+            "timeout": {"type": "INTEGER", "description": "Max seconds for the whole goal (default 1800)"}
+        }, "required": ["goal"]}),
+
+    _make_tool("job_control",
+        "Control or query running autonomous jobs. action='status' reports recent "
+        "progress; action='stop' cancels the latest job. Use when the user asks about "
+        "or wants to stop a background task ('what's the status?', 'stop the task').",
+        {"type": "object", "properties": {
+            "action": {"type": "STRING", "description": "'status' or 'stop'"},
+            "jid": {"type": "STRING", "description": "Optional job id; defaults to latest"}
+        }, "required": ["action"]}),
 
     _make_tool("rescan_applications",
         "Rescan all installed software on this computer and update the app registry. "
@@ -782,6 +853,43 @@ class JarvisBrain:
         # music_agent, which drives YouTube Music in Brave). Hermes has no play_music
         # and no GUI control, so music MUST stay local — EXCLUDED from the Hermes route
         # (it is intentionally absent from the set below).
+        # Phase 16/18: VOICE JOB CONTROL + DURABLE MEMORY — deterministic LOCAL
+        # routing so "what's the status?" / "stop the task" / "remember X"
+        # answer instantly from local state without touching Hermes, the cloud
+        # chain, or any tool-call round-trip. Mirrors the instant-path contract
+        # (last_backend="instant").
+        if intent in ("job_status", "job_stop", "remember"):
+            try:
+                if intent == "remember":
+                    from tools import remember_fact
+                    out = remember_fact(user_input)
+                else:
+                    from tools import job_control
+                    out = job_control("status" if intent == "job_status" else "stop")
+                self.conversation.append({"role": "assistant", "content": out})
+                self.last_backend = "instant"
+                self.last_stats = {"backend": "instant", "intent": intent}
+                return out
+            except Exception as e:
+                print(f"[JARVIS] local job/memory path failed ({e}); falling back...")
+        # Phase 15: MULTI-STEP goals run as supervised autonomous jobs —
+        # deterministic, not left to the cloud model's tool choice. Single-step
+        # requests keep the normal delegate() path.
+        if intent in ("general", "app_reference") and _is_multistep_goal(user_input):
+            try:
+                from tools import run_autonomous
+                out = run_autonomous(user_input)
+                if not out.startswith("[NEEDS_CONFIRM]"):
+                    self.conversation.append({"role": "assistant", "content": out})
+                    self.last_backend = "autonomous"
+                    self.last_stats = {"backend": "autonomous", "intent": intent}
+                    return out
+                # destructive goal awaiting confirm -> surface it this turn
+                self.conversation.append({"role": "assistant", "content": out})
+                self.last_backend = "autonomous-confirm"
+                return out
+            except Exception as e:
+                print(f"[JARVIS] autonomous launch failed ({e}); falling back...")
         if intent in ("general", "app_reference"):
             try:
                 from tools import delegate
