@@ -205,12 +205,66 @@ def strip_ai_artifacts(text: str) -> str:
     return text
 
 
+# ---------------------------------------------------------------------------
+# Phase 16.6 REV A (2026-08-25): edge-tts RESTORED as PRIMARY — the user wants
+# the original en-GB-Ryan voice back. Piper stays available but OPT-IN only:
+# set JARVIS_TTS_ENGINE=piper to use it (real-time offline, RTF 0.12 measured).
+_TTS_ENGINE = (os.environ.get("JARVIS_TTS_ENGINE") or "edge").strip().lower()
+_PIPER_MODEL = os.path.join(os.path.expanduser("~"), ".jarvis-tts",
+                            "en_GB-nem-medium.onnx")
+_piper_voice = None
+
+
+def _get_piper():
+    """Load the piper voice once; return None on any failure (edge fallback)."""
+    global _piper_voice
+    if _piper_voice is not None:
+        return _piper_voice
+    try:
+        from piper import PiperVoice
+        if os.path.exists(_PIPER_MODEL):
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                _piper_voice = ex.submit(PiperVoice.load, _PIPER_MODEL) \
+                    .result(timeout=60)
+            return _piper_voice
+    except Exception as e:
+        print(f"[TTS] piper unavailable ({e}); using edge-tts fallback.")
+        _piper_voice = None
+    return None
+
+
 async def tts_to_b64(text: str) -> str:
-    """Synthesize `text` with edge-tts and return base64 mp3."""
+    """Synthesize `text` and return base64 audio.
+
+    DEFAULT: edge-tts MP3 (the original JARVIS voice). Opt-in piper WAV via
+    JARVIS_TTS_ENGINE=piper; falls back to edge automatically on any failure.
+    """
+    text = strip_ai_artifacts(text)
+    if _TTS_ENGINE == "piper":
+        voice = _get_piper()
+        if voice is not None:
+            try:
+                import wave
+                wav_path = tempfile.NamedTemporaryFile(suffix=".wav",
+                                                       delete=False).name
+                # CPU synth blocks ~0.1-0.5s: keep the event loop responsive.
+                def _synth():
+                    with wave.open(wav_path, "wb") as wf:
+                        wf.setnchannels(1)
+                        wf.setsampwidth(2)
+                        wf.setframerate(22050)
+                        voice.synthesize_wav(text, wf)
+                await asyncio.to_thread(_synth)
+                with open(wav_path, "rb") as f:
+                    b64 = base64.b64encode(f.read()).decode()
+                os.unlink(wav_path)
+                return b64
+            except Exception as e:
+                print(f"[TTS] piper synth failed ({e}); falling back to edge-tts.")
     import edge_tts
     from config import TTS_VOICE, TTS_RATE, TTS_VOLUME
 
-    text = strip_ai_artifacts(text)
     # rate/volume were previously dropped here, so the web UI always spoke at
     # +0% no matter what config said — only the CLI path honoured TTS_RATE.
     communicate = edge_tts.Communicate(text, TTS_VOICE, rate=TTS_RATE, volume=TTS_VOLUME)
@@ -365,6 +419,10 @@ async def get_apps():
             "category": entry.get("category", "other"),
             "kind": entry.get("kind", "gui"),
             "broken": bool(binp) and not _os.path.exists(binp),
+            "enabled": entry.get("enabled", True),
+            "adapter": entry.get("kind"),
+            "rule_drafts": entry.get("rule_drafts") or [],
+            "compiled_rules": entry.get("compiled_rules") or [],
         })
     out.sort(key=lambda a: (a["category"], a["name"]))
     return JSONResponse({"count": len(out), "generated": reg.get("generated"), "apps": out})
@@ -387,6 +445,123 @@ async def post_apps_open(message: Request):
     return JSONResponse({"ok": ok, "result": result})
 
 
+@app.post("/apps/toggle")
+async def post_apps_toggle(message: Request):
+    """Enable or disable a registered app in the registry."""
+    try:
+        body = await message.json()
+    except Exception:
+        return JSONResponse({"error": "bad json"}, status_code=400)
+    key = (body.get("key") or "").strip()
+    enable = bool(body.get("enabled", True))
+    if not key:
+        return JSONResponse({"error": "missing key"}, status_code=400)
+    from machine_capabilities import REGISTRY_PATH
+    reg_path = REGISTRY_PATH
+    if not os.path.exists(reg_path):
+        return JSONResponse({"error": "no registry"}, status_code=400)
+    with open(reg_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    apps = data.setdefault("apps", {})
+    if key not in apps:
+        return JSONResponse({"error": "unknown app"}, status_code=400)
+    apps[key]["enabled"] = enable
+    tmp = reg_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, reg_path)
+    return JSONResponse({"ok": True, "key": key, "enabled": enable})
+
+
+@app.post("/apps/rules")
+async def post_apps_rules(message: Request):
+    """Store rule drafts (and optional compiled rules) for a registered app."""
+    try:
+        body = await message.json()
+    except Exception:
+        return JSONResponse({"error": "bad json"}, status_code=400)
+    key = (body.get("key") or "").strip()
+    if not key:
+        return JSONResponse({"error": "missing key"}, status_code=400)
+    drafts = body.get("rule_drafts") or []
+    compiled = body.get("compiled_rules") or []
+    from machine_capabilities import REGISTRY_PATH
+    reg_path = REGISTRY_PATH
+    if not os.path.exists(reg_path):
+        return JSONResponse({"error": "no registry"}, status_code=400)
+    with open(reg_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    apps = data.setdefault("apps", {})
+    if key not in apps:
+        return JSONResponse({"error": "unknown app"}, status_code=400)
+    if compiled:
+        import rules_compiler
+        rules_compiler.commit_rules(key, compiled, reg_path, accept=True)
+    else:
+        apps[key]["rule_drafts"] = drafts
+        tmp = reg_path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        os.replace(tmp, reg_path)
+    return JSONResponse({"ok": True, "key": key})
+
+
+@app.post("/apps/compile")
+async def post_apps_compile(message: Request):
+    """Phase 3.5 wizard: turn raw rule drafts into a proposed ruleset.
+
+    Runs rules_compiler.parse_scaffold, then auto-resolves ambiguous clauses
+    with a SAFE DEFAULT answer (volume -> 60% all sessions; else -> the phrase
+    as intent, all sessions) so the UI receives a complete proposed ruleset.
+    The inferred `questions` are returned so the user can correct JARVIS's
+    guess before accepting. User owns the commit (POST /apps/rules).
+    """
+    try:
+        body = await message.json()
+    except Exception:
+        return JSONResponse({"error": "bad json"}, status_code=400)
+    key = (body.get("key") or "").strip()
+    drafts = body.get("rule_drafts") or []
+    if not key or not drafts:
+        return JSONResponse({"error": "missing key or drafts"}, status_code=400)
+
+    import rules_compiler as rc
+    phrase = " and ".join(drafts)
+    parsed = rc.parse_scaffold(key, phrase)
+    candidates = parsed["candidate_rules"]
+
+    # Auto-resolve ambiguous clauses with a safe default; capture the question
+    # so the UI can surface "JARVIS assumed X — correct me if wrong".
+    answers = {}
+    questions = []
+    for r in candidates:
+        if r.get("needs_clarification"):
+            low = (r.get("source_phrase") or "").lower()
+            if any(m in low for m in ("quiet", "loud", "soft", "low", "calm", "chill")):
+                answers[r["rule_id"]] = f"under 60% {key} volume all sessions"
+            else:
+                answers[r["rule_id"]] = f"{r['source_phrase']}, all sessions"
+            if r.get("clarification_question"):
+                questions.append(r["clarification_question"])
+
+    proposed = rc.apply_clarifications(key, candidates, answers)
+    return JSONResponse({
+        "ok": True,
+        "key": key,
+        "proposed": proposed,
+        "questions": questions,
+        "proposal_markdown": rc.propose_ruleset(key, proposed),
+    })
+
+
+@app.get("/apps.html")
+async def get_apps_panel():
+    html_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "apps_panel.html")
+    with open(html_path, "r", encoding="utf-8") as f:
+        html = f.read()
+    return HTMLResponse(content=html, status_code=200)
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
@@ -397,6 +572,52 @@ async def websocket_endpoint(websocket: WebSocket):
     # and a background coroutine pops them and speaks them over the WS.
     import queue as _queue
     _progress_q = _queue.Queue()
+
+    # Job registry -> HUD bridge + Phase 8 proactive voice (speak completions unprompted).
+    import jobs as _jobs
+    def _on_job_event(event):
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.run_coroutine_threadsafe(
+                    _broadcast_job(event), loop)
+                # Phase 8: proactive voice for terminal states
+                try:
+                    import memory_hygiene as _mh
+                    line = _mh.proactive_job_announcement(event)
+                    if line:
+                        asyncio.run_coroutine_threadsafe(_speak_proactive(line), loop)
+                except Exception:
+                    pass
+        except RuntimeError:
+            pass
+
+    async def _broadcast_job(event):
+        try:
+            await websocket.send_text(json.dumps(event))
+        except Exception:
+            pass
+
+    async def _speak_proactive(text: str):
+        try:
+            tts_b64 = await tts_to_b64(text)
+            await websocket.send_text(json.dumps({"type": "response", "text": text, "audio": tts_b64, "proactive": True}))
+        except Exception:
+            pass
+
+    try:
+        _jobs.add_listener(_on_job_event)
+    except Exception:
+        pass
+
+    # Phase 8: start hygiene loop once per process (6h interval, daemon)
+    try:
+        import memory_hygiene as _mh2
+        if not getattr(_mh2, "_started", False):
+            _mh2.start_hygiene_loop(interval_hours=6)
+            _mh2._started = True
+    except Exception:
+        pass
 
     async def _progress_reader():
         """Consume progress updates from tools and speak them as they arrive."""
@@ -753,6 +974,10 @@ async def get_status():
         "fallback": None if getattr(brain, "_local_only", False) else OLLAMA_MODEL,
         "last_backend": brain.last_backend,
         "voice": f"whisper:{WHISPER_MODEL}",
+        # Background job table (all tiers) for HUD/programmatic polling.
+        "jobs_active": __import__("jobs").active(),
+        "jobs_recent": __import__("jobs").recent(8),
+        "jobs_status_line": __import__("jobs").status_line(),
         # Server-side wake-word fallback health (music-proof). 'healthy': mic live
         # and listening; false just means the fallback is off — the browser's own
         # Web Speech WakeListener still works on its own.

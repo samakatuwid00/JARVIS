@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>JARVIS — Installed Apps</title>
+<style>
+  :root {
+    --bg: #0e0e12;
+    --card: #1a1a22;
+    --card2: #22222c;
+    --accent: #6ea8fe;
+    --accent-dim: #3a4a6a;
+    --text: #e6e8ef;
+    --muted: #8a8fa3;
+    --danger: #ff6b6b;
+    --ok: #57d18a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+    padding: 24px;
+  }
+  h1 {
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    margin: 0 0 4px;
+  }
+  .sub { color: var(--muted); margin-bottom: 20px; font-size: 13px; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+    gap: 16px;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid #2a2a36;
+    border-radius: 12px;
+    padding: 16px;
+  }
+  .card.open { border-color: var(--accent-dim); }
+  .row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .title { font-size: 16px; font-weight: 600; }
+  .meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .badge {
+    display: inline-block;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: #2a2a36;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+  }
+  .badge.broken { background: rgba(255,107,107,0.15); color: var(--danger); }
+  .badge.on { background: rgba(87,209,138,0.15); color: var(--ok); }
+  .badge.off { background: #2a2a36; color: var(--muted); }
+  button {
+    background: var(--accent);
+    color: #0e0e12;
+    border: none;
+    border-radius: 8px;
+    padding: 6px 12px;
+    font-weight: 600;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  button.ghost {
+    background: transparent;
+    color: var(--accent);
+    border: 1px solid var(--accent-dim);
+  }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .toggle input { accent-color: var(--accent); width: 16px; height: 16px; }
+  .details { margin-top: 14px; display: none; }
+  .details.show { display: block; }
+  .section-h { font-size: 12px; color: var(--muted); margin: 10px 0 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+  textarea {
+    width: 100%;
+    min-height: 90px;
+    background: var(--card2);
+    color: var(--text);
+    border: 1px solid #2a2a36;
+    border-radius: 8px;
+    padding: 8px;
+    font-family: inherit;
+    font-size: 13px;
+    resize: vertical;
+  }
+  .rule {
+    background: var(--card2);
+    border: 1px solid #2a2a36;
+    border-radius: 8px;
+    padding: 8px 10px;
+    margin-bottom: 6px;
+    font-size: 12px;
+  }
+  .rule .rid { color: var(--accent); font-weight: 600; }
+  .rule .enf { color: var(--muted); }
+  .rule .chk { color: var(--ok); }
+  .msg { font-size: 12px; margin-top: 6px; min-height: 14px; color: var(--muted); }
+  .msg.ok { color: var(--ok); }
+  .msg.err { color: var(--danger); }
+  .toolbar { margin-bottom: 16px; display: flex; gap: 10px; align-items: center; }
+  .toolbar input {
+    flex: 1;
+    background: var(--card);
+    border: 1px solid #2a2a36;
+    color: var(--text);
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-size: 13px;
+  }
+</style>
+</head>
+<body>
+  <h1>Installed Apps</h1>
+  <div class="sub">Manage registered applications and their runtime rules</div>
+  <div class="toolbar">
+    <input id="search" placeholder="Filter by name or category…" oninput="render()" />
+    <button class="ghost" onclick="loadApps()">↻ Refresh</button>
+  </div>
+  <div id="grid" class="grid"></div>
+
+<script>
+let APPS = [];
+
+async function loadApps() {
+  const res = await fetch("/apps");
+  const data = await res.json();
+  APPS = (data.apps || []).slice();
+  render();
+}
+
+function render() {
+  const q = (document.getElementById("search").value || "").toLowerCase().trim();
+  const grid = document.getElementById("grid");
+  grid.innerHTML = "";
+  const list = APPS.filter(a =>
+    !q || (a.name || "").toLowerCase().includes(q) || (a.category || "").toLowerCase().includes(q)
+  );
+  for (const a of list) {
+    grid.appendChild(card(a));
+  }
+  if (!list.length) {
+    grid.innerHTML = '<div class="meta">No apps found.</div>';
+  }
+}
+
+function card(a) {
+  const el = document.createElement("div");
+  el.className = "card";
+  const broken = !!a.broken;
+  const enabled = a.enabled !== false;
+  const kind = a.adapter || a.kind || "gui";
+  el.innerHTML = `
+    <div class="row">
+      <div>
+        <div class="title">${escapeHtml(a.name)}</div>
+        <div class="meta">${escapeHtml(a.category || "other")} · ${escapeHtml(kind)}</div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <span class="badge ${broken ? "broken" : (enabled ? "on" : "off")}">${broken ? "broken" : (enabled ? "enabled" : "disabled")}</span>
+        <button onclick="toggleDetails(this)">▾</button>
+      </div>
+    </div>
+    <div class="row" style="margin-top:10px;">
+      <label class="toggle">
+        <input type="checkbox" ${enabled ? "checked" : ""} onchange="toggleApp('${escapeAttr(a.key)}', this.checked, this)" />
+        ${enabled ? "Enabled" : "Disabled"}
+      </label>
+      <div style="display:flex;gap:8px;">
+        <button class="ghost" onclick="openApp('${escapeAttr(a.key)}', this)">Open</button>
+      </div>
+    </div>
+    <div class="details">
+      <div class="section-h">Compiled rules</div>
+      <div class="rules"></div>
+      <div class="section-h">Rule drafts (one phrase per line)</div>
+      <textarea class="drafts">${(a.rule_drafts || []).join("\n")}</textarea>
+      <div style="margin-top:8px;display:flex;gap:8px;">
+        <button onclick="saveRules('${escapeAttr(a.key)}', this)">Save rules</button>
+        <button class="ghost" onclick="compileRules('${escapeAttr(a.key)}', this)">Compile with JARVIS</button>
+        <span class="msg"></span>
+      </div>
+      <div class="proposal" style="display:none;margin-top:10px;">
+        <div class="section-h">JARVIS proposal</div>
+        <div class="prop-body meta"></div>
+        <div class="prop-q" style="color:var(--accent);font-size:12px;margin-top:6px;"></div>
+        <div style="margin-top:8px;display:flex;gap:8px;">
+          <button onclick="acceptProposal('${escapeAttr(a.key)}', this)">Accept proposal</button>
+        </div>
+      </div>
+    </div>
+  `;
+  const rulesBox = el.querySelector(".rules");
+  const cr = a.compiled_rules || [];
+  if (!cr.length) {
+    rulesBox.innerHTML = '<div class="meta">No compiled rules yet.</div>';
+  } else {
+    for (const r of cr) {
+      const rEl = document.createElement("div");
+      rEl.className = "rule";
+      rEl.innerHTML = `<span class="rid">${escapeHtml(r.rule_id || "rule")}</span>
+        <span class="enf">· ${escapeHtml(r.enforcement || "soft")}</span>
+        ${r.adapter_check ? `<span class="chk">· check: ${escapeHtml(r.adapter_check)}</span>` : ""}`;
+      rulesBox.appendChild(rEl);
+    }
+  }
+  return el;
+}
+
+function toggleDetails(btn) {
+  const d = btn.closest(".card").querySelector(".details");
+  const show = d.classList.toggle("show");
+  btn.textContent = show ? "▴" : "▾";
+}
+
+async function toggleApp(key, enable, cb) {
+  cb.disabled = true;
+  const res = await fetch("/apps/toggle", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key, enabled: enable })
+  });
+  cb.disabled = false;
+  const m = res.ok ? "Saved" : "Failed";
+  const card = cb.closest(".card");
+  const badge = card.querySelector(".badge");
+  if (res.ok) {
+    badge.className = "badge " + (enable ? "on" : "off");
+    badge.textContent = enable ? "enabled" : "disabled";
+    cb.closest(".toggle").childNodes[2].textContent = enable ? " Enabled" : " Disabled";
+  } else {
+    cb.checked = !enable;
+  }
+}
+
+async function openApp(key, btn) {
+  btn.disabled = true;
+  const old = btn.textContent;
+  btn.textContent = "…";
+  const res = await fetch("/apps/open", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key })
+  });
+  btn.disabled = false;
+  btn.textContent = old;
+  let result = "";
+  try { const d = await res.json(); result = d.result || JSON.stringify(d); } catch (e) {}
+  alert("Open " + key + ":\n" + (result || (res.ok ? "ok" : "failed")));
+}
+
+async function saveRules(key, btn) {
+  const card = btn.closest(".card");
+  const ta = card.querySelector(".drafts");
+  const drafts = ta.value.split("\n").map(s => s.trim()).filter(Boolean);
+  const msg = card.querySelector(".msg");
+  msg.className = "msg";
+  btn.disabled = true;
+  const res = await fetch("/apps/rules", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key, rule_drafts: drafts })
+  });
+  btn.disabled = false;
+  if (res.ok) {
+    msg.textContent = "Saved ✓";
+    msg.className = "msg ok";
+    const a = APPS.find(x => x.key === key);
+    if (a) a.rule_drafts = drafts;
+  } else {
+    msg.textContent = "Failed";
+    msg.className = "msg err";
+  }
+}
+
+async function compileRules(key, btn) {
+  const card = btn.closest(".card");
+  const ta = card.querySelector(".drafts");
+  const drafts = ta.value.split("\n").map(s => s.trim()).filter(Boolean);
+  const msg = card.querySelector(".msg");
+  const prop = card.querySelector(".proposal");
+  msg.className = "msg";
+  if (!drafts.length) { msg.textContent = "Enter drafts first"; msg.className = "msg err"; return; }
+  btn.disabled = true;
+  const res = await fetch("/apps/compile", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key, rule_drafts: drafts })
+  });
+  btn.disabled = false;
+  if (!res.ok) { msg.textContent = "Compile failed"; msg.className = "msg err"; return; }
+  const d = await res.json();
+  card._proposed = d.proposed || [];
+  prop.querySelector(".prop-body").textContent = d.proposal_markdown || "(no proposal)";
+  const q = d.questions || [];
+  prop.querySelector(".prop-q").textContent = q.length
+    ? "JARVIS assumed: " + q.join("  •  ") + "  — correct the drafts if wrong."
+    : "";
+  prop.style.display = "block";
+  msg.textContent = "Compiled ✓"; msg.className = "msg ok";
+}
+
+async function acceptProposal(key, btn) {
+  const card = btn.closest(".card");
+  const proposed = card._proposed || [];
+  if (!proposed.length) return;
+  const msg = card.querySelector(".msg");
+  btn.disabled = true;
+  const res = await fetch("/apps/rules", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key, rule_drafts: proposed.map(r => r.source_phrase), compiled_rules: proposed })
+  });
+  btn.disabled = false;
+  if (res.ok) {
+    msg.textContent = "Accepted ✓"; msg.className = "msg ok";
+    card.querySelector(".proposal").style.display = "none";
+    const a = APPS.find(x => x.key === key);
+    if (a) { a.compiled_rules = proposed; a.rule_drafts = proposed.map(r => r.source_phrase); }
+  } else {
+    msg.textContent = "Accept failed"; msg.className = "msg err";
+  }
+}
+
+function escapeHtml(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+function escapeAttr(s) { return String(s == null ? "" : s).replace(/"/g, "&quot;"); }
+
+loadApps();
+</script>
+</body>
+</html>
