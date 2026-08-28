@@ -200,20 +200,24 @@
     font: 500 13.5px/1.55 var(--font-body);
     letter-spacing: .01em; text-shadow: 0 0 12px color-mix(in srgb, var(--holo) 18%, transparent); }
   .jv-line::before { content: ''; display: none; }
-  .jv-line-user { align-self: flex-end; text-align: right; font-weight: 600;
+  .jv-line-user { align-self: flex-end; font-weight: 600;
+    background: #16283c; border: 1px solid rgba(255, 180, 84, .2);
+    border-radius: 14px; border-bottom-right-radius: 5px; padding: 8px 13px;
     color: #ffe7c4; }
-  .jv-line-user::before { content: '›'; display: inline; margin-right: 7px;
-    font-weight: 800; color: color-mix(in srgb, var(--holo) 70%, #fff); }
   /* The HUD line shows the reply currently being spoken; this panel is the
      scrollback. Hiding these outright (to kill the duplicate display) left the
      transcript showing only the user's own prompts, so every past reply
      vanished and the history looked frozen on one answer. Dimmed instead:
      the live line reads from the HUD, the record stays here. */
-  .jv-line-jarvis { align-self: flex-start; opacity: .78;
+  .jv-line-jarvis { align-self: flex-start; display: flex; gap: 9px;
+    align-items: flex-start;
+    background: rgba(255, 255, 255, .035); border: 1px solid var(--hairline);
+    border-radius: 14px; border-bottom-left-radius: 5px; padding: 8px 13px;
     color: #f4e3c8; }
-  .jv-line-jarvis::before { content: ''; display: inline-block; width: 7px; height: 7px;
-    margin-right: 8px; border-radius: 2px; background: color-mix(in srgb, var(--holo) 75%, transparent);
-    vertical-align: 1px; }
+  .jv-line-jarvis::before { content: 'J'; flex: 0 0 auto; width: 20px; height: 20px;
+    border-radius: 50%; background: rgba(255, 180, 84, .14);
+    border: 1px solid rgba(255, 180, 84, .4); color: var(--holo);
+    font: 700 11px/20px 'Rajdhani', sans-serif; text-align: center; }
   /* Block caret, alive only while the typewriter is still revealing the line. */
   .jv-line-jarvis.jv-typing .jv-text::after { content: '▌'; margin-left: 1px;
     animation: jvCaret .7s step-end infinite; }
@@ -412,6 +416,8 @@
     padding: 6px 12px; border-radius: 999px; border: 1px solid var(--hairline); color: #ffd9a0;
     display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
   .jv-pill.ok { border-color: rgba(125, 219, 160, .45); color: #9fe6ba; }
+  .jv-pill.online { border-color: rgba(125, 219, 160, .45); color: #9fe6ba; }
+  .jv-pill.offline { border-color: rgba(239, 123, 100, .45); color: #f08a72; }
   .jv-pill.grow { margin-left: auto; }
 
   #jv-shell { position: relative; z-index: 35; display: grid; gap: 16px;
@@ -519,6 +525,7 @@
       <span id="jv-dot"></span>
       <span id="jv-status">BOOTING…</span>
       <span id="jv-level"><i></i></span>
+      <span class="jv-pill" id="jv-pill-net"><span>● …</span></span>
       <span class="jv-pill grow" id="jv-pill-brain"><i data-lucide="cpu"></i><span>BRAIN: …</span></span>
       <span class="jv-pill" id="jv-pill-voice"><i data-lucide="audio-lines"></i><span>VOICE: KOKORO</span></span>
       <span class="jv-pill" id="jv-pill-fb"><i data-lucide="volume-2"></i><span>FB: ESSENTIAL</span></span>
@@ -1221,6 +1228,9 @@
     ws = new WebSocket(proto + '//' + location.host + '/ws');
     ws.onopen = function () {
       wsReady = true; reconnectDelay = 800;
+      var netPill = document.getElementById('jv-pill-net');
+      if (netPill) { netPill.classList.remove('offline'); netPill.classList.add('online');
+                     if (netPill.firstElementChild) netPill.firstElementChild.textContent = '\u25cf ONLINE'; }
       if (pingInterval) clearInterval(pingInterval);
       pingInterval = setInterval(function () {
         if (ws && ws.readyState === 1) ws.send(JSON.stringify({type:'ping'}));
@@ -1230,6 +1240,9 @@
     };
     ws.onclose = function () {
       wsReady = false;
+      var netPill = document.getElementById('jv-pill-net');
+      if (netPill) { netPill.classList.remove('online'); netPill.classList.add('offline');
+                     if (netPill.firstElementChild) netPill.firstElementChild.textContent = '\u25cf OFFLINE'; }
       if (pingInterval) { clearInterval(pingInterval); pingInterval = null; }
       setDead('DISCONNECTED — RETRYING…');
       setTimeout(connect, reconnectDelay);
@@ -1294,6 +1307,22 @@
     if (m.type === 'cue') {
       if (m.audio) { speak(m.audio, mode === 'command'); }
       else if (m.text) { notice(m.text); }
+      // Phase B chip: last few spoken cues stay visible in the feed
+      if (m.text) {
+        var cues = document.getElementById('jv-cues');
+        if (cues) {
+          var chip = document.createElement('span');
+          chip.className = 'jv-cuechip';
+          var ic = document.createElement('i');
+          ic.setAttribute('data-lucide', 'audio-lines');
+          var tx = document.createElement('span');
+          tx.textContent = m.text;
+          chip.appendChild(ic); chip.appendChild(tx);
+          cues.appendChild(chip);
+          while (cues.children.length > 6) cues.removeChild(cues.firstChild);
+          if (window.lucide) lucide.createIcons();
+        }
+      }
       return;
     }
 
