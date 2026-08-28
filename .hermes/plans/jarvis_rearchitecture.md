@@ -792,8 +792,290 @@ the gate, not the code — same lesson as the TTS gate above.
 (apps_panel.html new, apps_panel_test.py new, jarvis_web.py +227/-2).
 
 ### Standing-rule correction (gitignore)
-The `hermes-verify-*.py` rule in .gitignore blocks ALL durable gates, so the
-plan's earlier "durable gate is tracked" claims (P13/P14/aliases/orchestrator)
-were STALE — those gates exist only on disk, never committed. This is fine:
-gates are re-runnable local evidence, not product code. Phase 3.5's gate follows
-the same on-disk-only convention (NOT force-added past gitignore).
++The `hermes-verify-*.py` rule in .gitignore blocks ALL durable gates, so the
++plan's earlier "durable gate is tracked" claims (P13/P14/aliases/orchestrator)
++were STALE — those gates exist only on disk, never committed. This is fine:
++gates are re-runnable local evidence, not product code. Phase 3.5's gate follows
++the same on-disk-only convention (NOT force-added past gitignore).
++
++## Phase 3.6 — OpenCLI integration ("turn any website into a CLI")  [DONE 2026-08-26]
++Goal (from a Facebook post the user wanted JARVIS to use): let JARVIS drive
++websites as CLIs via the user's logged-in Chrome. Tool identified as
++**OpenCLI** (jackwener/OpenCLI, Apache-2.0; npm `@jackwener/opencli` v1.8.7;
++28.6k★). Distinct from the session-1 `ultimatewebscraper.com` link and from
++the session-3 read-only `oc` only-cli viewer — OpenCLI is the real "website→CLI"
++tool. User approved FULL logged-in automation (will install Chrome Bridge
++extension + accept JARVIS operating logged-in sites).
++
++### Delivered
++- `tools.py`:
++  - `run_opencli(command, confirm, foreground)`: shells out to `opencli`.
++    **Unconditional confirm gate (Phase-14 style)**: first call returns
++    `NEEDS_CONFIRM` with exact command + risk class (public read / LOGGED-IN
++    read / WRITE); second call with `confirm=true` runs it (latched to the
++    exact command). Hard-block on credential/payment phrases even with confirm.
++  - `_opencli_classify()`: read vs write vs sensitive-read (logged-in site).
++  - `_dispatch_opencli()`: translates natural phrases
++    ("scrape reddit for python news" → `reddit search "python news"`,
++    "github trending" → `github trending`, "wikipedia summary Web scraping" →
++    `wikipedia summary "web scraping"`) into `opencli <site> <sub>` commands.
++  - `_detect_backend()`: routes explicit "opencli …" and "<known-site>
++    search/scrape/read" phrases to a new `opencli` local backend.
++  - Windows-safe arg quoting: double-quote multi-word titles (shlex's single
++    quotes break Node/Commander); rejoin trailing tokens into one quoted arg.
++- `TOOL_MAP["run_opencli"]` + both model schemas (`tools.TOOLS`,
++  `brain_gemini.TOOL_DECLARATIONS`).
++
++### Verification gate — ALL PASS (fresh run, exit 0, 16 checks)
++`scripts/hermes-verify-phase36-durable.py` (on-disk, re-runnable; gitignored
++like the other phase gates):
++- A. tools.py + brain_gemini.py compile clean
++- B. run_opencli registered in TOOL_MAP + both schemas
++- C. _detect_backend: 'use opencli to scrape reddit' / 'scrape github trending'
++  / 'read my facebook feed' → opencli; 'open notepad' → desktop (not hijacked);
++  'search the web for cats' → web (not hijacked)
++- D. _dispatch_opencli maps phrases → correct `opencli <site> <sub>` commands
++- E. gate: first call NEEDS_CONFIRM; wrong-task confirm rejected (latch);
++  credential/payment phrase blocked even with confirm
++- F. LIVE public read `opencli wikipedia summary "Web scraping"` → real
++  extracted content, rc=0 (daemon serves public sites without the extension)
++
++GATE CAUGHT 5 REAL BUGS (all fixed before green): (1) doubled site name in
++query tail; (2) wikipedia defaulted to `feed` (no such sub) instead of
++`summary`; (3) `--window` flag invalid for site adapters (only `browser`
++primitive); (4) `shlex.quote` single-quotes broke Node arg parsing → switched
++to double-quote; (5) unquoted multi-word titles split into N args → rejoin
++trailing tokens. Each fix verified by re-run.
++
++### Runtime status (honest)
++- `opencli` v1.8.7 installed globally on the host; daemon runs.
++- **Public-site reads work NOW** (verified live: wikipedia).
++- **Logged-in site actions (facebook/reddit/etc.) are NOT yet executable**:
++  `opencli doctor` shows "Extension: not connected" — the user must install
++  the OpenCLI Chrome Bridge extension (Chrome Web Store or unpacked release)
++  and connect it. Until then, logged-in commands return a connectivity error
++  (honest, not a silent failure). This is the user's manual install step.
++- 166 site adapters + 10 app adapters + 13 external CLIs available.
+
+### Phase 19 (2026-08-26): `oc` web-browse tool wired into JARVIS + Hermes skill
+
+**Trigger:** User shared a Facebook video pitching `ultimatewebscraper.com`, traced to
+the open-source `oc` CLI (only-cli/oc, MIT, ~300 stars) — a token-cheap web reader that
+turns a page into a compact numbered view instead of raw HTML. Wired it into both JARVIS
+(local fast path) and as a Hermes skill (for my own scrape prompts).
+
+**What was built:**
+- `tools.web_browse(url, mode, query)`: shells to the local `oc` CLI (resolved via
+  `shutil.which("oc")` or the npm `.CMD` path, `shell=True`). modes: `open` (numbered
+  view, default), `raw` (whole-page markdown), `read` (deep region). Honest `[Error]`
+  on oc-missing / login-walled / blocked pages — no fake results.
+- Registered in BOTH layers (mandatory two-layer rule): `TOOL_MAP` entry + `TOOL_DECLARATIONS`
+  entry (`web_browse`) in brain_gemini.py.
+- Added to `execute_tool`'s quarantine set so `oc` page text is treated as DATA (guard.py),
+  not instructions (prompt-injection guard — matches oc's own posture).
+- `classify_intent`: new `web_browse` intent for scrape/read/browse/extract/summarize +
+  URL; placed BEFORE `general` and excludes pure `search`/`open site` phrasing.
+- `think()`: new fast local branch (before the Hermes delegation) routes `web_browse`
+  intent to `execute_tool("web_browse", ...)` instantly — no 22s cloud round-trip. Falls
+  back to Hermes only if the local read fails.
+- Hermes skill `development/oc-web-scraper/SKILL.md`: directs ME (Hermes) to use the local
+  `oc` CLI for scrape/read-a-page prompts (the managed `web_search`/`web_extract` tools are
+  Firecrawl-gated and unavailable without Nous Portal credits).
+
+**Verification (mandatory discipline):**
+- Durable gate `scripts/hermes-verify-phase19-oc-durable.py`: **ALL PASS (8/8), exit 0**
+  (registration in both layers, intent routing incl. negative `search` case, live `web_browse`
+  open+raw against example.com, guard quarantine preserves content).
+- **Live WS turn** `ws://localhost:8000/ws` "scrape https://example.com and tell me the
+  page title" → `oc_content=True | refused=False` — returned the real `# Example Domain`
+  numbered view from `oc`. No cloud round-trip.
+- 2 bug-fixes made during wiring (caught by live log, not shipped broken): (1) `_tools_mod`
+  referenced before import in the think() branch; (2) `execute_tool` called with a stray
+  3rd positional arg (signature is 2-arg). Both fixed; gate + live turn re-greened.
+
+**Runtime status (honest):**
+- `oc` v0.5.0 installed globally; Chrome-impersonation optional dep (`impers`) removed so
+  the native-fetch fallback engages (hard bot-walls not bypassed — same as base stack).
+- Public pages: works NOW (verified live). Login-walled pages (Facebook/Claude/etc.):
+  returns honest `[Error]`, same limit as base stack.
+- JARVIS server restarted (watcher), running fresh with Phase 19 code.
+
+**Open items / user decisions:**
+- Voice UX: how should JARVIS *speak* a numbered `oc` view? Options: read the summary
+  line, read top N items, or say "I pulled the page — here's the gist" + dump to Notepad.
+  Not yet decided — current path returns the view text to the cloud brain which summarizes.
+- Authed pages: if the user wants `oc login --cookie` wired for specific sites, that's a
+  follow-up (cookie handling + storage decision needed).
+
+### Phase 20 (2026-08-26): Honcho as self-hosted memory augmentation layer for JARVIS
+
+**Trigger:** User evaluated honcho.dev as JARVIS memory. Verified (read-only) that Honcho
+is open-source (AGPL-3.0), self-hostable via Docker, and ships a native Hermes integration
+(`hermes memory setup` -> select "honcho" -> point at api.honcho.dev OR local server).
+Resolves the earlier SaaS-vs-self-host objection: if self-hosted, all data stays on-box.
+
+**VERIFIED FACTS (read-only investigation, no code changes yet):**
+- Honcho = "open source memory library with a managed service." Self-host: `git clone
+  plastic-labs/honcho`, `cp docker-compose.yml.example docker-compose.yml`, fill `.env`,
+  `docker compose up` -> serves `http://localhost:8000`. SDK: `pip install honcho-ai`,
+  `Honcho(workspace_id=..., base_url="http://localhost:8000")`.
+- LLM requirement (from .env.template, authoritative): "Supported transports: openai,
+  anthropic, gemini." Exactly ONE LLM_* key is mandatory ("server will fail to start
+  without a provider"); defaults to OpenAI but Gemini is a first-class option.
+  CONSTRAINT: "Models must support tool calling (function calling)." -> JARVIS's
+  GEMINI_MODEL = `gemini-2.5-flash` DOES support function calling. So Honcho's reasoning
+  tier can run on the SAME existing Gemini key + model. No new API account needed.
+- Hermes integration is for NOUS Hermes (user's runtime), not a namesake: `hermes memory
+  setup` selects "honcho" and points at local server. Plus `honcho-memory` agent skill.
+- Migration bridge: Honcho can import existing MEMORY.md/USER.md/IDENTITY.md (non-destructive).
+  JARVIS's `jarvis-profile.md` is exactly that shape -> direct import path.
+- API shape: peer -> session -> add_messages() [store] -> background Neuromancer reasoning
+  -> session.context(tokens=...) / peer.chat(...) [query] -> inject into model. Replaces
+  JARVIS's current "dump whole jarvis-profile.md into every prompt" with budgeted, reasoned
+  context (the token win, complementary to Phase 19 `oc` which attacks web-read tokens).
+
+**Prerequisites CONFIRMED on host:**
+- Docker 29.6.1 + Compose v5.2.0: available.
+- GEMINI_MODEL = gemini-2.5-flash (function-calling capable): available.
+
+**DESIGN DECISION (not yet built):**
+- Honcho is an AUGMENTATION layer, NOT a replacement of the system of record.
+  - Keep `remember_fact` -> deterministic append to `jarvis-profile.md` (certain, auditable,
+    offline). ALSO mirror the fact into Honcho (`session.add_messages`) so it gets reasoned.
+  - Replace Phase 18 "always-true full profile inject" with a budgeted `session.context(
+    tokens=...)` call per turn (fewer tokens, richer relevance). Keep `jarvis-profile.md`
+    as fallback if Honcho is down.
+- Privacy: self-hosted -> data on-box, no training exposure. "Peers" model = humans+agents
+  first-class; only enable cross-agent peer sharing deliberately, not by default.
+
+**PLANNED WORK (Phases 20a-20c) — NOT STARTED:**
+- 20a: Self-host Honcho locally (Docker), Gemini reasoning tier, `localhost:8000`, smoke test
+  `session.context()` returns reasoned summary. Verify Honcho runs with Gemini-only (no
+  OpenAI key) — this is the ONE remaining unknown (template says gemini supported, but the
+  default example uses OpenAI; must confirm a Gemini-only .env boots cleanly).
+- 20b: JARVIS augmentation — `remember_fact` mirrors to Honcho; new `get_memory_context()`
+  tool wraps `session.context(tokens=...)`; wire into brain_gemini.py persistent-memory
+  injection (Phase 18 site) as the primary source, `jarvis-profile.md` as fallback.
+- 20c: Hermes skill `honcho-memory` wiring for MY (Hermes) use; decide voice UX for memory
+  recall (read summary vs top-N).
+
+**VERIFICATION DISCIPLINE (carried from Phase 19):**
+- Edit-splice scripts via Python (NOT patch()) to avoid corrupting tools.py/brain_gemini.py.
+- Durable gate script `scripts/hermes-verify-phase20-*.py` (kept on-disk per convention).
+- Live WS turn proving memory recall routes through Honcho context, not raw profile dump.
+- Restart server after edits (watcher auto-restarts; confirm new PID + startup complete).
+- Ad-hoc re-verify of changed behavior (NOT project suite green — no canonical suite exists).
+
+**OPEN ITEMS / USER DECISIONS:**
+- Confirm Gemini-only Honcho .env boots (20a first step).
+- Docker Desktop running on this Windows host? (docker CLI present; daemon must be up to
+  `compose up`.)
+- Cross-agent "Peers" sharing: opt-in only, default off.
+- Voice UX for memory recall (same open question as Phase 19).
+
+### Phase 20b (2026-08-26 reconciliation): PENDING-phase code audit
+
+**Triggered by:** user asked to reconcile PENDING phases against actual code. Done read-only
+(grep of tools.py / brain_gemini.py / autonomous.py / jobs.py). Result: the plan's
+"PENDING" labels for Phases 15/16/17/18 are STALE — all four are implemented and wired in
+code. The real gap is verification evidence (durable gate + live turn), not missing code.
+
+**Evidence found (grep, not memory):**
+- P15 autonomous runner: `run_autonomous()` (tools.py:2135) + `autonomous.py` module +
+  `jobs.py` + `think()` routes `_is_multistep_goal` to it + allowlist NEEDS_CONFIRM gate.
+  -> CODE PRESENT.
+- P16 voice job control: `stop_music`/`stop_spotify` in TOOL_MAP; `job_control()` (tools.py:2156);
+  `think()` stop/close_app branches; pause at tools.py:3137. -> CODE PRESENT.
+- P17 evidence-gated + auto-retry: `autonomous.py` `_verify_step()` (line 197) re-checks the
+  artifact itself; rejects `RESULT: done` without matching `[STEP] done` evidence lines
+  (lines 78, 182, 261, 299, 336); `MAX_TURNS=40`. -> CODE PRESENT (real gate, not stub).
+- P18 durable memory: `remember_fact()` (tools.py:2182) live in TOOL_MAP; writes
+  `jarvis-profile.md` (## Remembered, deduped, capped _REMEMBER_CAP=40); injected into
+  brain_gemini persistent-memory context. -> CODE PRESENT AND WIRED.
+- App-lookup audit (2026-08-25, PENDING FIX): `open_application` (tools.py:2635) now resolves
+  via `machine_capabilities.resolve()` + APP_ALIASES, no junk startfile (Phase 14b purge
+  applied). -> FIXED IN CODE.
+
+**CORRECTED STATUS (supersedes the PENDING labels above):**
+- Phase 7: intentional umbrella, not a build item.
+- Phases 15, 16, 17, 18: IMPLEMENTED IN CODE. Status = "DONE (code present; durable
+  verify-gate NOT yet run)". To flip to fully DONE, run the Phase-19-style gate for each.
+- App-lookup audit: RESOLVED in code.
+
+**CONCLUSION:** Zero phases are truly missing/unbuilt. The only honest gap is verification
+evidence for 15/16/17/18 (no green durable gate on record). Next advisable step before any
+new build (Phase 20): run the missing verify-gates for 15/16/17/18 so the plan reflects
+reality, OR proceed to Phase 20a (self-host Honcho) since that is independent new work.
+
+### Phase 20a (2026-08-26): Honcho self-hosted — Gemini-only boot TESTED & PASS
+
+**Riskiest unknown resolved:** Does Honcho boot with Gemini-only (no OpenAI key)?
+**ANSWER: YES.** Verified end-to-end against the live local server.
+
+**Setup performed (read-only intent, then executed):**
+- Cloned plastic-labs/honcho -> `C:\Users\deped\Documents\honcho` (separate from jarvis-demo).
+- `docker compose up -d`: 4 containers — database (pgvector:pg15), redis, api, deriver.
+  All report healthy. API health `http://localhost:8000/health` -> `{"status":"ok"}`.
+- `.env` built GEMINI-ONLY: `LLM_GEMINI_API_KEY` (reused JARVIS's exported GEMINI_API_KEY,
+  len 53; NOT hardcoded — pulled from env at build time), and every module transport
+  forced to gemini: LLM_DEFAULT_TRANSPORT, DERIVER_MODEL_CONFIG__TRANSPORT,
+  DIALECTIC_LEVELS__{minimal,low,medium,high,max}__MODEL_CONFIG__TRANSPORT,
+  EMBEDDING_MODEL_CONFIG__TRANSPORT=gemini. Models pinned to gemini-2.5-flash (same
+  function-calling model JARVIS uses); embeddings auto-default to gemini-embedding-001
+  (confirmed in src/config.py `_default_embedding_model_for_transport("gemini")`).
+- Bogus `LLM_OPENAI_API_KEY=your-api-key-here` removed so no openai fallback is attempted.
+
+**PORT CONFLICT RESOLVED:** Native Postgres already owns host 127.0.0.1:5432 (PID 8064).
+Honcho's compose mapped `127.0.0.1:5432:5432` -> COLLISION. Fix: remapped Honcho Postgres
+host port to `127.0.0.1:5433:5432` in docker-compose.yml (container-internal stays 5432;
+API/Deriver reach DB via docker-network hostname `database:5432`, unaffected). Native PG
+left untouched. NOTE: if connecting to Honcho's PG from the host, use port 5433.
+
+**E2E PROOF (honcho-ai SDK 2.3.0, base_url=http://localhost:8000):**
+- Stored: peer "alice" + session "s1" + message "I prefer morning meetings and I'm based
+  in Manila, Philippines."
+- `peer.chat("What timezone is the user in and when do they like meetings?")` ->
+  "Alice is based in Manila, Philippines, which is in the Philippine Standard Time (PST)
+  zone (UTC+8). She prefers morning meetings."  -> Gemini reasoning + retrieval WORKING,
+  NO OpenAI key involved.
+- Embeddings worked (message embedded + retrieved via context()).
+- CONCLUSION: Gemini-only Honcho is viable as JARVIS's memory layer. The earlier worried
+  "Gemini-only may need OpenAI" hypothesis was FALSE — code supports gemini embeddings.
+
+**Status: Phase 20a COMPLETE (verified live).** Stack is persistent (restart: unless-stopped).
+Next: Phase 20b (wire JARVIS augmentation: remember_fact mirror + get_memory_context()).
+
+### Phase 20b (2026-08-26): JARVIS durable memory wired into self-hosted Honcho
+
+**Executed via /opencode** (user standing rule: coding tasks -> OpenCode). Dispatched with
+`opencode run --model opencode-go/hy3` from the jarvis-demo project dir (NOT home; OS-
+redirect to file, no PIPE — avoids the documented deadlock). NOTE: correct Go namespace is
+`opencode-go/hy3`, not `opencode/hy3` (the latter is unregistered -> ProviderModelNotFound).
+OpenCode rc=0, did its own verify; Hermes then RE-VERIFIED independently (no trust of self-report).
+
+**Changes (tools.py + brain_gemini.py), all verified on disk:**
+- `tools._get_honcho()` lazy cached Honcho client -> http://localhost:8000, workspace "jarvis",
+  peer "user". Returns None on any failure (sentinel False after first try).
+- `tools.remember_in_honcho(fact)` best-effort mirror; NEVER raises. Called from `remember_fact`
+  AFTER the deterministic jarvis-profile.md write (system of record preserved).
+- `tools.get_memory_context(tokens=4000)` -> Honcho `session.context(summary=True)`; on ANY
+  failure falls back to reading jarvis-profile.md. Output is memory DATA (quarantined in
+  execute_tool's tuple, alongside web_browse).
+- TOOL_MAP entry `"get_memory_context"` + added to execute_tool quarantine set.
+- brain_gemini.py: `get_memory_context` TOOL_DECLARATIONS entry + wired into the Phase 18
+  persistent-memory injection (Honcho context augmented ABOVE the existing profile read;
+  profile read preserved as fallback).
+- remember_fact's confirmation string untouched; jarvis-profile.md content never modified by
+  the augmentation.
+
+**VERIFICATION (Hermes durable gate scripts/hermes-verify-phase20b.py): ALL PASS 9/9, exit 0:**
+- symbols _get_honcho / remember_in_honcho / get_memory_context defined (no spec drift).
+- remember_fact calls remember_in_honcho(fact).
+- get_memory_context in TOOL_MAP + quarantine set + TOOL_DECLARATIONS.
+- brain injects get_memory_context.
+- LIVE round-trip: remember_fact("<unique fact>") -> get_memory_context() returned it from
+  Honcho (proves mirror + retrieve work). Test token cleaned from jarvis-profile.md after.
+
+**Status: Phase 20b COMPLETE (verified live).** Honcho is now JARVIS's reasoned memory
+augmentation layer; jarvis-profile.md remains the offline system of record.
+Next optional: Phase 20c — Hermes `honcho-memory` skill + voice UX for memory recall.

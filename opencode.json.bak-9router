@@ -1,0 +1,75 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "opencode/hy3-free",
+  "small_model": "ninerouter/ag/gemini-3.5-flash-low",
+  "provider": {
+    "ninerouter": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "OmniRoute (local)",
+      "options": {
+        "baseURL": "http://localhost:20128/v1"
+      },
+      "models": {
+        "cx/gpt-5.4-mini": {},
+        "ag/gemini-3.6-flash-low": {},
+        "ag/gemini-3-flash": {},
+        "codex": {},
+        "ag/claude-sonnet-4-6": {}
+      }
+    },
+    "ollama": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Ollama (offline floor)",
+      "options": {
+        "baseURL": "http://localhost:11434/v1"
+      },
+      "models": {
+        "qwen3:4b-instruct": {}
+      }
+    }
+  },
+  "agent": {
+    "app-launcher": {
+      "description": "Resolves and opens/closes desktop apps and websites using JARVIS's app_registry.json and web_registry.json. Read-only on registries.",
+      "model": "ninerouter/cx/gpt-5.4-mini",
+      "tools": { "read": true, "grep": true, "bash": true, "write": false, "edit": false, "patch": false },
+      "prompt": "You are JARVIS's app launcher. Resolve app/site names against C:/Users/deped/Documents/jarvis-demo/app_registry.json and web_registry.json (manual entries win ties). Launch via bash (start/powershell). NEVER edit any file. Report exactly what was launched with its path or URL as evidence."
+    },
+    "music-agent": {
+      "description": "Plays or stops music on Spotify desktop / YouTube Music in Brave. Must confirm the actual playing track before reporting success.",
+      "model": "ninerouter/cx/gpt-5.4-mini",
+      "tools": { "bash": true, "read": false, "write": false, "edit": false, "patch": false },
+      "prompt": "You are JARVIS's music specialist. Drive Spotify desktop (or music_agent.py worker) via bash. HARD RULE: verify the actually-playing track (window title / metadata) and report it; never claim playback started without evidence. If playback fails, say so plainly - do not pretend."
+    },
+    "browser-session": {
+      "description": "Uses the signed-in Chrome debug session on port 9223 for ChatGPT history search, web research, and logged-in site tasks. Never closes user tabs.",
+      "model": "ninerouter/ag/gemini-3-flash",
+      "tools": { "bash": true, "read": true, "grep": true, "write": false, "edit": false, "patch": false },
+      "prompt": "You are JARVIS's browser specialist. Attach to Chrome over CDP at http://localhost:9223 (open NEW tabs only; NEVER close or navigate existing user tabs). For ChatGPT tasks use the signed-in session. Report page titles/URLs touched as evidence."
+    },
+    "project-runner": {
+      "description": "Starts/stops/verifies dev servers listed in projects.json (iRIMS-V, portfolio, etc.). Reads credentials from the vault read-only; NEVER logs or echoes them.",
+      "model": "ninerouter/codex",
+      "tools": { "bash": true, "read": true, "grep": true, "write": false, "edit": false, "patch": false },
+      "prompt": "You are JARVIS's project runner. Use projects.json beside this config for project definitions. Start dev servers detached, verify health by polling the port, report status. Credentials come from the vault strictly read-only - NEVER print, log, or include them in output. Report server URLs and health-check results as evidence."
+    },
+    "media-creator": {
+      "description": "Delegates image/video/doc generation to Manus AI via cookie handoff through the browser session.",
+      "model": "ninerouter/ag/gemini-3.6-flash-low",
+      "tools": { "bash": true, "read": true, "write": false, "edit": false, "patch": false },
+      "prompt": "You are JARVIS's media specialist. Drive manus_agent.py delegate_to_manus() via bash for image/video/doc generation. Wait for strict completion detection; capture assets in original format. If manus_cookies.json is absent, return a clear 'setup needed' message - never fail silently."
+    },
+    "desktop-operator": {
+      "description": "Automates native Windows GUI apps (Office, dialogs) that CLI tools cannot reach. Highest-risk role: strongest model, read-only files.",
+      "model": "ninerouter/ag/claude-sonnet-4-6",
+      "tools": { "bash": true, "read": true, "write": false, "edit": false, "patch": false },
+      "prompt": "You are JARVIS's desktop operator for native GUI automation via PowerShell (UIAutomation, SendKeys) through bash. DESTRUCTIVE actions (deleting, closing unsaved work, system settings) REQUIRE explicit user confirmation already present in the task - if absent, refuse and ask. Never write files outside temp. Report each window/button action taken as evidence."
+    },
+    "registry-curator": {
+      "description": "Re-scans installed apps and top browser-history domains, updating app_registry.json and web_registry.json incrementally. The ONLY agent allowed to write registries.",
+      "model": "ninerouter/ag/gemini-3.6-flash-low",
+      "tools": { "bash": true, "read": true, "write": true, "edit": false, "patch": true },
+      "prompt": "You are JARVIS's registry curator. Incrementally update app_registry.json and web_registry.json from installed-software scans and browser History top domains. ONLY these two files may be written - nothing else. Keep manual entries intact (they win over discovered ones). Target scan time under 0.5s incremental. Report counts added/updated/skipped."
+    }
+  }
+}

@@ -1,0 +1,953 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>JARVIS — Apps Module · High-Fidelity Mockup</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+/* ───────────────────────── TOKENS ─────────────────────────
+   Exact JARVIS values from the brief are kept as literals:
+     --bg #0e0e12 · --card #1b1b23 · --accent #6ea8fe
+   The dark-mode *ramp* (panel, hairlines, hovers, elevation)
+   is authored in OKLCH so the surfaces share one perceptual
+   lightness. The holo accent (#ffb454) is lifted straight from
+   jarvis_visual.html / hud_artifact.html.                       */
+:root{
+  --bg:        #0e0e12;                 /* brief: HUD background           */
+  --card:      #1b1b23;                 /* brief: app card                 */
+  --card-2:    #22222c;                 /* deeper inset surface            */
+  --accent:    #6ea8fe;                 /* brief: blue accent / JARVIS act */
+  --holo:      #ffb454;                 /* jarvis_visual holo accent       */
+  --ink:       #0b0805;                 /* HUD ink (backdrop)              */
+  --text:      #e8e9f0;
+  --muted:     #8a8fa3;
+  --danger:    #ff6b6b;
+  --ok:        #57d18a;
+  --warn:      #ffd166;
+
+  /* OKLCH dark ramp (with hex fallback for old engines) */
+  --panel:        #13131b;  --panel:        oklch(0.168 0.010 285);
+  --panel-2:      #16161f;  --panel-2:      oklch(0.185 0.012 285);
+  --line:         #262631;  --line:         oklch(0.235 0.010 285);
+  --line-soft:    #1d1d27;  --line-soft:    oklch(0.20  0.010 285);
+  --hover:        #20202b;  --hover:        oklch(0.215 0.012 285);
+  --elev:         0 18px 50px -22px rgba(0,0,0,.85);
+  --glow-holo:   0 0 0 1px color-mix(in srgb, var(--holo) 22%, transparent),
+                 0 0 22px -4px color-mix(in srgb, var(--holo) 32%, transparent);
+  --glow-accent: 0 0 0 1px color-mix(in srgb, var(--accent) 26%, transparent),
+                 0 0 22px -6px color-mix(in srgb, var(--accent) 40%, transparent);
+
+  --r-lg: 16px; --r-md: 11px; --r-sm: 8px;
+  --font: "Archivo", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+}
+
+*{ box-sizing: border-box; margin:0; padding:0; }
+html,body{ height:100%; }
+body{
+  font-family: var(--font);
+  color: var(--text);
+  background:
+    radial-gradient(120% 80% at 50% -10%, color-mix(in srgb, var(--holo) 7%, transparent), transparent 60%),
+    var(--ink);
+  min-height: 100vh;
+  padding: 34px 22px 70px;
+  -webkit-font-smoothing: antialiased;
+  position: relative;
+  overflow-x: hidden;
+}
+/* HUD grid + scanline backdrop (faint, non-interactive) */
+body::before{
+  content:""; position: fixed; inset:0; z-index:0; pointer-events:none;
+  background-image:
+    repeating-linear-gradient(0deg, color-mix(in srgb, var(--holo) 5%, transparent) 0 1px, transparent 1px 64px),
+    repeating-linear-gradient(90deg, color-mix(in srgb, var(--holo) 5%, transparent) 0 1px, transparent 1px 64px);
+  opacity:.5;
+}
+body::after{
+  content:""; position: fixed; inset:0; z-index:0; pointer-events:none;
+  background: repeating-linear-gradient(0deg, rgba(0,0,0,.20) 0 1px, transparent 1px 3px);
+  opacity:.35;
+}
+
+/* ───────────────────────── SHELL ───────────────────────── */
+.stage{ position:relative; z-index:1; width: 100%; margin: 0 auto; display:flex; flex-direction:column; min-height: calc(100vh - 68px); }
+.masthead{
+  display:flex; align-items:center; gap:16px; flex-wrap:wrap;
+  padding: 14px 6px 18px;
+}
+.brand{
+  font-weight:800; font-size:19px; letter-spacing:.34em;
+  color: color-mix(in srgb, var(--holo) 32%, #f7f1e6);
+}
+.masthead .tag{
+  display:inline-flex; align-items:center; gap:7px;
+  padding:5px 11px; border:1px solid color-mix(in srgb, var(--holo) 28%, transparent);
+  border-radius:999px; font-size:10px; font-weight:600; letter-spacing:.22em;
+  color: color-mix(in srgb, var(--holo) 82%, #fff);
+}
+.dot{ width:7px;height:7px;border-radius:50%; background:var(--holo); box-shadow:0 0 10px var(--holo); animation: blink 1.8s linear infinite; }
+@keyframes blink{ 0%,53%{opacity:1} 57%,100%{opacity:.18} }
+.masthead .spacer{ flex:1; }
+.masthead .route{
+  font-size:10px; font-weight:600; letter-spacing:.22em;
+  color: color-mix(in srgb, var(--holo) 45%, transparent);
+  text-transform:uppercase;
+}
+
+/* ───────────────────────── PANEL ───────────────────────── */
+.panel{
+  position:relative;
+  background: var(--bg);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--holo) 3%, var(--panel)) 0%, var(--panel) 140px);
+  border:1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: var(--elev);
+  overflow:hidden;
+  flex:1 1 auto; display:flex; flex-direction:column;
+}
+/* top holo hairline + corner ticks */
+.panel::before{
+  content:""; position:absolute; top:0; left:0; right:0; height:2px;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb,var(--holo) 70%,transparent), transparent);
+  opacity:.7;
+}
+.panel .corner{ position:absolute; width:14px; height:14px; border:1px solid color-mix(in srgb,var(--holo) 35%,transparent); pointer-events:none; }
+.panel .corner.tl{ top:10px; left:10px; border-right:0; border-bottom:0; }
+.panel .corner.tr{ top:10px; right:10px; border-left:0; border-bottom:0; }
+.panel .corner.bl{ bottom:10px; left:10px; border-right:0; border-top:0; }
+.panel .corner.br{ bottom:10px; right:10px; border-left:0; border-top:0; }
+
+.panel-head{ padding: 26px 28px 18px; }
+.panel-head h1{
+  font-size: 23px; font-weight:800; letter-spacing:-.01em; line-height:1.1;
+  display:flex; align-items:center; gap:12px;
+}
+.panel-head h1 .ix{
+  font: 700 11px/1 var(--mono); letter-spacing:.18em; color: var(--holo);
+  border:1px solid color-mix(in srgb,var(--holo) 32%,transparent);
+  padding:5px 7px; border-radius:6px;
+}
+.panel-head .sub{ color:var(--muted); font-size:13px; margin-top:8px; max-width:60ch; line-height:1.5; }
+
+.toolbar{ display:flex; gap:10px; align-items:center; padding: 4px 28px 18px; flex-wrap:wrap; }
+.search{
+  flex:1; min-width:220px; display:flex; align-items:center; gap:9px;
+  background: var(--card); border:1px solid var(--line);
+  border-radius: var(--r-sm); padding:9px 12px;
+  transition: border-color .15s, box-shadow .15s;
+}
+.search:focus-within{ border-color: color-mix(in srgb,var(--accent) 55%,transparent); box-shadow: var(--glow-accent); }
+.search svg{ width:15px;height:15px; color:var(--muted); flex:none; }
+.search input{
+  flex:1; background:transparent; border:0; outline:0; color:var(--text);
+  font:500 13px var(--font); caret-color: var(--accent);
+}
+.search input::placeholder{ color: color-mix(in srgb,var(--muted) 80%,transparent); }
+.btn{
+  font:700 12px/1 var(--font); letter-spacing:.04em; cursor:pointer;
+  border-radius: var(--r-sm); padding:9px 14px; border:1px solid transparent;
+  display:inline-flex; align-items:center; gap:7px; transition: filter .15s, background .15s, border-color .15s, color .15s;
+  white-space:nowrap;
+}
+.btn svg{ width:14px;height:14px; }
+.btn-primary{ background: var(--holo); color: var(--ink); }
+.btn-primary:hover{ filter: brightness(1.08); }
+.btn-accent{ background: var(--accent); color: var(--ink); }
+.btn-accent:hover{ filter: brightness(1.08); }
+.btn-ghost{ background:transparent; color: color-mix(in srgb,var(--holo) 88%,#fff); border-color: color-mix(in srgb,var(--holo) 32%,transparent); }
+.btn-ghost:hover{ background: color-mix(in srgb,var(--holo) 10%,transparent); }
+.btn-danger{ background:transparent; color:var(--danger); border-color: color-mix(in srgb,var(--danger) 40%,transparent); }
+.btn-danger:hover{ background: color-mix(in srgb,var(--danger) 12%,transparent); }
+.btn-sm{ padding:7px 11px; font-size:11px; }
+.btn:disabled{ opacity:.45; cursor:not-allowed; }
+
+/* ───────────────────────── TABS ───────────────────────── */
+.tabs{
+  display:flex; gap:2px; padding: 0 28px;
+  border-bottom:1px solid var(--line);
+}
+.tab{
+  position:relative; padding:13px 18px 14px; cursor:pointer; user-select:none;
+  display:flex; align-items:center; gap:10px; color:var(--muted);
+  border-bottom:2px solid transparent; margin-bottom:-1px;
+  transition: color .15s, border-color .15s;
+}
+.tab .num{ font: 700 10px/1 var(--mono); letter-spacing:.12em; opacity:.7; }
+.tab .lbl{ font: 700 12px/1 var(--font); letter-spacing:.16em; text-transform:uppercase; }
+.tab .count{
+  font: 600 10px/1 var(--mono); padding:3px 7px; border-radius:999px;
+  background: color-mix(in srgb,var(--muted) 16%,transparent); color:var(--muted);
+  transition: background .15s, color .15s;
+}
+.tab:hover{ color: color-mix(in srgb,var(--text) 80%,transparent); }
+.tab.on{ color: var(--holo); border-bottom-color: var(--holo); }
+.tab.on .num{ color: var(--holo); opacity:1; }
+.tab.on .count{ background: color-mix(in srgb,var(--holo) 22%,transparent); color: var(--holo); }
+
+/* ───────────────────────── VIEWS ───────────────────────── */
+.view{ display:none; padding: 22px 28px 30px; animation: fadeUp .28s ease both; }
+.view.show{ display:flex; flex-direction:column; }
+@keyframes fadeUp{ from{ opacity:0; transform: translateY(6px);} to{ opacity:1; transform:none; } }
+.grid{ display:grid; grid-template-columns: repeat(auto-fill, minmax(338px,1fr)); gap:16px; flex:1 1 auto; align-content:start; }
+.empty{
+  padding:46px; text-align:center; color:var(--muted); font-size:13px;
+  border:1px dashed var(--line); border-radius:var(--r-md); opacity:.8;
+}
+
+/* ───────────────────────── APP CARD ───────────────────────── */
+.app-card{
+  background: var(--card);
+  border:1px solid var(--line);
+  border-radius: var(--r-md);
+  padding:16px; position:relative;
+  transition: transform .16s ease, border-color .16s, box-shadow .16s;
+}
+.app-card:hover{ transform: translateY(-2px); border-color: color-mix(in srgb,var(--holo) 26%,var(--line)); }
+.app-card.installed{ border-left:3px solid color-mix(in srgb,var(--accent) 55%,transparent); }
+.app-card.detected{ border-left:3px solid color-mix(in srgb,var(--holo) 55%,transparent); }
+.app-card.hidden{ border-left:3px solid color-mix(in srgb,var(--muted) 55%,transparent); opacity:.92; }
+/* expanded hero card breaks out to full width so the grid rows below stay even */
+/* expanded hero card breaks out to full width so the grid rows below stay even */
+.app-card.hero{ grid-column: 1 / -1; max-width: 760px; margin-inline:auto; }
+
+.app-top{ display:flex; gap:12px; align-items:flex-start; }
+.app-ico{
+  width:42px;height:42px;flex:none;border-radius:10px;
+  display:grid; place-items:center; font:800 16px/1 var(--font); letter-spacing:.02em;
+  color: var(--holo); background: color-mix(in srgb,var(--holo) 12%,transparent);
+  border:1px solid color-mix(in srgb,var(--holo) 26%,transparent);
+  box-shadow: inset 0 0 14px -6px color-mix(in srgb,var(--holo) 70%,transparent);
+}
+.app-head{ flex:1; min-width:0; }
+.app-name{ font:700 15.5px/1.2 var(--font); letter-spacing:-.01em; }
+.app-meta{ margin-top:5px; display:flex; flex-wrap:wrap; gap:7px; align-items:center; font-size:11px; color:var(--muted); }
+.kicker{ font: 600 10px/1 var(--mono); letter-spacing:.1em; text-transform:uppercase; color: color-mix(in srgb,var(--holo) 78%,#fff); }
+.kind{
+  font:600 10px/1 var(--mono); letter-spacing:.08em; text-transform:uppercase;
+  padding:3px 7px; border-radius:5px; color:var(--muted);
+  background: color-mix(in srgb,var(--muted) 14%,transparent);
+}
+.kind.gui{ color: color-mix(in srgb,var(--accent) 88%,#fff); background: color-mix(in srgb,var(--accent) 14%,transparent); }
+.kind.cli{ color: color-mix(in srgb,var(--holo) 88%,#fff); background: color-mix(in srgb,var(--holo) 12%,transparent); }
+
+.status{
+  flex:none; font:700 9.5px/1 var(--mono); letter-spacing:.14em; text-transform:uppercase;
+  padding:5px 8px; border-radius:6px; white-space:nowrap;
+}
+.status.enabled{ color:var(--ok); background: color-mix(in srgb,var(--ok) 14%,transparent); border:1px solid color-mix(in srgb,var(--ok) 32%,transparent); }
+.status.disabled{ color:var(--muted); background: color-mix(in srgb,var(--muted) 12%,transparent); border:1px solid var(--line); }
+.status.broken{ color:var(--danger); background: color-mix(in srgb,var(--danger) 14%,transparent); border:1px solid color-mix(in srgb,var(--danger) 32%,transparent); }
+.status.detected{ color:var(--holo); background: color-mix(in srgb,var(--holo) 12%,transparent); border:1px solid color-mix(in srgb,var(--holo) 30%,transparent); }
+.status.hidden{ color:var(--muted); background: color-mix(in srgb,var(--muted) 12%,transparent); border:1px solid var(--line); }
+
+/* actions row */
+.app-actions{ margin-top:15px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.app-actions .grow{ flex:1; }
+
+/* segmented enable / disable toggle */
+.seg{
+  display:inline-flex; border:1px solid var(--line); border-radius:999px; overflow:hidden;
+  background: var(--card-2); padding:2px;
+}
+.seg button{
+  border:0; background:transparent; cursor:pointer;
+  font:700 10px/1 var(--font); letter-spacing:.12em; text-transform:uppercase;
+  padding:6px 12px; border-radius:999px; color:var(--muted); transition: all .15s; white-space:nowrap;
+}
+.seg button.on{ background: var(--accent); color: var(--ink); box-shadow: var(--glow-accent); }
+.seg.off button.off.on{ background: var(--muted); color:var(--ink); box-shadow:none; }
+
+/* confidence meter (Available) */
+.conf{ display:flex; align-items:center; gap:8px; }
+.conf .meter{ display:inline-flex; gap:3px; align-items:flex-end; height:14px; }
+.conf .meter i{ width:4px; background: color-mix(in srgb,var(--muted) 30%,transparent); border-radius:1px; }
+.conf .meter i.on{ background: var(--holo); box-shadow:0 0 6px -1px color-mix(in srgb,var(--holo) 70%,transparent); }
+.conf.high .meter i.on{ background: var(--ok); box-shadow:0 0 6px -1px color-mix(in srgb,var(--ok) 70%,transparent); }
+.conf.low  .meter i.on{ background: var(--warn); box-shadow:0 0 6px -1px color-mix(in srgb,var(--warn) 70%,transparent); }
+.conf .lbl{ font:600 10px/1 var(--mono); letter-spacing:.1em; text-transform:uppercase; color:var(--muted); }
+
+/* ───────────────────────── RULES (expandable) ───────────────────────── */
+.details{
+  margin-top:14px; display:grid; grid-template-rows: 0fr;
+  transition: grid-template-rows .26s ease;
+}
+.details.open{ grid-template-rows: 1fr; }
+.details > .inner{ overflow:hidden; min-height:0; }
+.rule-block{ border-top:1px solid var(--line-soft); padding-top:14px; margin-top:14px; }
+.sh-label{
+  font:700 10px/1 var(--font); letter-spacing:.18em; text-transform:uppercase;
+  color: color-mix(in srgb,var(--holo) 72%,#fff); display:flex; align-items:center; gap:8px; margin-bottom:9px;
+}
+.sh-label::before{ content:""; width:5px;height:5px; background:var(--holo); border-radius:50%; box-shadow:0 0 8px var(--holo); }
+
+/* compiled rule row */
+.rule{
+  display:flex; align-items:baseline; gap:8px; flex-wrap:wrap;
+  background: var(--card-2); border:1px solid var(--line);
+  border-radius:8px; padding:8px 10px; margin-bottom:6px; font-size:12px;
+}
+.rule .rid{ font:600 11px/1.3 var(--mono); color:var(--accent); }
+.rule .enf{ color:var(--muted); font-size:11px; }
+.rule .chk{ color:var(--ok); font-size:11px; }
+.rule .chk::before{ content:"✓ "; }
+.rule.empty{ color:var(--muted); font-style:italic; justify-content:center; }
+
+textarea.drafts{
+  width:100%; min-height:74px; resize:vertical;
+  background: var(--card-2); border:1px solid var(--line); border-radius:8px;
+  padding:10px; color:var(--text); font:500 13px/1.5 var(--font);
+  transition: border-color .15s, box-shadow .15s;
+}
+textarea.drafts:focus{ outline:0; border-color: color-mix(in srgb,var(--accent) 55%,transparent); box-shadow: var(--glow-accent); }
+textarea.drafts::placeholder{ color: color-mix(in srgb,var(--muted) 75%,transparent); }
+
+.rule-actions{ display:flex; gap:8px; align-items:center; margin-top:9px; flex-wrap:wrap; }
+.msg{ font-size:11.5px; min-height:14px; flex:1; color:var(--muted); }
+.msg.ok{ color:var(--ok); } .msg.err{ color:var(--danger); }
+
+/* JARVIS proposal panel */
+.proposal{
+  margin-top:12px; display:none;
+  background: linear-gradient(180deg, color-mix(in srgb,var(--holo) 6%,var(--card-2)), var(--card-2));
+  border:1px solid color-mix(in srgb,var(--holo) 30%,transparent);
+  border-left:3px solid var(--holo); border-radius:9px; padding:13px 14px;
+  box-shadow: inset 0 0 30px -18px color-mix(in srgb,var(--holo) 90%,transparent);
+  animation: fadeUp .25s ease both;
+}
+.proposal.show{ display:block; }
+.proposal .who{ font:700 10px/1 var(--font); letter-spacing:.18em; text-transform:uppercase; color:var(--holo); display:flex; align-items:center; gap:7px; }
+.proposal .who .av{ width:16px;height:16px;border-radius:4px; background:var(--holo); display:grid; place-items:center; color:var(--ink); font:800 10px/1 var(--font); }
+.proposal pre{
+  margin-top:10px; background: color-mix(in srgb,var(--ink) 55%,transparent);
+  border:1px solid var(--line); border-radius:7px; padding:10px 12px;
+  font:500 12px/1.55 var(--mono); color: color-mix(in srgb,var(--holo) 80%,#fff);
+  white-space:pre-wrap; word-break:break-word;
+}
+.proposal .assumed{ margin-top:9px; font-size:11.5px; color:var(--warn); line-height:1.5; }
+.proposal .assumed b{ color: color-mix(in srgb,var(--warn) 90%,#fff); }
+
+/* expand toggle */
+.expand{ margin-top:14px; display:flex; justify-content:flex-end; }
+.expand button{
+  background:transparent; border:1px solid var(--line); color:var(--muted);
+  border-radius:999px; padding:6px 13px; cursor:pointer;
+  font:700 10px/1 var(--font); letter-spacing:.1em; text-transform:uppercase;
+  display:inline-flex; align-items:center; gap:7px; transition: all .15s;
+}
+.expand button:hover{ color: color-mix(in srgb,var(--holo) 88%,#fff); border-color: color-mix(in srgb,var(--holo) 32%,transparent); }
+.expand .chev{ font-size:11px; color:var(--holo); }
+
+/* ───────────────────────── WIREFRAMES ───────────────────────── */
+.wf-section{ margin-top:46px; }
+.wf-head{
+  display:flex; align-items:baseline; gap:14px; padding:0 6px 18px;
+  border-bottom:1px solid var(--line); margin-bottom:24px;
+}
+.wf-head h2{ font:800 14px/1 var(--font); letter-spacing:.2em; text-transform:uppercase; color: color-mix(in srgb,var(--holo) 85%,#fff); }
+.wf-head .note{ font-size:12px; color:var(--muted); }
+.wf-grid{ display:grid; grid-template-columns: repeat(auto-fit, minmax(300px,1fr)); gap:20px; }
+.wf{
+  background: transparent; border:1px dashed color-mix(in srgb,var(--holo) 30%,transparent);
+  border-radius:12px; padding:16px; position:relative;
+}
+.wf .wf-tab{ font:700 10px/1 var(--mono); letter-spacing:.18em; color:var(--holo); margin-bottom:14px; display:flex; align-items:center; gap:8px; }
+.wf .wf-tab .n{ border:1px solid color-mix(in srgb,var(--holo) 35%,transparent); padding:3px 5px; border-radius:4px; }
+.wf-card{
+  border:1px dashed color-mix(in srgb,var(--muted) 40%,transparent); border-radius:8px;
+  padding:12px; margin-bottom:12px; display:flex; flex-direction:column; gap:9px;
+}
+.wf-line{ height:9px; background: color-mix(in srgb,var(--muted) 22%,transparent); border-radius:3px; }
+.wf-line.w70{ width:70%; } .wf-line.w40{ width:40%; } .wf-line.w55{ width:55%; } .wf-line.w30{ width:30%; }
+.wf-row{ display:flex; gap:8px; }
+.wf-box{ flex:1; height:26px; border:1px dashed color-mix(in srgb,var(--muted) 38%,transparent); border-radius:6px; display:grid; place-items:center; font:600 9px/1 var(--mono); letter-spacing:.1em; color: color-mix(in srgb,var(--muted) 75%,transparent); text-transform:uppercase; }
+.wf-box.acc{ border-color: color-mix(in srgb,var(--holo) 45%,transparent); color: color-mix(in srgb,var(--holo) 75%,transparent); }
+.wf-stack{ display:flex; flex-direction:column; gap:6px; border-top:1px dashed color-mix(in srgb,var(--muted) 24%,transparent); padding-top:10px; }
+.wf-note{ font-size:10.5px; color: color-mix(in srgb,var(--muted) 80%,transparent); margin-top:4px; line-height:1.5; }
+
+footer.legend{
+  margin-top:40px; display:flex; flex-wrap:wrap; gap:18px; justify-content:center;
+  font-size:11px; color:var(--muted); letter-spacing:.04em;
+}
+footer.legend span{ display:inline-flex; align-items:center; gap:7px; }
+footer.legend i{ width:11px;height:11px;border-radius:3px; display:inline-block; }
+footer.legend .c-bg{ background:var(--bg); border:1px solid var(--line); }
+footer.legend .c-card{ background:var(--card); border:1px solid var(--line); }
+footer.legend .c-acc{ background:var(--accent); }
+footer.legend .c-holo{ background:var(--holo); }
+</style>
+</head>
+<body>
+<div class="stage">
+
+  <!-- masthead -->
+  <div class="masthead">
+    <div class="brand">J.A.R.V.I.S.</div>
+    <div class="tag"><span class="dot"></span> V4.2.1 · ONLINE</div>
+    <div class="spacer"></div>
+    <div class="route">WORKSHOP BAY 12 // APPS MODULE</div>
+  </div>
+
+  <!-- PANEL -->
+  <section class="panel">
+    <span class="corner tl"></span><span class="corner tr"></span>
+    <span class="corner bl"></span><span class="corner br"></span>
+
+    <div class="panel-head">
+      <h1><span class="ix">APP</span> Add or Remove Programs</h1>
+      <div class="sub">Manage the applications JARVIS can launch, search, and govern by voice — register what's installed, surface what's detected-but-unregistered, and tuck away what you never want surfaced. Like Windows “Add or Remove Programs”, but JARVIS-integrated.</div>
+    </div>
+
+    <div class="toolbar">
+      <label class="search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+        <input placeholder="Filter by name, category, or voice key…" />
+      </label>
+      <button class="btn btn-ghost btn-sm">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v5h-5"/></svg>
+        Rescan
+      </button>
+      <button class="btn btn-accent btn-sm">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+        Register App
+      </button>
+    </div>
+
+    <!-- TABS -->
+    <nav class="tabs">
+      <div class="tab on" data-tab="installed" onclick="switchTab('installed')">
+        <span class="num">01</span><span class="lbl">Installed</span><span class="count">4</span>
+      </div>
+      <div class="tab" data-tab="available" onclick="switchTab('available')">
+        <span class="num">02</span><span class="lbl">Available</span><span class="count">4</span>
+      </div>
+      <div class="tab" data-tab="hidden" onclick="switchTab('hidden')">
+        <span class="num">03</span><span class="lbl">Hidden</span><span class="count">3</span>
+      </div>
+    </nav>
+
+    <!-- ════════ VIEW: INSTALLED ════════ -->
+    <section class="view show" id="view-installed">
+      <div class="grid">
+
+        <!-- CARD A — hero, rules expanded + proposal shown -->
+        <article class="app-card installed hero">
+          <div class="app-top">
+            <div class="app-ico">SP</div>
+            <div class="app-head">
+              <div class="app-name">Spotify</div>
+              <div class="app-meta">
+                <span class="kicker">Music</span>
+                <span class="kind gui">gui</span>
+                <span style="color:var(--muted)">·</span>
+                <span style="font:600 11px/1 var(--mono);color:var(--muted)">key: spotify</span>
+              </div>
+            </div>
+            <span class="status enabled">enabled</span>
+          </div>
+
+          <div class="app-actions">
+            <div class="seg" role="group" aria-label="enable toggle">
+              <button class="on" onclick="seg(this)">Enabled</button>
+              <button class="off" onclick="seg(this)">Disabled</button>
+            </div>
+            <span class="grow"></span>
+            <button class="btn btn-ghost btn-sm">Open</button>
+            <button class="btn btn-danger btn-sm">Remove</button>
+            <button class="btn btn-ghost btn-sm">Hide</button>
+          </div>
+
+          <div class="details open">
+            <div class="inner">
+              <div class="rule-block">
+                <div class="sh-label">Compiled rules</div>
+                <div class="rule">
+                  <span class="rid">no_explicit</span>
+                  <span class="enf">· soft / all_sessions</span>
+                  <span class="chk">pre_play: skip if track.explicit</span>
+                </div>
+                <div class="rule">
+                  <span class="rid">night_volume_cap</span>
+                  <span class="enf">· soft / current_session</span>
+                  <span class="chk">pre_play: cap volume at 55% after 22:00</span>
+                </div>
+
+                <div class="sh-label" style="margin-top:14px">Rule drafts <span style="color:var(--muted);font-weight:500;text-transform:none;letter-spacing:0">— one phrase per line</span></div>
+                <textarea class="drafts">never play explicit content
+keep volume under 60% after 10pm</textarea>
+
+                <div class="rule-actions">
+                  <button class="btn btn-accent btn-sm" onclick="compileRules(this)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m13 2-3 7h5l-3 7"/><path d="M5 22h14"/></svg>
+                    Compile with JARVIS
+                  </button>
+                  <button class="btn btn-ghost btn-sm">Save rules</button>
+                  <span class="msg ok">Compiled ✓</span>
+                </div>
+
+                <!-- JARVIS proposal (shown) -->
+                <div class="proposal show">
+                  <div class="who"><span class="av">J</span> JARVIS PROPOSAL</div>
+                  <pre># Proposed rules for `spotify`
+- **no_explicit** (`soft` / `all_sessions`)
+  - intent: avoid explicit content
+  - check: `pre_play: skip if track.explicit`
+- **night_volume_cap** (`soft` / `current_session`)
+  - intent: cap playback volume
+  - check: `pre_play: cap volume at 55% after 22:00`
+  - from: "keep volume under 60% after 10pm"</pre>
+                  <div class="assumed"><b>JARVIS assumed:</b> “under 60%” → 55% cap · applies 22:00–06:00 · <b>all sessions</b>. Correct the drafts if wrong, then accept.</div>
+                  <div class="rule-actions" style="margin-top:11px">
+                    <button class="btn btn-primary btn-sm" onclick="acceptProposal(this)">Accept proposal</button>
+                    <button class="btn btn-ghost btn-sm">Edit drafts</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="expand">
+            <button onclick="toggleDetails(this)">Rules <span class="chev">▴</span></button>
+          </div>
+        </article>
+
+        <!-- CARD B — collapsed -->
+        <article class="app-card installed">
+          <div class="app-top">
+            <div class="app-ico" style="color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent);border-color:color-mix(in srgb,var(--accent) 26%,transparent)">VS</div>
+            <div class="app-head">
+              <div class="app-name">Visual Studio Code</div>
+              <div class="app-meta">
+                <span class="kicker">Development</span>
+                <span class="kind gui">gui</span>
+                <span style="color:var(--muted)">·</span>
+                <span style="font:600 11px/1 var(--mono);color:var(--muted)">key: vscode</span>
+              </div>
+            </div>
+            <span class="status enabled">enabled</span>
+          </div>
+          <div class="app-actions">
+            <div class="seg">
+              <button class="on" onclick="seg(this)">Enabled</button>
+              <button class="off" onclick="seg(this)">Disabled</button>
+            </div>
+            <span class="grow"></span>
+            <button class="btn btn-ghost btn-sm">Open</button>
+            <button class="btn btn-danger btn-sm">Remove</button>
+            <button class="btn btn-ghost btn-sm">Hide</button>
+          </div>
+          <div class="details"><div class="inner"><div class="rule-block">
+            <div class="sh-label">Compiled rules</div>
+            <div class="rule empty">No compiled rules yet.</div>
+            <div class="sh-label" style="margin-top:14px">Rule drafts</div>
+            <textarea class="drafts" placeholder="e.g. always open in a fresh window · never launch with admin"></textarea>
+            <div class="rule-actions">
+              <button class="btn btn-accent btn-sm" onclick="compileRules(this)">Compile with JARVIS</button>
+              <button class="btn btn-ghost btn-sm">Save rules</button>
+              <span class="msg"></span>
+            </div>
+            <div class="proposal"><div class="who"><span class="av">J</span> JARVIS PROPOSAL</div><pre></pre><div class="assumed"></div><div class="rule-actions" style="margin-top:11px"><button class="btn btn-primary btn-sm" onclick="acceptProposal(this)">Accept proposal</button></div></div>
+          </div></div></div>
+          <div class="expand"><button onclick="toggleDetails(this)">Rules <span class="chev">▾</span></button></div>
+        </article>
+
+        <!-- CARD C — disabled (toggle off) -->
+        <article class="app-card installed">
+          <div class="app-top">
+            <div class="app-ico" style="color:var(--holo);background:color-mix(in srgb,var(--holo) 12%,transparent);border-color:color-mix(in srgb,var(--holo) 26%,transparent)">GB</div>
+            <div class="app-head">
+              <div class="app-name">Git Bash</div>
+              <div class="app-meta">
+                <span class="kicker">Development</span>
+                <span class="kind cli">cli</span>
+                <span style="color:var(--muted)">·</span>
+                <span style="font:600 11px/1 var(--mono);color:var(--muted)">key: git_bash</span>
+              </div>
+            </div>
+            <span class="status disabled">disabled</span>
+          </div>
+          <div class="app-actions">
+            <div class="seg off">
+              <button class="on" onclick="seg(this)">Enabled</button>
+              <button class="off on" onclick="seg(this)">Disabled</button>
+            </div>
+            <span class="grow"></span>
+            <button class="btn btn-ghost btn-sm">Open</button>
+            <button class="btn btn-danger btn-sm">Remove</button>
+            <button class="btn btn-ghost btn-sm">Hide</button>
+          </div>
+          <div class="details"><div class="inner"><div class="rule-block">
+            <div class="sh-label">Compiled rules</div>
+            <div class="rule">
+              <span class="rid">run_as_admin</span>
+              <span class="enf">· hard / all_sessions</span>
+              <span class="chk">pre_launch: elevate token</span>
+            </div>
+            <div class="sh-label" style="margin-top:14px">Rule drafts</div>
+            <textarea class="drafts">always run as admin</textarea>
+            <div class="rule-actions">
+              <button class="btn btn-accent btn-sm" onclick="compileRules(this)">Compile with JARVIS</button>
+              <button class="btn btn-ghost btn-sm">Save rules</button>
+              <span class="msg"></span>
+            </div>
+            <div class="proposal"><div class="who"><span class="av">J</span> JARVIS PROPOSAL</div><pre></pre><div class="assumed"></div><div class="rule-actions" style="margin-top:11px"><button class="btn btn-primary btn-sm" onclick="acceptProposal(this)">Accept proposal</button></div></div>
+          </div></div></div>
+          <div class="expand"><button onclick="toggleDetails(this)">Rules <span class="chev">▾</span></button></div>
+        </article>
+
+        <!-- CARD D — broken/warning example -->
+        <article class="app-card installed">
+          <div class="app-top">
+            <div class="app-ico" style="color:var(--danger);background:color-mix(in srgb,var(--danger) 12%,transparent);border-color:color-mix(in srgb,var(--danger) 26%,transparent)">OB</div>
+            <div class="app-head">
+              <div class="app-name">OBS Studio</div>
+              <div class="app-meta">
+                <span class="kicker">Media</span>
+                <span class="kind gui">gui</span>
+                <span style="color:var(--muted)">·</span>
+                <span style="font:600 11px/1 var(--mono);color:var(--muted)">key: obs</span>
+              </div>
+            </div>
+            <span class="status broken">broken</span>
+          </div>
+          <div class="app-actions">
+            <div class="seg">
+              <button class="on" onclick="seg(this)">Enabled</button>
+              <button class="off" onclick="seg(this)">Disabled</button>
+            </div>
+            <span class="grow"></span>
+            <button class="btn btn-ghost btn-sm">Open</button>
+            <button class="btn btn-danger btn-sm">Remove</button>
+            <button class="btn btn-ghost btn-sm">Hide</button>
+          </div>
+          <div class="details"><div class="inner"><div class="rule-block">
+            <div class="sh-label">Compiled rules</div>
+            <div class="rule empty">No compiled rules yet.</div>
+            <div class="sh-label" style="margin-top:14px">Rule drafts</div>
+            <textarea class="drafts" placeholder="e.g. always record to D:\captures"></textarea>
+            <div class="rule-actions">
+              <button class="btn btn-accent btn-sm" onclick="compileRules(this)">Compile with JARVIS</button>
+              <button class="btn btn-ghost btn-sm">Save rules</button>
+              <span class="msg"></span>
+            </div>
+            <div class="proposal"><div class="who"><span class="av">J</span> JARVIS PROPOSAL</div><pre></pre><div class="assumed"></div><div class="rule-actions" style="margin-top:11px"><button class="btn btn-primary btn-sm" onclick="acceptProposal(this)">Accept proposal</button></div></div>
+          </div></div></div>
+          <div class="expand"><button onclick="toggleDetails(this)">Rules <span class="chev">▾</span></button></div>
+        </article>
+
+      </div>
+    </section>
+
+    <!-- ════════ VIEW: AVAILABLE ════════ -->
+    <section class="view" id="view-available">
+      <div class="grid">
+
+        <!-- AVAILABLE 1 — high confidence -->
+        <article class="app-card detected">
+          <div class="app-top">
+            <div class="app-ico">BL</div>
+            <div class="app-head">
+              <div class="app-name">Blender</div>
+              <div class="app-meta">
+                <span class="kicker">3D · Media</span>
+                <span class="kind gui">gui</span>
+                <span style="color:var(--muted)">·</span>
+                <span style="font:600 11px/1 var(--mono);color:var(--muted)">C:\Program Files\Blender</span>
+              </div>
+            </div>
+            <span class="status detected">detected</span>
+          </div>
+          <div class="app-actions">
+            <div class="conf high">
+              <span class="meter"><i class="on"></i><i class="on"></i><i class="on"></i></span>
+              <span class="lbl">high</span>
+            </div>
+            <span class="grow"></span>
+            <button class="btn btn-accent btn-sm">Install</button>
+            <button class="btn btn-ghost btn-sm">Hide</button>
+          </div>
+        </article>
+
+        <!-- AVAILABLE 2 — medium confidence -->
+        <article class="app-card detected">
+          <div class="app-top">
+            <div class="app-ico">DK</div>
+            <div class="app-head">
+              <div class="app-name">Docker Desktop</div>
+              <div class="app-meta">
+                <span class="kicker">DevOps</span>
+                <span class="kind gui">gui</span>
+                <span style="color:var(--muted)">·</span>
+                <span style="font:600 11px/1 var(--mono);color:var(--muted)">shell:AppsFolder</span>
+              </div>
+            </div>
+            <span class="status detected">detected</span>
+          </div>
+          <div class="app-actions">
+            <div class="conf">
+              <span class="meter"><i class="on"></i><i class="on"></i><i></i></span>
+              <span class="lbl">medium</span>
+            </div>
+            <span class="grow"></span>
+            <button class="btn btn-accent btn-sm">Install</button>
+            <button class="btn btn-ghost btn-sm">Hide</button>
+          </div>
+        </article>
+
+        <!-- AVAILABLE 3 — low confidence -->
+        <article class="app-card detected">
+          <div class="app-top">
+            <div class="app-ico">HB</div>
+            <div class="app-head">
+              <div class="app-name">HandBrake</div>
+              <div class="app-meta">
+                <span class="kicker">Media</span>
+                <span class="kind cli">cli</span>
+                <span style="color:var(--muted)">·</span>
+                <span style="font:600 11px/1 var(--mono);color:var(--muted)">found in PATH</span>
+              </div>
+            </div>
+            <span class="status detected">detected</span>
+          </div>
+          <div class="app-actions">
+            <div class="conf low">
+              <span class="meter"><i class="on"></i><i></i><i></i></span>
+              <span class="lbl">low</span>
+            </div>
+            <span class="grow"></span>
+            <button class="btn btn-accent btn-sm">Install</button>
+            <button class="btn btn-ghost btn-sm">Hide</button>
+          </div>
+        </article>
+
+        <!-- AVAILABLE 4 — high (cli) -->
+        <article class="app-card detected">
+          <div class="app-top">
+            <div class="app-ico">FF</div>
+            <div class="app-head">
+              <div class="app-name">ffmpeg</div>
+              <div class="app-meta">
+                <span class="kicker">Media</span>
+                <span class="kind cli">cli</span>
+                <span style="color:var(--muted)">·</span>
+                <span style="font:600 11px/1 var(--mono);color:var(--muted)">C:\ffmpeg\bin</span>
+              </div>
+            </div>
+            <span class="status detected">detected</span>
+          </div>
+          <div class="app-actions">
+            <div class="conf high">
+              <span class="meter"><i class="on"></i><i class="on"></i><i class="on"></i></span>
+              <span class="lbl">high</span>
+            </div>
+            <span class="grow"></span>
+            <button class="btn btn-accent btn-sm">Install</button>
+            <button class="btn btn-ghost btn-sm">Hide</button>
+          </div>
+        </article>
+
+      </div>
+    </section>
+
+    <!-- ════════ VIEW: HIDDEN ════════ -->
+    <section class="view" id="view-hidden">
+      <div class="grid">
+
+        <article class="app-card hidden">
+          <div class="app-top">
+            <div class="app-ico" style="opacity:.7">CA</div>
+            <div class="app-head">
+              <div class="app-name">Calculator</div>
+              <div class="app-meta">
+                <span class="kicker">Utility</span>
+                <span class="kind gui">gui</span>
+              </div>
+            </div>
+            <span class="status hidden">hidden</span>
+          </div>
+          <div class="app-actions">
+            <span class="grow"></span>
+            <button class="btn btn-ghost btn-sm">Show</button>
+          </div>
+        </article>
+
+        <article class="app-card hidden">
+          <div class="app-top">
+            <div class="app-ico" style="opacity:.7">NP</div>
+            <div class="app-head">
+              <div class="app-name">Notepad</div>
+              <div class="app-meta">
+                <span class="kicker">Utility</span>
+                <span class="kind cli">cli</span>
+              </div>
+            </div>
+            <span class="status hidden">hidden</span>
+          </div>
+          <div class="app-actions">
+            <span class="grow"></span>
+            <button class="btn btn-ghost btn-sm">Show</button>
+          </div>
+        </article>
+
+        <article class="app-card hidden">
+          <div class="app-top">
+            <div class="app-ico" style="opacity:.7">XG</div>
+            <div class="app-head">
+              <div class="app-name">Xbox Game Bar</div>
+              <div class="app-meta">
+                <span class="kicker">Gaming</span>
+                <span class="kind gui">gui</span>
+              </div>
+            </div>
+            <span class="status hidden">hidden</span>
+          </div>
+          <div class="app-actions">
+            <span class="grow"></span>
+            <button class="btn btn-ghost btn-sm">Show</button>
+          </div>
+        </article>
+
+      </div>
+    </section>
+  </section>
+
+  <!-- ════════════════ WIREFRAMES — ALL THREE TABS ════════════════ -->
+  <section class="wf-section">
+    <div class="wf-head">
+      <h2>Wireframes</h2>
+      <span class="note">Low-fidelity structure of each tab · same component grammar, no visual treatment.</span>
+    </div>
+    <div class="wf-grid">
+
+      <!-- WF: Installed -->
+      <div class="wf">
+        <div class="wf-tab"><span class="n">01</span> INSTALLED</div>
+        <div class="wf-card">
+          <div class="wf-line w70"></div>
+          <div class="wf-line w40"></div>
+          <div class="wf-row">
+            <div class="wf-box">ENABLED</div>
+            <div class="wf-box">OPEN</div>
+            <div class="wf-box">REMOVE</div>
+            <div class="wf-box">HIDE</div>
+          </div>
+          <div class="wf-stack">
+            <div class="wf-line w55"></div>
+            <div class="wf-line w30"></div>
+            <div class="wf-row"><div class="wf-box acc">COMPILE w/ JARVIS</div><div class="wf-box">SAVE</div></div>
+          </div>
+        </div>
+        <div class="wf-card">
+          <div class="wf-line w70"></div>
+          <div class="wf-line w40"></div>
+          <div class="wf-row"><div class="wf-box">OPEN</div><div class="wf-box">REMOVE</div><div class="wf-box">HIDE</div></div>
+        </div>
+        <div class="wf-note">Cards: name · category · kind · status · enable toggle · Open/Remove/Hide · expandable rules (drafts → compile → proposal → accept).</div>
+      </div>
+
+      <!-- WF: Available -->
+      <div class="wf">
+        <div class="wf-tab"><span class="n">02</span> AVAILABLE</div>
+        <div class="wf-card">
+          <div class="wf-line w70"></div>
+          <div class="wf-line w40"></div>
+          <div class="wf-row">
+            <div class="wf-box">CONF: ▮▮▮</div>
+            <div class="wf-box acc">INSTALL</div>
+            <div class="wf-box">HIDE</div>
+          </div>
+        </div>
+        <div class="wf-card">
+          <div class="wf-line w70"></div>
+          <div class="wf-line w40"></div>
+          <div class="wf-row"><div class="wf-box">CONF: ▮▮</div><div class="wf-box acc">INSTALL</div><div class="wf-box">HIDE</div></div>
+        </div>
+        <div class="wf-note">Detected-but-unregistered apps. Show a confidence badge (high/medium/low) + Install + Hide. No rules section.</div>
+      </div>
+
+      <!-- WF: Hidden -->
+      <div class="wf">
+        <div class="wf-tab"><span class="n">03</span> HIDDEN</div>
+        <div class="wf-card">
+          <div class="wf-line w70"></div>
+          <div class="wf-line w40"></div>
+          <div class="wf-row"><div class="wf-box acc">SHOW</div></div>
+        </div>
+        <div class="wf-card">
+          <div class="wf-line w70"></div>
+          <div class="wf-line w40"></div>
+          <div class="wf-row"><div class="wf-box acc">SHOW</div></div>
+        </div>
+        <div class="wf-note">User-hidden apps. Single “Show” action restores them to Available. Minimal, calm surface.</div>
+      </div>
+
+    </div>
+  </section>
+
+  <footer class="legend">
+    <span><i class="c-bg"></i> bg #0e0e12</span>
+    <span><i class="c-card"></i> card #1b1b23</span>
+    <span><i class="c-acc"></i> accent #6ea8fe</span>
+    <span><i class="c-holo"></i> holo #ffb454</span>
+    <span style="color:var(--muted)">OKLCH dark ramp · Archivo / JetBrains Mono</span>
+  </footer>
+
+</div>
+
+<script>
+function switchTab(tab){
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('on', t.dataset.tab === tab));
+  document.querySelectorAll('.view').forEach(v => v.classList.toggle('show', v.id === 'view-' + tab));
+}
+function toggleDetails(btn){
+  const card = btn.closest('.app-card');
+  const d = card.querySelector('.details');
+  const open = d.classList.toggle('open');
+  btn.querySelector('.chev').textContent = open ? '▴' : '▾';
+}
+function seg(btn){
+  const group = btn.closest('.seg');
+  group.querySelectorAll('button').forEach(b => b.classList.remove('on'));
+  btn.classList.add('on');
+  // reflect status pill + tint
+  const card = btn.closest('.app-card');
+  const pill = card.querySelector('.status');
+  if(pill && (pill.classList.contains('enabled') || pill.classList.contains('disabled'))){
+    const enabled = btn.classList.contains('on') && !btn.classList.contains('off');
+    const isDisabledBtn = btn.classList.contains('off');
+    pill.textContent = isDisabledBtn ? 'disabled' : 'enabled';
+    pill.className = 'status ' + (isDisabledBtn ? 'disabled' : 'enabled');
+  }
+}
+function compileRules(btn){
+  const card = btn.closest('.app-card');
+  const prop = card.querySelector('.proposal');
+  const ta = card.querySelector('textarea.drafts');
+  const msg = card.querySelector('.msg');
+  const drafts = (ta ? ta.value : '').split('\n').map(s=>s.trim()).filter(Boolean);
+  if(!drafts.length){ if(msg){ msg.textContent='Enter drafts first'; msg.className='msg err'; } return; }
+  // simulate a JARVIS proposal from the drafts
+  const body = drafts.map((d,i)=>{
+    const id = d.toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,'').slice(0,28) || ('rule_'+i);
+    return `- **${id}** (\`soft\` / \`all_sessions\`)\n  - intent: ${d}\n  - check: \`(resolve via adapter)\`\n  - from: "${d}"`;
+  }).join('\n\n');
+  prop.querySelector('pre').textContent =
+    '# Proposed rules for `' + (card.querySelector('.app-name').textContent.toLowerCase().replace(/\s+/g,'_')) + '`\n\n' + body;
+  prop.querySelector('.assumed').innerHTML =
+    '<b>JARVIS assumed:</b> enforcement <b>soft</b> · scope <b>all_sessions</b>. Correct the drafts if wrong, then accept.';
+  prop.classList.add('show');
+  if(msg){ msg.textContent='Compiled ✓'; msg.className='msg ok'; }
+}
+function acceptProposal(btn){
+  const card = btn.closest('.app-card');
+  const prop = card.querySelector('.proposal');
+  prop.classList.remove('show');
+  const msg = card.querySelector('.msg');
+  if(msg){ msg.textContent='Accepted ✓'; msg.className='msg ok'; }
+}
+</script>
+</body>
+</html>

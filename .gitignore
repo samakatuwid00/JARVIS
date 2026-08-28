@@ -41,4 +41,14 @@ manus_cookies.json
 # Any *-verify temp probes (must never be committed)
 hermes-verify-*.py
 app_registry.json
+# Audit trail + job logs (privacy, grows fast)
+logs/
+# Warm harness cache + autonomous status files
+.warm_harness/
+.hermes-jobs/
 
+# Recovery + large local artifacts (never commit binaries or private memory)
+.recovery/
+models/
+memory/
+nul

@@ -1,0 +1,23 @@
+{
+  "_comment": "External CLI agent tiers (Phase 16.5). Spoken name -> launch spec. Binaries are resolved via PATH at CALL TIME (shutil.which) — installing or removing a CLI needs zero code changes. prompt_flag: flag that introduces the prompt ('-p' for claude); null = positional argument. Add an entry here and 'using X' / 'via X' routes to it.",
+  "gemini": {
+    "bin": "gemini",
+    "label": "Gemini CLI",
+    "prompt_flag": null
+  },
+  "chatgpt": {
+    "bin": "codex",
+    "label": "ChatGPT CLI",
+    "prompt_flag": null
+  },
+  "codex": {
+    "bin": "codex",
+    "label": "Codex CLI",
+    "prompt_flag": null
+  },
+  "claude": {
+    "bin": "claude",
+    "label": "Claude Code",
+    "prompt_flag": "-p"
+  }
+}

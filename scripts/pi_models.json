@@ -1,0 +1,13 @@
+{
+  "providers": {
+    "9router": {
+      "baseUrl": "http://host.docker.internal:20128/v1",
+      "api": "openai-completions",
+      "apiKey": "dummy",
+      "compat": { "supportsDeveloperRole": false, "supportsReasoningEffort": false },
+      "models": [
+        { "id": "ag/gemini-3-flash", "name": "9Router Gemini 3 Flash (free)", "contextWindow": 1000000, "maxTokens": 8192 }
+      ]
+    }
+  }
+}

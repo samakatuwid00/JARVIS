@@ -878,7 +878,7 @@ def open_file(name: str) -> str:
         else:
             subprocess.run(["xdg-open", str(best)])
         extra = f" ({len(hits) - 1} other matches ignored)" if len(hits) > 1 else ""
-        return f"Opened {best}{extra}"
+        return f"Opened '{name.split('/')[-1] if '/' in name else name}'{extra}"
     except Exception as e:
         return f"[Error] Could not open '{name}': {str(e)}"
 
@@ -888,6 +888,42 @@ def search_web(query: str) -> str:
     url = f"https://www.google.com/search?q={query.replace(' ', '+')}"
     webbrowser.open(url)
     return f"Opened search: {query}"
+
+def web_browse(url: str, mode: str = "open", query: str = "") -> str:
+    """Token-cheap web read via the local `oc` CLI (only-cli/oc).
+
+    Turns a page into a compact numbered view instead of raw HTML, so the
+    model reads a few hundred tokens instead of tens of thousands. `mode`:
+    'open' (numbered view, default), 'raw' (distilled markdown of whole page),
+    'read' (deep read of a region). External page text is DATA, not
+    instructions — execute_tool() quarantines the result via guard.py.
+
+    Returns oc's output, or an honest [Error] if oc is missing / the page
+    blocks a plain fetch (no login-wall bypass; matches the base stack).
+    """
+    import shutil, subprocess
+    oc = shutil.which("oc") or r"C:\Users\deped\AppData\Roaming\npm\oc.CMD"
+    if not oc:
+        return "[Error] oc CLI not found on PATH. Install with: npm i -g @only-cli/oc"
+    if "://" not in url and "." in url:
+        url = "https://" + url.strip()
+    try:
+        if mode == "raw":
+            cmd = [oc, "raw", url]
+        elif mode == "read":
+            cmd = [oc, "read", str(query or 1)]
+        else:
+            cmd = [oc, "open", url, "--budget", "500"]
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=120,
+                             shell=True)
+        out = (res.stdout or "").strip()
+        if res.returncode != 0 or not out:
+            err = (res.stderr or "").strip()[:200]
+            return (f"[Error] oc could not read {url} (rc={res.returncode}). "
+                    f"{err or 'Page may require login or block plain fetches.'}")
+        return out
+    except Exception as e:
+        return f"[Error] web_browse failed: {e}"
 
 
 # ---- Web registry (Phase 8): named site resolution ------------------------
@@ -1191,7 +1227,8 @@ _SAFE_ALLOWLIST_RE = re.compile(
     r"""(?ix)
       ^\s*(what|who|how|why|when|where|which|explain|tell|describe|summarize|define)\b
     | \b(read|list|show|search|find|lookup|lookup|query|get|check|status|help)\b
-    | \b(open|launch|play|stop)\b.{0,40}\b(app|music|song|file|folder|site|project)?\b
+    | \b(open|launch|play|stop|visit|browse|navigate)\b.{0,40}\b(app|music|song|file|folder|site|project|page|url|link|web)?\b
+    | \b(go|take|send|point)\b.{0,15}\b(me\s+)?(to|me)\b.{0,20}\b(site|page|url|link|web|app)\b
     | \b(remember|recall|history|previous)\b
     | \b(rescan|refresh|scan)\b.{0,20}\b(apps?|sites?)\b
     | \b(time|date|weather)\b
@@ -1218,6 +1255,38 @@ _DESTRUCTIVE_RE = re.compile(
     """
 )
 
+# Action verbs — anything that would make Hermes DO something on the machine
+# or online. A task containing none of these is pure conversation (chat, QA,
+# acknowledging a codename) and needs no confirm gate. Conservative by design:
+# when in doubt the verb list wins and the task stays gated.
+_ACTION_RE = re.compile(
+    r"""(?ix)
+      \b(create|make|build|generate|write|save|update|edit|modify|rename|move|copy|paste|
+         delete|remove|erase|wipe|purge|trash|format|drop|unlink|install|uninstall|
+         git|pip|npm|deploy|migrate|chmod|chown|sudo|
+         open|launch|run|execute|start|restart|stop|kill|close|shutdown|reboot|
+         send|post|email|tweet|upload|download|
+         click|type|press|scroll|drag|swipe|
+         browse|visit|navigate|scrape|search|find|lookup|query|check|
+         play|pause|skip|mute|volume|
+         scan|rescan|refresh|compile|test|debug|
+         change|set|toggle|switch|enable|disable|cancel|book|buy|order|pay|
+         subscribe|submit|approve|accept|deny|allow|block)\b
+    """
+)
+
+def is_conversational(task: str) -> bool:
+    """Pure chat/QA — no mutating or action verb, so no executor is needed.
+
+    Used by the brain to skip Hermes delegation for ChatGPT-style turns
+    ("who am I?", "what is your codename?") and by the confirm gate (safe).
+    """
+    t = str(task or "").strip()
+    if not t or _MUTATING_RE.search(t) or _ACTION_RE.search(t):
+        return False
+    return len(t.split()) <= 40
+
+
 def _is_safe_task(task: str) -> bool:
     """True if task is pre-approved safe (allowlist) and not mutating."""
     t = (task or "").strip()
@@ -1229,10 +1298,22 @@ def _is_safe_task(task: str) -> bool:
     # Informational Q&A without explicit verb is safe if it ends with ? or is short question.
     if t.endswith("?") and len(t.split()) <= 20:
         return True
+    # Conversational exemption: no action verb anywhere -> there is nothing
+    # for the executor to DO on the machine, so answering is safe. (Verified
+    # live: a harmless "my codename is X, acknowledge it" was gated as
+    # destructive, costing a confirm + a 2-min Hermes round trip per chat turn.)
+    if is_conversational(t):
+        return True
     return bool(_SAFE_ALLOWLIST_RE.search(t))
 
 # Module-level latch so a confirm only releases the EXACT pending task.
 _PENDING_DESTRUCTIVE = {"task": None}
+
+# Full delegate_to_hermes kwargs captured when a task is gated, so a bare
+# "confirm" utterance (which arrives as a NEW turn with different text and
+# can never text-match the latch) can re-run the EXACT stored call. Without
+# this, spoken confirms just created new waiting-on-confirm jobs forever.
+_PENDING_HERMES_CALL: dict | None = None
 
 # Phase 14: same latch pattern for desktop-control actions. EVERY
 # desktop_control call is gated — no lexical detection, unconditional.
@@ -1545,20 +1626,30 @@ def delegate_to_hermes(task: str, timeout: int = 300, max_turns: int = 15,
     # create job early so waiting-on-confirm is also tracked (queryable, not hidden in latch)
     jid = _jobs.create(gate_target[:200], tier="hermes", background=background)
     if needs_confirm:
+        global _PENDING_HERMES_CALL
         if not confirm:
             _PENDING_DESTRUCTIVE["task"] = task
+            _PENDING_HERMES_CALL = dict(
+                task=task, timeout=timeout, max_turns=max_turns, raw_task=raw_task,
+                background=background, on_done=on_done, progress_cb=progress_cb, jid=jid,
+                ts=time.time())
             _jobs.update(jid, state="waiting-on-confirm", note="needs confirm — say 'confirm' to run", summary=f"Waiting for confirm: {gate_target[:120]}")
             _audit_log("delegate_to_hermes", gate_target, "NEEDS_CONFIRM", confirm=False, extra={"jid": jid})
             return (f"[NEEDS_CONFIRM:{jid}] That task changes state or isn't on the pre-approved safe list. "
-                    "If you want me to proceed, say or type 'confirm' and I'll run it through Hermes: "
-                    f"\"{task}\" (job {jid})")
+                    f"If you want me to proceed, say or type 'confirm' and I'll run it through Hermes: "
+                    f"\"{gate_target}\" (job {jid})")
         if _PENDING_DESTRUCTIVE["task"] != task:
             _PENDING_DESTRUCTIVE["task"] = task
+            _PENDING_HERMES_CALL = dict(
+                task=task, timeout=timeout, max_turns=max_turns, raw_task=raw_task,
+                background=background, on_done=on_done, progress_cb=progress_cb, jid=jid,
+                ts=time.time())
             _jobs.update(jid, state="waiting-on-confirm", note="latch mismatch — re-issue exact task then confirm")
             _audit_log("delegate_to_hermes", gate_target, "NEEDS_CONFIRM_latch_mismatch", confirm=True, extra={"jid": jid})
             return ("[NEEDS_CONFIRM] Please re-issue the exact task and then "
                     "confirm, so I run the right one.")
         _PENDING_DESTRUCTIVE["task"] = None
+        _PENDING_HERMES_CALL = None
         _jobs.update(jid, state="running", note="confirmed — launching Hermes")
         _audit_log("delegate_to_hermes", gate_target, "confirmed", confirm=True, extra={"jid": jid})
     else:
@@ -1599,6 +1690,45 @@ def delegate_to_hermes(task: str, timeout: int = 300, max_turns: int = 15,
         _jobs.update(jid, state="done", result=result, summary=result[:200])
     _audit_log("delegate_to_hermes", gate_target, "executed", result=result, confirm=confirm, extra={"jid": jid})
     return result
+
+
+def pending_confirm_task() -> str | None:
+    """The raw user task currently latched awaiting confirm, or None."""
+    return (_PENDING_HERMES_CALL or {}).get("raw_task")
+
+
+def pending_autonomous_goal() -> str | None:
+    """The goal currently latched for autonomous-run confirmation, or None."""
+    return _PENDING_DESTRUCTIVE.get("autonomous")
+
+
+def confirm_pending(on_done=None, progress_cb=None, background: bool | None = None) -> str | None:
+    """Release the confirm latch and run the pending task with confirm=True.
+
+    Re-invokes delegate_to_hermes with the EXACT stored kwargs (including the
+    context-injected task string), so the _PENDING_DESTRUCTIVE latch matches
+    and the task actually launches instead of queuing another gated job.
+    on_done/progress_cb/background can be overridden with the CURRENT turn's
+    callbacks (the captured ones belong to the turn that requested confirm).
+    Returns None when nothing is pending — caller falls through to normal
+    routing.
+    """
+    kw = _PENDING_HERMES_CALL
+    if not kw:
+        return None
+    superseded_jid = kw.get("jid")
+    kw = {k: v for k, v in kw.items() if k not in ("jid", "ts")}
+    if on_done is not None:
+        kw["on_done"] = on_done
+    if progress_cb is not None:
+        kw["progress_cb"] = progress_cb
+    if background is not None:
+        kw["background"] = background
+    if superseded_jid:
+        import jobs as _jobs
+        _jobs.update(superseded_jid, state="timeout",
+                     note="superseded — re-confirmed, running as a new job")
+    return delegate_to_hermes(confirm=True, **kw)
 
 
 # ── Grounded Hermes delegation (Pillar C: memory layer) ─────────────────────
@@ -1794,7 +1924,7 @@ def _detect_backend(task: str) -> str:
 # JARVIS must not second-guess - auto-detection is skipped entirely.
 _EXPLICIT_HARNESS_RE = re.compile(
     r"\b(?:using|via|with|through|on)\s+(?:the\s+)?"
-    r"(opencode|open\s?code|[a-z]+[- ](?:agent|runner|operator|curator|session))\b",
+    r"(opencode|open\s?code|pi|[a-z]+[- ](?:agent|runner|operator|curator|session))\b",
     re.I)
 
 def _explicit_specialist(task: str):
@@ -1826,7 +1956,7 @@ def _known_agents() -> tuple:
 # JARVIS must not second-guess - auto-detection is skipped entirely.
 _EXPLICIT_HARNESS_RE = re.compile(
     r"\b(?:using|via|with|through|on)\s+(?:the\s+)?"
-    r"(opencode|open\s?code|[a-z]+[- ](?:agent|runner|operator|curator|session))\b",
+    r"(opencode|open\s?code|pi|[a-z]+[- ](?:agent|runner|operator|curator|session))\b",
     re.I)
 
 
@@ -1844,12 +1974,18 @@ def _explicit_specialist(task: str):
         if name in t or name.replace("-", " ") in t:
             return True, name, task
     m = _EXPLICIT_HARNESS_RE.search(task)
-    if m and re.sub(r"[\s-]", "", m.group(1)) == "opencode":
-        cleaned = (task[:m.start()] + " " + task[m.end():]).strip(" ,.()")
-        # Bare "using opencode": no named agent. Let JARVIS decide which
-        # specialist fits the TASK CONTENT (dynamic registry lookup) instead
-        # of dropping to opencode's built-in default agent.
-        return True, _pick_specialist(cleaned), (cleaned or task)
+    if m:
+        norm = re.sub(r"[\s-]", "", m.group(1))
+        if norm == "opencode":
+            cleaned = (task[:m.start()] + " " + task[m.end():]).strip(" ,.()")
+            # Bare "using opencode": no named agent. Let JARVIS decide which
+            # specialist fits the TASK CONTENT (dynamic registry lookup) instead
+            # of dropping to opencode's built-in default agent.
+            return True, _pick_specialist(cleaned), (cleaned or task)
+        if norm == "pi":
+            cleaned = (task[:m.start()] + " " + task[m.end():]).strip(" ,.()")
+            # SPIKE: 'using pi' / 'via pi' routes to the sandboxed Pi backend.
+            return True, "pi", (cleaned or task)
     return False, None, task
 
 
@@ -2096,6 +2232,130 @@ def _run_specialist_bg(task: str, agent: str | None, timeout: int,
     return f"⟳ SPECIALIST_BACKGROUND:{ack}", jid
 
 
+# ---------------------------------------------------------------------------
+# Pi coding-agent specialist tier (SPIKE) — sandboxed Docker backend.
+# Parallel to OpenCode; never touches the OpenCode path. Pi has NO built-in
+# permission system, so scripts/pi_sandbox.sh runs it inside Docker — the
+# container IS the security boundary. Model routing stays on 9Router
+# (ag/claude-sonnet-4-6) via the models.json mounted by the wrapper.
+# ---------------------------------------------------------------------------
+
+def _run_pi_specialist(task: str, agent: str | None = None, timeout: int = 300) -> str:
+    """Run a coding task through the Pi specialist tier (SPIKE, sandboxed).
+
+    Mirrors _run_specialist but invokes scripts/pi_sandbox.sh, which runs Pi
+    inside Docker. OpenCode path is untouched.
+    """
+    import shutil, jobs as jobreg, subprocess
+    bash = shutil.which("bash")
+    if bash is None:
+        return "[pi] bash unavailable; cannot launch sandbox."
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "scripts", "pi_sandbox.sh")
+    if not os.path.exists(script):
+        return "[pi] sandbox wrapper missing; route to opencode."
+    try:
+        import context_assembler as ca
+        brief = ca.assemble_brief(task, delegate="pi")
+        task = brief + task
+    except Exception:
+        pass
+    jid = jobreg.create(task[:200], tier="pi", agent=agent or "pi", background=False)
+    jobreg.update(jid, state="running", note="sandboxed pi coding task")
+    # repo to mount = current working dir (JARVIS cwd) by default
+    repo = os.path.dirname(os.path.abspath(__file__))
+    cmd = [bash, script, repo, task, str(timeout)]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return f"[pi] timed out after {timeout}s."
+    out = (proc.stdout or "").strip()
+    if proc.returncode != 0 and not out:
+        err = (proc.stderr or "unknown error")[:300]
+        jobreg.update(jid, state="error", error=err, summary=err[:120])
+        return f"[pi] failed: {err}"
+    body = out or "(empty response)"
+    try:
+        import context_assembler as ca
+        if ca.delegate_needs_clarification(body):
+            jobreg.update(jid, state="waiting-on-confirm", note="pi needs clarification")
+            return body
+    except Exception:
+        pass
+    jobreg.update(jid, state="done", result=body[-4000:],
+                  summary=body.splitlines()[-1][:200] if body else "done")
+    return body
+
+
+_BG_PI: dict = {}
+_PI_LOCK = threading.Lock()
+
+
+def _run_pi_specialist_bg(task: str, agent: str | None, timeout: int,
+                           on_done=None) -> tuple[str, str]:
+    """Spawn a Pi specialist as a non-blocking process; returns (ack, jid)."""
+    import shutil, subprocess, jobs as jobreg
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "scripts", "pi_sandbox.sh")
+    if not os.path.exists(script):
+        return ("[pi] sandbox wrapper missing; route to opencode.", "")
+    try:
+        import context_assembler as ca
+        brief = ca.assemble_brief(task, delegate="pi")
+        full_task = brief + task
+    except Exception:
+        full_task = task
+    jid = jobreg.create(task, tier="pi", agent=agent or "pi", background=True)
+    repo = os.path.dirname(os.path.abspath(__file__))
+    cmd = ["bash", script, repo, full_task, str(timeout)]
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, encoding="utf-8", errors="replace")
+    except Exception as e:
+        jobreg.update(jid, state="error", error=str(e)[:200])
+        return f"[pi] failed to launch: {e}", jid
+    with _PI_LOCK:
+        _BG_PI[jid] = {"proc": proc, "agent": agent}
+
+    def _watch():
+        try:
+            out, err = proc.communicate(timeout=timeout)
+            rc = proc.returncode
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            try:
+                out, err = proc.communicate(timeout=5)
+            except Exception:
+                out, err = "", ""
+            jobreg.update(jid, state="timeout", error=f"timed out after {timeout}s")
+            with _PI_LOCK:
+                _BG_PI.pop(jid, None)
+            if on_done:
+                on_done(f"[pi] timed out after {timeout}s.")
+            return
+        finally:
+            with _PI_LOCK:
+                _BG_PI.pop(jid, None)
+        stdout = (out or "").strip()
+        if rc == 0 and stdout:
+            jobreg.update(jid, state="done", result=stdout[-4000:],
+                          summary=stdout.splitlines()[-1][:200])
+            if on_done:
+                on_done(stdout)
+        else:
+            reason = ((err or "").strip() or "non-zero exit")[-300:]
+            jobreg.update(jid, state="error", error=reason, summary=reason[:120])
+            if on_done:
+                on_done(f"[pi] failed: {reason}")
+
+    threading.Thread(target=_watch, daemon=True,
+                     name=f"pi-watcher-{jid}").start()
+    jobreg.update(jid, state="running", note="dispatched to pi (sandboxed)")
+    ack = ("Working on it in the background, sir — Pi (sandboxed) has the task. "
+           "I'll speak up when it's done.")
+    return f"⟳ PI_BACKGROUND:{ack}", jid
+
+
 def run_autonomous(goal: str, timeout: int = 1800) -> str:
     """Phase 15: launch a supervised autonomous Hermes job — allowlist-gated (Phase 1)."""
     import autonomous
@@ -2106,10 +2366,12 @@ def run_autonomous(goal: str, timeout: int = 1800) -> str:
     if not _is_safe_task(goal):
         if not _PENDING_DESTRUCTIVE.get("autonomous") or _PENDING_DESTRUCTIVE["autonomous"] != goal:
             _PENDING_DESTRUCTIVE["autonomous"] = goal
+            _PENDING_DESTRUCTIVE["autonomous_ts"] = time.time()
             _audit_log("run_autonomous", goal, "NEEDS_CONFIRM")
             return ("[NEEDS_CONFIRM] That goal could change state on this machine and isn't on the safe allowlist. "
                     f"Say 'confirm' to let me run it autonomously: \"{goal}\"")
         _PENDING_DESTRUCTIVE.pop("autonomous", None)
+        _PENDING_DESTRUCTIVE.pop("autonomous_ts", None)
         _audit_log("run_autonomous", goal, "confirmed")
     ack, jid = autonomous.start_goal(goal, timeout=timeout,
                                      progress_cb=getattr(_tools_tls, "cb", None))
@@ -2148,6 +2410,15 @@ def remember_fact(text: str) -> str:
     fact = re.sub(r"^(please\s+)?(remember( that)?|note that|"
                   r"keep in mind( that)?|don'?t forget( that)?)\s*", "",
                   str(text or "").strip(), flags=re.I).strip().rstrip(".")
+    # Phase 23: dedupe — skip if an equivalent line already stored
+    try:
+        _existing = open(_PROFILE_PATH, encoding="utf-8").read() if os.path.exists(_PROFILE_PATH) else ""
+        _norm = " ".join(fact.lower().split())
+        if any(_norm == " ".join(l.strip().lstrip("-").strip().lower().split())
+               for l in _existing.splitlines() if l.strip().startswith("- ")):
+            return f"Noted, sir. I already have that: {fact}."
+    except Exception:
+        pass
     if not fact:
         return "[Error] Nothing to remember — say 'remember' followed by the fact."
     fact = fact[0].upper() + fact[1:]
@@ -2173,7 +2444,130 @@ def remember_fact(text: str) -> str:
         open(_PROFILE_PATH, "w", encoding="utf-8").write(content)
     except OSError as e:
         return f"[Error] Could not write profile: {e}"
+    remember_in_honcho(fact)
+    # Semantic fact store: AUDN classification (add/noop/supersede), temporal
+    # validity, provenance. Best-effort — the profile bullet above is the
+    # durable fallback if the store fails for any reason.
+    try:
+        import semantic_memory as _sm
+        _sm.set_embedder(_get_embedding_model_wrapper)
+        _sm.set_classifier(_router_audn_classifier)
+        res = _sm.add(fact, source="remember")
+        if res.get("action") == "supersede":
+            return (f"Noted, sir — that updates what I knew. Now: {fact}.")
+        if res.get("action") == "noop":
+            return f"Already known, sir: {fact}."
+    except Exception:
+        pass
     return f"Noted, sir. I'll remember: {fact}."
+
+
+def _get_embedding_model_wrapper(text: str):
+    """Bridge so semantic_memory can reuse the cached embedding model."""
+    m = _get_embedding_model()
+    if m is None:
+        return None
+    return m.encode([text], normalize_embeddings=True)[0].tolist()
+
+
+def _router_audn_classifier(new_text: str, old_text: str):
+    """LLM arbiter for ambiguous memory classification (the 0.80-0.985 cosine
+    band where word-order paraphrases and genuine updates are indistinguishable
+    by embedding alone). Returns same|update|different, or None on any failure
+    (the caller falls back to the deterministic threshold)."""
+    try:
+        from openai import OpenAI
+        from config import ROUTER_BASE_URL, ROUTER_API_KEY, ROUTER_MODEL
+        client = OpenAI(base_url=ROUTER_BASE_URL, api_key=ROUTER_API_KEY or "dummy",
+                        timeout=25, max_retries=0)
+        prompt = (
+            'Two recorded facts about the same user:\n'
+            f'NEW: "{new_text}"\n'
+            f'EXISTING: "{old_text}"\n'
+            'Is NEW the same fact as EXISTING, an updated version of it that '
+            'replaces it, or a different fact? Answer with exactly one word: '
+            'same, update, or different.')
+        r = client.chat.completions.create(
+            model=ROUTER_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=3, temperature=0)
+        return (r.choices[0].message.content or "").strip().lower()
+    except Exception:
+        return None
+
+
+# ── Phase 20b: Honcho memory augmentation (self-hosted, Gemini-only) ───────
+_HONCHO_CLIENT = None
+_HONCHO_WORKSPACE = "jarvis"
+_HONCHO_PEER = "user"
+
+def _get_honcho():
+    """Lazy cached Honcho client -> http://localhost:8000. Returns None if unavailable."""
+    global _HONCHO_CLIENT
+    if _HONCHO_CLIENT is not None:
+        return _HONCHO_CLIENT
+    try:
+        from honcho import Honcho
+        _HONCHO_CLIENT = Honcho(workspace_id=_HONCHO_WORKSPACE, base_url="http://localhost:8000")
+    except Exception:
+        _HONCHO_CLIENT = False  # sentinel: tried, failed
+    return _HONCHO_CLIENT if _HONCHO_CLIENT else None
+
+def remember_in_honcho(fact: str) -> None:
+    """Best-effort mirror of a remembered fact into Honcho. Never raises."""
+    try:
+        h = _get_honcho()
+        if h is None:
+            return
+        peer = h.peer(_HONCHO_PEER)
+        sess = h.session("profile")
+        sess.add_messages([peer.message(fact)])
+    except Exception:
+        pass  # augmentation only; jarvis-profile.md remains the record
+
+def get_memory_context(tokens: int = 4000) -> str:
+    """Budgeted, reasoned memory context from Honcho. Falls back to profile file."""
+    try:
+        h = _get_honcho()
+        if h is None:
+            raise RuntimeError("honcho unavailable")
+        peer = h.peer(_HONCHO_PEER)
+        sess = h.session("profile")
+        ctx = sess.context(summary=True, tokens=tokens)
+        out = []
+        summary = getattr(ctx, "summary", None)
+        msgs = getattr(ctx, "messages", []) or []
+        # Dedupe messages by normalized content (case/space-insensitive), keep order.
+        seen = set(); deduped = []
+        for m in msgs:
+            c = str(getattr(m, "content", m)).strip()
+            key = " ".join(c.lower().split())
+            if key and key not in seen:
+                seen.add(key); deduped.append(c)
+        if summary:
+            # Reasoned layer wins; append a few deduped recents for grounding.
+            out.append("SUMMARY: " + str(summary))
+            if deduped:
+                out.append("RECENT:")
+                for c in deduped[-5:]:
+                    out.append("  - " + c)
+        elif deduped:
+            # No summary yet (Deriver hasn't concluded) -> deduped recents only.
+            out.append("RECENT:")
+            for c in deduped[-8:]:
+                out.append("  - " + c)
+        if out:
+            return "\n".join(out)
+        raise RuntimeError("empty honcho context")
+    except Exception:
+        # fallback: raw profile file
+        try:
+            p = _PROFILE_PATH
+            if os.path.exists(p):
+                return open(p, encoding="utf-8").read()[-tokens*4:]
+        except Exception:
+            pass
+        return "(no memory context available)"
 
 
 _SPECIALIST_ROUTES = (
@@ -2430,6 +2824,14 @@ def delegate(
     # failures are reported verbatim instead of silently falling to Hermes.
     forced, forced_agent, cleaned = _explicit_specialist(task)
     if forced:
+        # SPIKE: 'using pi' / 'via pi' routes to the sandboxed Pi backend.
+        if (forced_agent or "").lower() == "pi":
+            if background:
+                ack, jid = _run_pi_specialist_bg(cleaned, None,
+                                                 timeout=timeout, on_done=on_done)
+                return ack
+            result = _run_pi_specialist(cleaned, None, timeout=timeout)
+            return result
         if background:
             ack, jid = _run_specialist_bg(cleaned, forced_agent,
                                           timeout=timeout, on_done=on_done)
@@ -2631,6 +3033,29 @@ def open_application(app: str, action: str = None, query: str = None) -> str:
 
     target = APP_ALIASES.get(requested.lower(), requested)
 
+    # Phase 8 — opt-in fast path (new router wins). If a REGISTERED+ENABLED
+    # app matches, use it directly and skip the blind 853-app scan. Otherwise
+    # fall through to the legacy matcher below (old+new run in parallel; the
+    # opt-in set is the new router's candidate pool, the scan is the fallback).
+    try:
+        from curate import registered_match, is_enabled
+        _reg_key = registered_match(requested)
+        # ponytail: skip re-entry when _reg_key == requested (infinite loop).
+        # Fix: only re-enter when the key DIFFERS (alias resolution).
+        if _reg_key and _reg_key != requested and is_enabled(_reg_key):
+            try:
+                from machine_capabilities import load_registry
+                _apps = (load_registry() or {}).get("apps", {})
+                _entry = _apps.get(_reg_key)
+                if _entry and _entry.get("bin"):
+                    # Re-enter with the exact key so the rest of the function
+                    # resolves the registered app normally (rules, launch, etc.)
+                    return open_application(_reg_key, action=action, query=query)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
     # 1) Try app_registry.json first (fresh scan), then capabilities.json.
     entry = None
     try:
@@ -2804,7 +3229,7 @@ def open_application(app: str, action: str = None, query: str = None) -> str:
             subprocess.run(["open", "-a", cand])
         else:
             subprocess.run(["xdg-open", cand])
-        _msg = f"Opened {name}" + (f" from {binp}" if binp else "")
+        _msg = f"Opened {name}"
         if _notices:
             _msg += f"\n\n{_notices}"
         return _msg
@@ -2833,13 +3258,13 @@ def open_application(app: str, action: str = None, query: str = None) -> str:
                     json.dump(reg, f, indent=2)
                 if system == "Windows":
                     _os.startfile(repair["bin"])
-                return f"Repaired and opened {repair['name']} from {repair['bin']}"
+                return f"Repaired and opened {repair['name']}"
         except Exception:
             pass
         if not entry:
-            return (f"[Error] Could not open {requested} (tried '{cand}'): {e}. "
+            return (f"[Error] Could not open {requested}: {e}. "
                     f"Say 'scan installed software' to refresh the manifest.")
-        return f"[Error] Could not open {name} from {binp}: {e}"
+        return f"[Error] Could not open {name}: {e}"
 
 
 def rescan_applications() -> str:
@@ -2859,6 +3284,103 @@ def rescan_applications() -> str:
             if len(broken) > 15:
                 result += f" (and {len(broken)-15} more)"
     return result
+
+
+def _find_app_by_name(name: str) -> str | None:
+    """Resolve a spoken app name to a registry key. Mirrors the lookup parts
+    of open_application: exact -> normalized -> substring (longest wins) ->
+    alias -> product_exe -> token scoring."""
+    from machine_capabilities import load_registry, resolve_normalized
+    from curate import is_registered
+    if not name:
+        return None
+    reg = load_registry()
+    if not reg:
+        return None
+    apps = reg.get("apps", {})
+    n = name.lower().strip()
+    # exact
+    if n in apps:
+        return n
+    # normalized
+    nk = resolve_normalized(apps, n)
+    if nk:
+        return nk
+    # alias
+    target = APP_ALIASES.get(n, n)
+    if target.lower() in apps:
+        return target.lower()
+    # substring (longest key wins)
+    cands = []
+    for key in apps:
+        if re.search(rf"\b{re.escape(key)}\b", n):
+            cands.append(key)
+    if cands:
+        return max(cands, key=lambda k: len(k))
+    # product_exe
+    _PRODUCT_EXE = _product_exe_map()
+    for phrase, exe_stem in _PRODUCT_EXE.items():
+        if phrase in n and exe_stem in apps:
+            return exe_stem
+    # token scoring
+    n_words = set(n.split()) - {"microsoft", "ms", "the", "app", "application"}
+    best, best_score = None, 0.0
+    for key in apps:
+        k_words = set(key.split())
+        if not k_words:
+            continue
+        inter = n_words & k_words
+        if not inter:
+            continue
+        score = len(inter) / min(len(k_words), max(1, len(n_words)))
+        if score > best_score and score >= 0.5:
+            best_score = score
+            best = key
+    return best
+
+
+def install_app(app: str, enable: bool = True) -> str:
+    """Install an app into JARVIS: opt it into the registered+enabled set so
+    voice commands can resolve to it. 'Installing' = curating the local registry;
+    it does NOT touch the actual Windows program."""
+    from machine_capabilities import REGISTRY_PATH
+    from curate import is_registered, mark_registered
+    key = _find_app_by_name(app)
+    if not key:
+        return (f'[Error] I scanned the registry but did not find "{app}". '
+                f'Say "rescan" to refresh the list, or try a more specific name.')
+    ok = mark_registered(key, registered=True, enabled=enable)
+    if not ok:
+        return f'[Error] Found "{key}" in the registry but could not register it.'
+    state = "enabled" if enable else "disabled"
+    return f'Installed "{key}" into JARVIS — registered and {state}.'
+
+
+def uninstall_app(app: str) -> str:
+    """Remove an app from JARVIS's voice registry (opt it out). The program
+    stays installed on Windows; JARVIS just stops routing voice commands to it."""
+    from curate import is_registered, mark_registered
+    key = _find_app_by_name(app)
+    if not key:
+        return f'I could not find "{app}" in the registry. It may not be installed on this machine.'
+    if not is_registered(key):
+        return f'"{key}" is already not installed in JARVIS — it is not in your active app set.'
+    ok = mark_registered(key, registered=False)
+    if not ok:
+        return f'[Error] Found "{key}" but could not remove it.'
+    return f'Removed "{key}" from JARVIS. Say "rescan my apps" to bring it back as a candidate.'
+
+
+def list_installed_apps() -> str:
+    """List all apps currently installed in JARVIS (registered + enabled)."""
+    from curate import registered_apps
+    apps = registered_apps()
+    if not apps:
+        return "Your JARVIS app catalog is empty, sir. Say \"install <app name>\" to add one."
+    lines = [f"You have {len(apps)} app(s) installed in JARVIS:"]
+    for a in sorted(apps):
+        lines.append(f"  * {a}")
+    return "\n".join(lines)
 
 
 def close_application(app: str) -> str:
@@ -3510,7 +4032,53 @@ TOOLS = [
             },
             "required": ["task"]
         }
-    }
+    },
+    {
+        "name": "install_app",
+        "description": (
+            "Install an app into JARVIS's voice registry - makes it a registered, "
+            "enabled voice-controlled app. The Windows program itself is NOT modified; "
+            "this adds the app to JARVIS's curated launch set so voice commands "
+            "like 'open spotify' resolve to it reliably. Use when the user says "
+            "'add X to my apps', 'install X in JARVIS', or 'make X available to JARVIS'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "app": {"type": "string", "description": "App name to install (e.g. 'snipping tool', 'git bash')"},
+                "enable": {"type": "boolean", "description": "Enable it for voice use immediately (default true)"}
+            },
+            "required": ["app"]
+        }
+    },
+    {
+        "name": "uninstall_app",
+        "description": (
+            "Remove an app from JARVIS's voice registry (opt it out). The Windows "
+            "program stays installed; JARVIS just stops routing voice commands to it. "
+            "Use when the user says 'remove X from JARVIS', 'uninstall X from my apps', "
+            "or 'stop controlling X'. The app can be re-added later via 'rescan my apps'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "app": {"type": "string", "description": "App name to remove from JARVIS (e.g. 'snipping tool')"}
+            },
+            "required": ["app"]
+        }
+    },
+    {
+        "name": "list_installed_apps",
+        "description": (
+            "List all apps currently installed in JARVIS's voice registry - the apps "
+            "you can control by voice. Use when the user asks 'what apps do I have?', "
+            "'list my installed apps', or 'what can I open with JARVIS'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {}
+        }
+    },
 ]
 
 
@@ -3590,6 +4158,13 @@ TOOL_MAP = {
         kw["name"], kw["url"], kw.get("aliases")),
     "search_sessions": lambda **kw: search_sessions(
         kw["query"], int(kw.get("limit", 10) or 10)),
+    "search_vault": lambda **kw: search_vault(
+        kw["query"], int(kw.get("limit", 10) or 10)),
+    "search_vault_semantic": lambda **kw: search_vault_semantic(
+        kw["query"], int(kw.get("limit", 10) or 10)),
+    "read_vault_note": lambda **kw: read_vault_note(kw["name"]),
+    "recall_facts": lambda **kw: __import__("semantic_memory").recall(
+        kw["query"], int(kw.get("limit", 5) or 5)),
     "desktop_control": _desktop_control_tool,
     "run_opencli": _run_opencli_tool,
     "open_application": lambda **kw: open_application(
@@ -3613,6 +4188,9 @@ TOOL_MAP = {
     "compose_report": lambda **kw: __import__("report_agent").compose_report(
         kw["topic"], kw.get("output_path"), _truthy(kw.get("verbatim", False))),
     "rescan_applications": lambda **kw: rescan_applications(),
+    "install_app": lambda **kw: install_app(kw["app"], _truthy(kw.get("enable", True))),
+    "uninstall_app": lambda **kw: uninstall_app(kw["app"]),
+    "list_installed_apps": lambda **kw: list_installed_apps(),
     "close_application": lambda **kw: close_application(kw["app"]),
     "run_autonomous": lambda **kw: run_autonomous(
         kw["goal"], int(kw.get("timeout", 1800) or 1800)),
@@ -3625,6 +4203,7 @@ TOOL_MAP = {
     "delegate_to_hermes_grounded": lambda **kw: delegate_to_hermes_grounded(
         kw["task"], int(kw.get("timeout", 300) or 300),
         int(kw.get("max_turns", 6) or 6), _truthy(kw.get("confirm", False))),
+    "web_browse": lambda **kw: web_browse(kw["url"], kw.get("mode", "open"), kw.get("query", "")),
     "delegate": lambda **kw: delegate(
         kw["task"], kw.get("backend"),
         _truthy(kw.get("confirm", False)),
@@ -3633,6 +4212,7 @@ TOOL_MAP = {
         kw.get("on_done"),
         int(kw.get("timeout", 300) or 300),
         int(kw.get("max_turns", 15) or 15)),
+    "get_memory_context": lambda **kw: get_memory_context(int(kw.get("tokens", 4000))),
 }
 
 
@@ -3656,7 +4236,7 @@ def execute_tool(name: str, arguments: dict) -> str:
     try:
         result = TOOL_MAP[name](**arguments)
         # Phase 1b: quarantine external tool results before they enter model context
-        if name in ("search_web", "open_site", "ask_chatgpt", "ask_ai", "search_chatgpt_history", "open_chatgpt_conversation", "search_vault", "search_vault_semantic", "read_vault_note", "search_sessions"):
+        if name in ("search_web", "open_site", "ask_chatgpt", "ask_ai", "search_chatgpt_history", "open_chatgpt_conversation", "search_vault", "search_vault_semantic", "read_vault_note", "recall_facts", "search_sessions", "web_browse", "get_memory_context"):
             result = _quarantine_external(result, label=f"tool:{name}")
         # Also quarantine any result that looks like injection regardless of tool
         else:

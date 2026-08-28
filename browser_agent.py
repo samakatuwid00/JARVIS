@@ -444,7 +444,13 @@ def ask_chatgpt(prompt: str, submit: bool = False, wait_seconds: int = 120) -> s
         answer = (turns.last.inner_text() or "").strip()
         if not settled:
             answer += " ... (still writing when I stopped listening)"
-        return answer or "[Error] ChatGPT replied but the text came back empty."
+        raw = answer or "[Error] ChatGPT replied but the text came back empty."
+        try:
+            import guard
+            raw = guard.sanitize_web_text(raw, label="chatgpt reply")
+        except Exception:
+            pass
+        return raw
 
     return _worker.call(job, timeout=wait_seconds + 90)
 
@@ -838,7 +844,13 @@ def open_chatgpt_conversation(title_contains: str, max_chars: int = 3000) -> str
                 break
             parts.append(chunk)
             total += len(chunk)
-        return f"Conversation at {page.url} has {count} messages. " + " | ".join(parts)
+        raw = f"Conversation at {page.url} has {count} messages. " + " | ".join(parts)
+        try:
+            import guard
+            raw = guard.sanitize_web_text(raw, label="chatgpt conversation")
+        except Exception:
+            pass
+        return raw
 
     return _worker.call(job, timeout=180)
 
@@ -885,9 +897,15 @@ def open_site(url: str, name: str = "") -> str:
             title = ""
         label = name or url
         if not title:
-            # Loaded without error but no readable title — say what we know.
-            return f"Opened {label} in a new tab — page had no readable title yet."
-        return f"Opened {label} in a new tab — {title}"
+            raw = f"Opened {label} in a new tab — page had no readable title yet."
+        else:
+            raw = f"Opened {label} in a new tab — {title}"
+        try:
+            import guard
+            raw = guard.sanitize_web_text(raw, label="open_site")
+        except Exception:
+            pass
+        return raw
 
     try:
         return _worker.call(job, timeout=90)

@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JARVIS — UI Markup Mockup</title>
+<style>
+  :root{
+    --bg:#0a0d12; --panel:#11161f; --panel2:#161d29; --line:#22304a;
+    --cyan:#00ffff; --blue:#4da3ff; --green:#22e08a; --amber:#ffb020;
+    --red:#ff5252; --purple:#c07bff; --txt:#d7e3f4; --dim:#7a8aa6;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    background:radial-gradient(1200px 700px at 50% -10%,#12203a 0%,var(--bg) 60%);
+    color:var(--txt); font-family:Segoe UI,Inter,system-ui,sans-serif;
+    display:flex; align-items:center; justify-content:center; min-height:100vh; padding:24px;
+  }
+  .card{width:min(960px,100%); background:var(--panel); border:1px solid var(--line);
+    border-radius:16px; overflow:hidden; box-shadow:0 30px 80px rgba(0,0,0,.6)}
+  .head{display:flex; align-items:center; gap:14px; padding:16px 22px;
+    border-bottom:1px solid var(--line); background:var(--panel2)}
+  .brand{display:flex; align-items:center; gap:10px; font-weight:700; letter-spacing:2px}
+  .brand .dot{width:12px;height:12px;border-radius:50%;background:var(--green);
+    box-shadow:0 0 12px var(--green)}
+  .brand small{color:var(--dim);font-weight:400;letter-spacing:0;font-size:12px}
+  .pill{margin-left:auto; display:flex; gap:8px}
+  .pill span{font-size:11px; padding:4px 10px; border-radius:999px; border:1px solid var(--line);
+    background:var(--panel); color:var(--dim)}
+  .pill .on{color:var(--cyan); border-color:rgba(0,255,255,.4); box-shadow:0 0 10px rgba(0,255,255,.15)}
+
+  .stage{display:grid; grid-template-columns:1fr 1fr; gap:0; min-height:420px}
+  @media(max-width:720px){.stage{grid-template-columns:1fr}}
+  .orb-pane{display:flex; flex-direction:column; align-items:center; justify-content:center;
+    gap:18px; background:radial-gradient(300px 300px at 50% 40%, #0b1424, transparent); padding:30px}
+  .orb{width:150px;height:150px;border-radius:50%;position:relative;
+    background:radial-gradient(circle at 35% 30%, #9ffcff, var(--cyan) 35%, var(--blue) 75%, #1247a5);
+    box-shadow:0 0 60px rgba(0,255,255,.6), inset 0 0 30px rgba(255,255,255,.25);
+    animation:float 5s ease-in-out infinite}
+  .orb::before,.orb::after{content:"";position:absolute;border-radius:50%;inset:0;border:2px solid rgba(0,255,255,.35)}
+  .orb::after{animation:spin 9s linear infinite}
+  .orb::before{animation:spin 14s linear infinite reverse}
+  @keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .orb-state{display:flex; align-items:center; gap:8px; font-size:13px; color:var(--dim)}
+  .orb-state b{color:var(--green)}
+
+  .feed-pane{border-left:1px solid var(--line); background:var(--panel); display:flex;
+    flex-direction:column; padding:20px 22px; gap:12px}
+  .feed-title{font-size:11px; letter-spacing:1.5px; color:var(--dim); text-transform:uppercase}
+  .feed{display:flex; flex-direction:column; gap:10px; flex:1; overflow:hidden}
+  .msg{padding:10px 14px; border-radius:10px; border:1px solid var(--line);
+    background:var(--panel2); font-size:13.5px; line-height:1.5}
+  .msg.user{border-color:rgba(77,163,255,.4)}
+  .msg u{color:var(--blue); text-decoration:none; font-weight:600}
+  .msg .who{display:block; font-size:10px; letter-spacing:1px; color:var(--dim);
+    text-transform:uppercase; margin-bottom:4px}
+  .msg .who.jar{color:var(--cyan)}
+  .msg.progress{border-color:rgba(255,176,32,.4)}
+  .msg.progress .who{color:var(--amber)}
+  .bar{height:5px;border-radius:3px;background:#1c2740;margin-top:8px;overflow:hidden}
+  .bar i{display:block;height:100%;width:64%;background:linear-gradient(90deg,var(--amber),var(--green));
+    animation:slide 2s ease-in-out infinite}
+  @keyframes slide{0%{width:20%}100%{width:86%}}
+
+  .input{display:flex; gap:10px; padding:14px 16px; border-top:1px solid var(--line); background:var(--panel2)}
+  .input input{flex:1; background:var(--panel); border:1px solid var(--line); border-radius:10px;
+    padding:11px 14px; color:var(--txt); font-size:14px; outline:none}
+  .input input:focus{border-color:var(--blue)}
+  .input button{background:linear-gradient(90deg,var(--blue),var(--cyan)); border:none; color:#04121f;
+    font-weight:700; border-radius:10px; padding:0 18px; cursor:pointer}
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="head">
+      <div class="brand"><span class="dot"></span>JARVIS<small>voice visual interface</small></div>
+      <div class="pill">
+        <span class="on">● voice on</span><span>● hermes warm</span><span>● jobs 2</span>
+      </div>
+    </div>
+
+    <div class="stage">
+      <div class="orb-pane">
+        <div class="orb"></div>
+        <div class="orb-state">status: <b>listening</b> · say "jarvis" to wake</div>
+      </div>
+
+      <div class="feed-pane">
+        <div class="feed-title">command feed</div>
+        <div class="feed">
+          <div class="msg user">
+            <span class="who">you</span>
+            <u>open</u> apps panel
+          </div>
+          <div class="msg progress">
+            <span class="who jar">jarvis</span>
+            Delegate to Hermes &amp; compile the panel…
+            <div class="bar"><i></i></div>
+          </div>
+          <div class="msg">
+            <span class="who jar">jarvis</span>
+            Done, sir. App panel is up — 14 apps ready. <u>showing</u>&nbsp;apps panel.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="input">
+      <input placeholder="Type a command… or just talk (Wake word: JARVIS)" value="open apps panel">
+      <button>Send</button>
+    </div>
+  </div>
+</body>
+</html>

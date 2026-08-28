@@ -27,6 +27,30 @@ import urllib.parse
 import webbrowser
 from pathlib import Path
 
+# music_rules.py turns the human-written `adapter_check` strings in
+# app_registry.json into real playback controls. Import is best-effort: if the
+# module is absent, playback still works, just without rule enforcement.
+try:
+    import music_rules as _music_rules
+except Exception:  # pragma: no cover - defensive
+    _music_rules = None
+
+
+def _cap_volume(page, cap):
+    """Set <video> volume to the rule cap (0.0..1.0). Best-effort, never throws.
+
+    Real, machine-actionable control: music_agent drives the <video> element
+    directly, so v.volume can be set. Called only when a volume-cap rule is
+    present (cap is not None).
+    """
+    try:
+        page.evaluate(
+            "document.querySelectorAll('video').forEach(v=>{try{v.volume=%s;}catch(e){}})"
+            % cap
+        )
+    except Exception:
+        pass
+
 BRAVE_EXE = os.getenv(
     "JARVIS_BRAVE_EXE",
     r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe",
@@ -123,6 +147,23 @@ _JS_START_PLAY = """
     return {state: 'called'};
   } catch (e) {
     return {state: 'error', error: String(e)};
+  }
+}
+"""
+
+# Set the <video> volume to a hard fraction (0..1). Real, machine-actionable
+# cap: music_agent drives the element directly, so this is enforced, not a cue.
+_JS_CAP_VOLUME = """
+(frac) => {
+  try {
+    const v = document.querySelector('video');
+    if (!v) return false;
+    const f = Math.max(0, Math.min(1, Number(frac)));
+    v.volume = f;
+    v.muted = (f <= 0);
+    return true;
+  } catch (e) {
+    return false;
   }
 }
 """
@@ -550,6 +591,18 @@ def _probe(page):
     return state if isinstance(state, dict) else {"video": False}
 
 
+def _cap_volume(page, frac):
+    """Force the playing <video> to `frac` (0..1). Returns True if applied.
+
+    Called only when a resolved rule asks for a volume cap - the cap is real
+    because we set the element's volume directly, unlike the explicit-skip cue.
+    """
+    try:
+        return bool(page.evaluate(_JS_CAP_VOLUME, frac))
+    except Exception:
+        return False
+
+
 def _start_and_verify(page, wait_ms=5000):
     """Force playback, then poll until the video is genuinely advancing.
 
@@ -700,6 +753,23 @@ def _playing_title(page) -> str:
     return _playing_titles(page)[0]
 
 
+def now_playing() -> dict:
+    """Best-effort now-playing metadata for the HUD (never launches a browser).
+
+    Returns {"idle": True} when the music window is closed or unreadable, so
+    the HUD can dim its Now Playing card instead of inventing a track.
+    """
+    if not _worker.is_open():
+        return {"idle": True}
+    try:
+        title = _worker.call(_playing_title, timeout=8)
+    except Exception:
+        return {"idle": True}
+    if not title:
+        return {"idle": True}
+    return {"idle": False, "source": "youtube-music", "title": title}
+
+
 def _title_similarity(a: str, b: str) -> float:
     """Whole-string closeness of two titles, 0..1. stdlib difflib only.
 
@@ -830,6 +900,10 @@ def play_music(query: str, navigate_only: bool = False) -> str:
     _emit(f"Searching YouTube Music for {query}...")
 
     def job(page):
+        # Resolve playback rules once per command. Stored under the "spotify"
+        # app entry in app_registry.json even though we play via YouTube Music.
+        rules = _music_rules.resolve_music_rules(app_key="spotify") if _music_rules else {}
+
         page.goto(url, wait_until="domcontentloaded", timeout=60000)
         page.wait_for_timeout(1500)
         _dismiss_consent(page)
@@ -902,8 +976,28 @@ def play_music(query: str, navigate_only: bool = False) -> str:
                     return (f"Playback started for '{query}' on YouTube Music in Brave, "
                             f"but I couldn't read what's playing — please check it's "
                             f"the right song.")
+                # Best-effort, ADVISORY explicit-skip proxy: YouTube Music prints
+                # "Explicit" in the title. No metadata flag exists here, so this
+                # is a cue, not a guarantee. Skip the candidate and try the next.
+                if rules.get("skip_explicit") and _music_rules and \
+                        _music_rules._title_looks_explicit(actual):
+                    why = (f"'{actual}' looks explicit (rule: skip explicit) — "
+                           f"trying next result")
+                    continue
                 if _title_matches(match_title, query):
-                    return f"Playing '{actual}' on YouTube Music in Brave."
+                    # Real, machine-actionable cap: set the element volume now.
+                    cap = rules.get("cap_volume")
+                    if cap is not None:
+                        _cap_volume(page, cap)
+                    note = ""
+                    if _music_rules:
+                        note = _music_rules.advisory_note(rules)
+                    msg = f"Playing '{actual}' on YouTube Music in Brave."
+                    if cap is not None:
+                        msg += f" (volume capped at {int(round(cap * 100))}%)"
+                    if note:
+                        msg += f" {note}"
+                    return msg
                 last_actual = actual
                 why = f"'{actual}' does not match '{query}'"
                 continue

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 JARVIS Web Interface - FastAPI backend for voice visual JARVIS
 
@@ -10,6 +10,7 @@ Browser captures mic -> sends audio (WebM/Opus) -> backend transcribes with Whis
 import os
 import io
 import json
+import time
 import base64
 import tempfile
 import asyncio
@@ -98,6 +99,119 @@ except Exception as _e:
     print(f"[JARVIS Web] Web registry check failed: {_e}", flush=True)
 
 print("[JARVIS Web] Ready.", flush=True)
+
+# Voice state feedback (Phase A): policy engine + cue cache. All spoken state
+# updates (thinking cues, progress lines, terminal job announcements) route
+# through voice_feedback.announce() so the user gets friendly feedback without
+# overlapping/duplicate speech. The synthesizer is registered after tts_to_b64
+# is defined below.
+import voice_feedback as _vf
+import voice_ducking
+
+# Phase B: per-job milestone timers ("Still on it, sir.") for long background
+# tasks — keyed by job id, cancelled when the job reaches a terminal state.
+_TASK_MILESTONES: dict[str, asyncio.Task] = {}
+
+
+class _ThinkingWatchdog:
+    """Speaks 'Thinking, sir.' / 'Still working on it.' if a turn runs long."""
+
+    def __init__(self, ws, vf):
+        self._ws = ws
+        self._vf = vf
+        self._stop = asyncio.Event()
+
+    def start(self):
+        asyncio.get_running_loop().create_task(self._run())
+
+    async def _run(self):
+        try:
+            await asyncio.sleep(_vf.THINKING_CUE_S)
+            if self._stop.is_set():
+                return
+            await _send_cue(self._ws, "thinking", self._vf)
+            await asyncio.sleep(max(1.0, _vf.THINKING_ESCALATE_S - _vf.THINKING_CUE_S))
+            if self._stop.is_set():
+                return
+            await _send_cue(self._ws, "thinking_escalate", self._vf)
+        except Exception:
+            pass
+
+    def stop(self):
+        self._stop.set()
+
+
+async def _send_cue(ws, kind: str, vf) -> None:
+    line = vf.announce(kind)
+    if line is None:
+        return
+    audio = await vf.cue_audio(line)
+    try:
+        await ws.send_text(json.dumps({
+            "type": "cue", "text": line, "audio": audio, "priority": "low" if kind.startswith("thinking") else "normal"
+        }))
+    except Exception:
+        pass
+
+
+def _start_confirm_reminder(ws, vf) -> None:
+    """Phase B: if a confirm gate is still pending after 5 min, remind once."""
+    async def _run():
+        try:
+            await asyncio.sleep(300)
+        except asyncio.CancelledError:
+            return
+        try:
+            from tools import _PENDING_HERMES_CALL, _PENDING_DESTRUCTIVE
+            pending = _PENDING_HERMES_CALL or _PENDING_DESTRUCTIVE.get("autonomous")
+        except Exception:
+            return
+        if pending:
+            await _send_cue(ws, "confirm_pending")
+    asyncio.get_running_loop().create_task(_run())
+
+
+def _start_task_milestones(ws, vf, jid: str) -> None:
+    """Phase B: speak a friendly 'still on it' line every 45s (max 3) while a
+    background job is genuinely still running; cancelled on its terminal event."""
+    _TASK_MILESTONES.pop(jid, None)  # cancel any stale timer for this job
+
+    async def _run():
+        lines = ["Still on it, sir.", "Making progress, sir.",
+                 "This one is taking a while, sir."]
+        try:
+            for line in lines:
+                await asyncio.sleep(45)
+                import jobs as _jobs
+                j = _jobs.get(jid)
+                if not j or j.get("state") not in ("running", "queued"):
+                    return
+                spoken = vf.announce("milestone", line)
+                if spoken:
+                    audio = await vf.cue_audio(spoken)
+                    await ws.send_text(json.dumps({
+                        "type": "cue", "text": spoken, "audio": audio,
+                        "priority": "normal"}))
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            pass
+
+    _TASK_MILESTONES[jid] = asyncio.get_running_loop().create_task(_run())
+
+
+def _arm_phase_b(ws, vf, response_text) -> None:
+    """Arm the per-turn Phase B timers from the raw think() response."""
+    if not isinstance(response_text, str):
+        return
+    if ("HERMES_BACKGROUND:" in response_text
+            or "AUTONOMOUS_BACKGROUND:" in response_text):
+        ack = response_text.split(":", 1)[1].strip()
+        m = _re.search(r"\(job ([0-9a-f]+)\)", ack)
+        if m:
+            _start_task_milestones(ws, vf, m.group(1))
+    elif response_text.startswith("[NEEDS_CONFIRM"):
+        _start_confirm_reminder(ws, vf)
 
 
 def decode_audio_to_wav(audio_bytes: bytes) -> str:
@@ -213,6 +327,8 @@ _TTS_ENGINE = (os.environ.get("JARVIS_TTS_ENGINE") or "edge").strip().lower()
 _PIPER_MODEL = os.path.join(os.path.expanduser("~"), ".jarvis-tts",
                             "en_GB-nem-medium.onnx")
 _piper_voice = None
+_KOKORO_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "kokoro")
+_KOKORO_TTS = None
 
 
 def _get_piper():
@@ -234,6 +350,30 @@ def _get_piper():
     return None
 
 
+def _get_kokoro():
+    """Load the Kokoro ONNX TTS once; return None on any failure (edge fallback)."""
+    global _KOKORO_TTS
+    if _KOKORO_TTS is not None:
+        return _KOKORO_TTS
+    try:
+        from kokoro_onnx import Kokoro
+        model = os.path.join(_KOKORO_DIR, "kokoro-v1.0.onnx")
+        voices = os.path.join(_KOKORO_DIR, "voices-v1.0.bin")
+        if os.path.exists(model) and os.path.exists(voices):
+            import numpy as _np
+            _np_load = _np.load
+            _np.load = lambda *a, **k: _np_load(*a, allow_pickle=True, **k)
+            _KOKORO_TTS = Kokoro(model, voices)
+            _np.load = _np_load
+            print("[TTS] Kokoro (local, offline) ready — JARVIS_TTS_ENGINE=kokoro")
+            return _KOKORO_TTS
+        print(f"[TTS] kokoro model missing in {_KOKORO_DIR}; using edge-tts fallback.")
+    except Exception as e:
+        print(f"[TTS] kokoro unavailable ({e}); using edge-tts fallback.")
+        _KOKORO_TTS = None
+    return None
+
+
 async def tts_to_b64(text: str) -> str:
     """Synthesize `text` and return base64 audio.
 
@@ -241,6 +381,24 @@ async def tts_to_b64(text: str) -> str:
     JARVIS_TTS_ENGINE=piper; falls back to edge automatically on any failure.
     """
     text = strip_ai_artifacts(text)
+    if _TTS_ENGINE == "kokoro":
+        kokoro = _get_kokoro()
+        if kokoro is not None:
+            try:
+                def _synth():
+                    import re as _re
+                    import numpy as _np2
+                    samples, sr = kokoro.create(
+                        text, voice="am_michael", speed=1.1, lang="en-us")
+                    import io as _io
+                    import soundfile as _sf
+                    buf = _io.BytesIO()
+                    _sf.write(buf, _np2.asarray(samples), sr, format="WAV")
+                    return buf.getvalue()
+                wav_bytes = await asyncio.to_thread(_synth)
+                return base64.b64encode(wav_bytes).decode()
+            except Exception as e:
+                print(f"[TTS] kokoro synth failed ({e}); falling back to edge-tts.")
     if _TTS_ENGINE == "piper":
         voice = _get_piper()
         if voice is not None:
@@ -276,6 +434,23 @@ async def tts_to_b64(text: str) -> str:
     finally:
         os.unlink(mp3_path)
 
+
+_vf.set_synthesizer(tts_to_b64)
+if _TTS_ENGINE == "kokoro" and _get_kokoro() is not None:
+    _vf.warm_cache()
+
+
+def _duck_failsafe_loop():
+    """Periodically restore ducked music if a speech-end message was lost."""
+    while True:
+        time.sleep(30)
+        try:
+            voice_ducking.check_failsafe()
+        except Exception:
+            pass
+
+
+threading.Thread(target=_duck_failsafe_loop, daemon=True, name="duck-failsafe").start()
 
 # Rolling counters so the HUD can show a backend mix and a fallback rate rather
 # than a decorative gauge. Kept in memory only: this is a demo readout, not
@@ -406,6 +581,12 @@ async def get_apps():
     """
     import os as _os
     from machine_capabilities import load_registry
+    # Phase 8: opt-in flags (registered/enabled) come from curate.py
+    try:
+        from curate import is_registered, is_enabled
+    except Exception:
+        is_registered = lambda k: False
+        is_enabled = lambda k: False
     reg = load_registry()
     if not reg:
         return JSONResponse({"error": "no registry", "apps": [], "count": 0})
@@ -421,6 +602,7 @@ async def get_apps():
             "broken": bool(binp) and not _os.path.exists(binp),
             "enabled": entry.get("enabled", True),
             "adapter": entry.get("kind"),
+            "registered": is_registered(key),
             "rule_drafts": entry.get("rule_drafts") or [],
             "compiled_rules": entry.get("compiled_rules") or [],
         })
@@ -506,6 +688,26 @@ async def post_apps_rules(message: Request):
     return JSONResponse({"ok": True, "key": key})
 
 
+@app.post("/apps/register")
+async def post_apps_register(message: Request):
+    """Phase 8: opt an app in (or out) of the curated registry."""
+    try:
+        body = await message.json()
+    except Exception:
+        return JSONResponse({"error": "bad json"}, status_code=400)
+    key = (body.get("key") or "").strip()
+    registered = bool(body.get("registered", True))
+    enabled = bool(body.get("enabled", True))
+    if not key:
+        return JSONResponse({"error": "missing key"}, status_code=400)
+    import curate
+    ok = curate.mark_registered(key, registered=registered, enabled=enabled)
+    if not ok:
+        return JSONResponse({"error": "unknown app"}, status_code=400)
+    return JSONResponse({"ok": True, "key": key,
+                         "registered": registered, "enabled": enabled})
+
+
 @app.post("/apps/compile")
 async def post_apps_compile(message: Request):
     """Phase 3.5 wizard: turn raw rule drafts into a proposed ruleset.
@@ -545,6 +747,15 @@ async def post_apps_compile(message: Request):
                 questions.append(r["clarification_question"])
 
     proposed = rc.apply_clarifications(key, candidates, answers)
+
+    # Phase 3.5 guard: a draft like "never X even if I ask" is a HARD block,
+    # not a soft preference. Promote any rule the escalation detector flags so
+    # we never silently downgrade a user's explicit "must not" into a soft nudge.
+    for r in proposed:
+        if rc.detect_hard_escalation(r) and r.get("enforcement") != "hard":
+            r["enforcement"] = "hard"
+            r["intent"] = (r.get("intent") or "") + " (hard-escalated: user said never/even if I ask)"
+
     return JSONResponse({
         "ok": True,
         "key": key,
@@ -552,6 +763,90 @@ async def post_apps_compile(message: Request):
         "questions": questions,
         "proposal_markdown": rc.propose_ruleset(key, proposed),
     })
+
+
+@app.get("/apps/registry")
+async def get_apps_registry():
+    """Full registry with registered/enabled/hidden flags, grouped for the
+    Add-or-Remove-Programs-style panel. Returns:
+    - installed (registered + enabled)
+    - available (detected, not registered)
+    - hidden (explicitly hidden by user)
+    """
+    from machine_capabilities import load_registry
+    from curate import registered_apps, detected_but_unregistered, is_registered, is_enabled
+    reg = load_registry()
+    if not reg:
+        return JSONResponse({"error": "no registry", "installed": [], "available": [], "hidden": [], "count": 0})
+    apps = reg.get("apps", {})
+    installed = []
+    available = []
+    hidden = []
+    for key, entry in apps.items():
+        if not isinstance(entry, dict):
+            continue
+        binp = entry.get("bin") or ""
+        item = {
+            "name": entry.get("name", key),
+            "key": key,
+            "bin": binp,
+            "category": entry.get("category", "other"),
+            "kind": entry.get("kind", "gui"),
+            "broken": bool(binp) and not os.path.exists(binp),
+            "enabled": entry.get("enabled", True),
+            "hidden": entry.get("hidden", False),
+            "confidence": entry.get("confidence", "medium"),
+            "rule_drafts": entry.get("rule_drafts") or [],
+            "compiled_rules": entry.get("compiled_rules") or [],
+        }
+        if entry.get("hidden", False):
+            hidden.append(item)
+        elif is_enabled(key):
+            installed.append(item)
+        elif is_registered(key):
+            installed.append(item)
+        else:
+            available.append(item)
+    installed.sort(key=lambda a: (a["category"], a["name"]))
+    available.sort(key=lambda a: (a["category"], a["name"]))
+    hidden.sort(key=lambda a: (a["category"], a["name"]))
+    return JSONResponse({
+        "count": len(installed) + len(available) + len(hidden),
+        "installed": installed,
+        "available": available,
+        "hidden": hidden,
+        "generated": reg.get("generated"),
+    })
+
+
+@app.post("/apps/hide")
+async def post_apps_hide(message: Request):
+    """Hide an app from the registry (won't show in installed or available).
+    The user can un-hide it later via the panel."""
+    try:
+        body = await message.json()
+    except Exception:
+        return JSONResponse({"error": "bad json"}, status_code=400)
+    key = (body.get("key") or "").strip()
+    hide = bool(body.get("hide", True))
+    if not key:
+        return JSONResponse({"error": "missing key"}, status_code=400)
+    from machine_capabilities import REGISTRY_PATH
+    if not os.path.exists(REGISTRY_PATH):
+        return JSONResponse({"error": "no registry"}, status_code=400)
+    with open(REGISTRY_PATH, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    apps = data.setdefault("apps", {})
+    if key not in apps:
+        return JSONResponse({"error": "unknown app"}, status_code=400)
+    apps[key]["hidden"] = bool(hide)
+    if hide and apps[key].get("registered"):
+        apps[key]["registered"] = False  # unregistering on hide
+    tmp = REGISTRY_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, REGISTRY_PATH)
+    return JSONResponse({"ok": True, "key": key, "hidden": hide})
 
 
 @app.get("/apps.html")
@@ -567,6 +862,15 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     WS_CLIENTS.add(websocket)
     print("[WS] client connected", flush=True)
+    # Per-connection feedback policy: each client decides (and hears) its own
+    # cues; the synthesizer and audio cache are shared module-wide.
+    vf = _vf.Policy()
+    vf.set_synthesizer(tts_to_b64)
+
+    # Capture THIS connection's loop once: job events fire from worker threads
+    # where asyncio.get_event_loop() raises RuntimeError, which silently killed
+    # every job->HUD broadcast and proactive announcement.
+    _ws_loop = asyncio.get_running_loop()
 
     # Progress queue: tools push mid-task status here from the think() thread,
     # and a background coroutine pops them and speaks them over the WS.
@@ -577,7 +881,7 @@ async def websocket_endpoint(websocket: WebSocket):
     import jobs as _jobs
     def _on_job_event(event):
         try:
-            loop = asyncio.get_event_loop()
+            loop = _ws_loop
             if loop.is_running():
                 asyncio.run_coroutine_threadsafe(
                     _broadcast_job(event), loop)
@@ -586,7 +890,26 @@ async def websocket_endpoint(websocket: WebSocket):
                     import memory_hygiene as _mh
                     line = _mh.proactive_job_announcement(event)
                     if line:
-                        asyncio.run_coroutine_threadsafe(_speak_proactive(line), loop)
+                        # Route through the policy engine (high priority, but
+                        # still deduped) so terminal announcements never double
+                        # up with progress-channel speech.
+                        spoken = vf.announce(f"job_{event.get('state')}", line)
+                        if spoken:
+                            asyncio.run_coroutine_threadsafe(_speak_proactive(spoken), loop)
+                    # Phase B: autonomous step milestones ("Step one done.").
+                    if event.get("state") == "running":
+                        step = _vf.step_line(event.get("note") or "")
+                        if step:
+                            spoken = vf.announce("milestone", step)
+                            print(f"[FEEDBACK] step cue -> {spoken!r}", flush=True)
+                            if spoken:
+                                asyncio.run_coroutine_threadsafe(
+                                    _speak_proactive(spoken), loop)
+                    # Cancel this job's milestone timer once it finishes.
+                    if event.get("state") in ("done", "error", "timeout", "unverified"):
+                        t = _TASK_MILESTONES.pop(event.get("id"), None)
+                        if t:
+                            t.cancel()
                 except Exception:
                     pass
         except RuntimeError:
@@ -600,10 +923,12 @@ async def websocket_endpoint(websocket: WebSocket):
 
     async def _speak_proactive(text: str):
         try:
+            print(f"[SPEAK_PROACTIVE] entering: {text!r}", flush=True)
             tts_b64 = await tts_to_b64(text)
             await websocket.send_text(json.dumps({"type": "response", "text": text, "audio": tts_b64, "proactive": True}))
-        except Exception:
-            pass
+            print(f"[SPEAK_PROACTIVE] sent ({len(tts_b64 or '')} b64)", flush=True)
+        except Exception as e:
+            print(f"[SPEAK_PROACTIVE] failed: {type(e).__name__}: {e}", flush=True)
 
     try:
         _jobs.add_listener(_on_job_event)
@@ -628,7 +953,10 @@ async def websocket_endpoint(websocket: WebSocket):
             if msg is None:
                 break
             try:
-                tts_b64 = await tts_to_b64(msg)
+                # Policy engine decides whether this milestone is worth SPEAKING
+                # (throttled/deduped); the HUD caption updates either way.
+                spoken = vf.announce("progress", msg)
+                tts_b64 = await tts_to_b64(spoken) if spoken is not None else None
                 await websocket.send_text(json.dumps({
                     "type": "progress", "text": msg, "audio": tts_b64
                 }))
@@ -649,6 +977,18 @@ async def websocket_endpoint(websocket: WebSocket):
 
             if mtype == "ping":
                 await websocket.send_text(json.dumps({"type": "pong"}))
+
+            elif mtype == "speech":
+                # Phase C: duck music while JARVIS speaks, restore when done.
+                # Failsafe auto-unduck guards against a lost "end" message.
+                state = (message.get("state") or "").strip().lower()
+                try:
+                    if state == "start":
+                        await asyncio.to_thread(voice_ducking.duck)
+                    elif state == "end":
+                        await asyncio.to_thread(voice_ducking.unduck)
+                except Exception as e:
+                    print(f"[DUCK] {state} failed: {e}", flush=True)
 
             elif mtype == "audio":
                 # Browser sent a recorded clip (base64 WAV or WebM/Opus blob).
@@ -718,6 +1058,8 @@ async def websocket_endpoint(websocket: WebSocket):
                         "type": "transcript", "text": text.strip()
                     }))
                     await websocket.send_text(json.dumps({"type": "status", "state": "thinking"}))
+                    _wd = _ThinkingWatchdog(websocket, vf)
+                    _wd.start()
 
                     loop = asyncio.get_running_loop()
 
@@ -734,6 +1076,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     # a minute, and blocking here stalls the WebSocket for its duration.
                     response = await asyncio.to_thread(
                         brain.think, text.strip(), on_hermes_done, _push_progress)
+                    _wd.stop()
+                    _arm_phase_b(websocket, vf, response)
 
                     await websocket.send_text(json.dumps({"type": "transcript", "text": text.strip()}))
                     sstore_log("user", text.strip())
@@ -857,6 +1201,8 @@ async def websocket_endpoint(websocket: WebSocket):
                 speak = bool(message.get("speak"))
                 await websocket.send_text(json.dumps({"type": "transcript", "text": user_text}))
                 await websocket.send_text(json.dumps({"type": "status", "state": "thinking"}))
+                _wd = _ThinkingWatchdog(websocket, vf)
+                _wd.start()
                 try:
                     loop = asyncio.get_running_loop()
 
@@ -870,6 +1216,8 @@ async def websocket_endpoint(websocket: WebSocket):
 
                     response = await asyncio.to_thread(
                         brain.think, user_text, on_hermes_done, _push_progress)
+                    _wd.stop()
+                    _arm_phase_b(websocket, vf, response)
                     sstore_log("user", user_text)
 
                     # Signal the progress reader that think() is done, then
@@ -974,6 +1322,8 @@ async def get_status():
         "fallback": None if getattr(brain, "_local_only", False) else OLLAMA_MODEL,
         "last_backend": brain.last_backend,
         "voice": f"whisper:{WHISPER_MODEL}",
+        "tts": _TTS_ENGINE,
+        "feedback_mode": _vf.current_mode(),
         # Background job table (all tiers) for HUD/programmatic polling.
         "jobs_active": __import__("jobs").active(),
         "jobs_recent": __import__("jobs").recent(8),
@@ -986,6 +1336,53 @@ async def get_status():
             "error": getattr(wake_engine, "last_err", "") or None,
         },
     }
+
+
+@app.post("/voice_feedback")
+async def post_voice_feedback(message: Request):
+    """HUD toggle: switch the voice-feedback mode at runtime."""
+    try:
+        body = await message.json()
+    except Exception:
+        return JSONResponse({"error": "bad json"}, status_code=400)
+    try:
+        mode = _vf.set_mode(body.get("mode") or "")
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    print(f"[FEEDBACK] mode -> {mode}", flush=True)
+    return {"ok": True, "mode": mode}
+
+
+@app.get("/music/now")
+async def get_music_now():
+    """Now-playing metadata for the HUD card. Idle when no music window is open."""
+    import music_agent
+    try:
+        info = await asyncio.to_thread(music_agent.now_playing)
+    except Exception as e:
+        print(f"[MUSIC] now_playing failed: {e}", flush=True)
+        info = {"idle": True}
+    return info
+
+
+@app.post("/music")
+async def post_music(message: Request):
+    """Music controls from the HUD card. stop_yt pauses/navigates YT Music away;
+    spotify_toggle presses the media play/pause key (toggles Spotify)."""
+    try:
+        body = await message.json()
+    except Exception:
+        return JSONResponse({"error": "bad json"}, status_code=400)
+    action = (body.get("action") or "").strip().lower()
+    if action == "stop_yt":
+        import music_agent
+        out = await asyncio.to_thread(music_agent.stop_music)
+        return {"ok": True, "action": action, "result": out[:200]}
+    if action == "spotify_toggle":
+        from tools import stop_spotify
+        out = await asyncio.to_thread(stop_spotify)
+        return {"ok": True, "action": action, "result": out[:200]}
+    return JSONResponse({"error": f"unknown action: {action}"}, status_code=400)
 
 
 if __name__ == "__main__":

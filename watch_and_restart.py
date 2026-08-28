@@ -4,9 +4,9 @@ Polls every 2s. Kills old process, starts new one. Ctrl+C to stop."""
 import os, sys, time, subprocess, signal, glob
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-WATCH = [os.path.join(ROOT, f) for f in ("brain_gemini.py", "tools.py", "music_agent.py",
-                                           "voice_engine.py", "wake_engine.py", "config.py",
-                                           "session_store.py", "browser_agent.py",
+WATCH = [os.path.join(ROOT, f) for f in ("brain_gemini.py", "tools.py", "autonomous.py",
+                                           "music_agent.py", "voice_engine.py", "wake_engine.py",
+                                           "config.py", "session_store.py", "browser_agent.py",
                                            "project_agent.py", "report_agent.py",
                                            "warm_harness.py", "jarvis_visual.html")]
 WEB = os.path.join(ROOT, "jarvis_web.py")
@@ -58,5 +58,15 @@ while True:
         print(f"[watcher] Process exited (code={proc.returncode}), restarting ...", flush=True)
         start()
     elif check():
+        # Don't kill a live autonomous job — Hermes is mid-run in a subprocess
+        # we can't hand off. Wait until it finishes (or is cancelled) instead.
+        try:
+            import autonomous
+            if autonomous.any_running():
+                print("[watcher] Deferring restart — autonomous job running. "
+                      "Will restart after it finishes.", flush=True)
+                continue
+        except Exception:
+            pass
         stop()
         start()

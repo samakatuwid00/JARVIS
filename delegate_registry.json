@@ -1,0 +1,115 @@
+{
+  "_comment": "Phase 3: Declarative capability registry. Each delegate declares task types it handles. Hermes is the floor (general). Order matters: first match wins for auto-detect; explicit 'using X' bypasses this and forces the named delegate. Add a new delegate here — no TOOL_MAP edit needed.",
+  "delegates": [
+    {
+      "id": "music",
+      "handles": ["music"],
+      "description": "YouTube Music / Spotify via music_agent — hands-free, no Premium",
+      "priority": 100,
+      "kind": "local",
+      "tools": ["play_music", "stop_music", "play_spotify", "stop_spotify"]
+    },
+    {
+      "id": "desktop",
+      "handles": ["desktop"],
+      "description": "Installed apps via app_registry + machine_capabilities resolve",
+      "priority": 90,
+      "kind": "local",
+      "tools": ["open_application", "close_application", "desktop_control"]
+    },
+    {
+      "id": "web",
+      "handles": ["web"],
+      "description": "Browser search / site open via browser_agent CDP (port 9223)",
+      "priority": 80,
+      "kind": "local",
+      "tools": ["search_web", "open_site", "browser_status"],
+      "mcp": "mcp_browser_server"
+    },
+    {
+      "id": "chatgpt",
+      "handles": ["ideation", "history"],
+      "description": "ChatGPT signed-in Chrome history + prompting via browser_agent",
+      "priority": 70,
+      "kind": "local",
+      "tools": ["ask_chatgpt", "search_chatgpt_history", "open_chatgpt_conversation", "ask_ai"],
+      "mcp": "mcp_browser_server"
+    },
+    {
+      "id": "manus",
+      "handles": ["media"],
+      "description": "Image/video/doc generation via Manus REST API (replaces cookie handoff)",
+      "priority": 60,
+      "kind": "local",
+      "tools": ["manus_status"],
+      "module": "manus_agent"
+    },
+    {
+      "id": "opencode",
+      "handles": ["coding"],
+      "description": "Coding delegate via opencode CLI + opencode.json specialists",
+      "priority": 50,
+      "kind": "specialist",
+      "cmd": "opencode",
+      "config": "opencode.json",
+      "agents": ["app-launcher", "project-runner", "registry-curator", "desktop-operator", "browser-session", "music-agent", "media-creator"]
+    },
+    {
+      "id": "gemini",
+      "handles": ["ideation"],
+      "description": "Gemini CLI for ideas (cli_agents.json bin gemini)",
+      "priority": 40,
+      "kind": "cli",
+      "bin": "gemini",
+      "config": "cli_agents.json"
+    },
+    {
+      "id": "claude",
+      "handles": ["coding", "ideation"],
+      "description": "Claude Code CLI via cli_agents.json",
+      "priority": 39,
+      "kind": "cli",
+      "bin": "claude",
+      "config": "cli_agents.json"
+    },
+    {
+      "id": "codex",
+      "handles": ["ideation", "coding"],
+      "description": "Codex CLI (ChatGPT) via cli_agents.json",
+      "priority": 38,
+      "kind": "cli",
+      "bin": "codex",
+      "config": "cli_agents.json"
+    },
+    {
+      "id": "hermes",
+      "handles": ["extended-harness", "general", "file", "coding"],
+      "description": "Full harness fallback — terminal, file, browser, code_execution, computer_use. Gated via allowlist.",
+      "priority": 0,
+      "kind": "harness",
+      "cmd": "hermes chat -q",
+      "toolsets": "web,browser,terminal,file,code_execution,vision,video,image_gen,video_gen,bfl,x_search,tts,skills,todo,memory,session_search,clarify,delegation,cronjob,computer_use"
+    }
+  ],
+  "verb_map": {
+    "play": "music",
+    "stop": "music",
+    "open": "desktop",
+    "launch": "desktop",
+    "close": "desktop",
+    "search": "web",
+    "ask": "chatgpt",
+    "chat": "chatgpt",
+    "query": "chatgpt",
+    "compose": "hermes",
+    "write": "hermes",
+    "make": "manus",
+    "build": "manus",
+    "create": "manus",
+    "generate": "manus",
+    "code": "opencode",
+    "debug": "opencode",
+    "refactor": "opencode",
+    "implement": "opencode"
+  }
+}

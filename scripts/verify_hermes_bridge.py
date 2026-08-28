@@ -34,27 +34,25 @@ print("=== 1. Wiring across all touchpoints ===")
 import tools
 import brain_gemini
 
-# tools.TOOLS (Claude schema)
-in_tools = any(t.get("name") == "delegate_to_hermes" for t in tools.TOOLS)
-check("tools.TOOLS has delegate_to_hermes", in_tools)
+# Aug 2026: the tool surface was unified — the ONE delegation primitive exposed
+# to the brain is `delegate` (auto-routes music/desktop/web/specialist/hermes).
+# delegate_to_hermes remains as the underlying executor, called by delegate().
+TOOL_NAME = "delegate"
 
-# tools.TOOL_MAP (dispatcher)
-check("tools.TOOL_MAP has delegate_to_hermes", "delegate_to_hermes" in tools.TOOL_MAP)
+in_tools = any(t.get("name") == TOOL_NAME for t in tools.TOOLS)
+check(f"tools.TOOLS has {TOOL_NAME}", in_tools)
 
-# brain_gemini.TOOL_DECLARATIONS (Gemini)
-in_decl = any(getattr(fc, "name", None) == "delegate_to_hermes"
+check(f"tools.TOOL_MAP has {TOOL_NAME}", TOOL_NAME in tools.TOOL_MAP)
+check("delegate_to_hermes executor retained in tools",
+      hasattr(tools, "delegate_to_hermes") and hasattr(tools, "delegate"))
+
+in_decl = any(getattr(fc, "name", None) == TOOL_NAME
               for fc in brain_gemini.TOOL_DECLARATIONS)
-check("brain_gemini.TOOL_DECLARATIONS has delegate_to_hermes", in_decl)
+check(f"brain_gemini.TOOL_DECLARATIONS has {TOOL_NAME}", in_decl)
 
-# brain_gemini._openai_tools() (active 9router/Ollama path)
-otools = brain_gemini._openai_tools()
-in_openai = any(f.get("function", {}).get("name") == "delegate_to_hermes"
-                for f in otools)
-check("brain_gemini._openai_tools() has delegate_to_hermes", in_openai)
-
-# tool must be wired as a dispatcher entry (count-agnostic: repo base varies)
-check("TOOL_MAP has delegate_to_hermes (count=%d)" % len(tools.TOOL_MAP),
-      "delegate_to_hermes" in tools.TOOL_MAP)
+in_openai = any(f.get("function", {}).get("name") == TOOL_NAME
+                for f in brain_gemini._openai_tools())
+check(f"brain_gemini._openai_tools() has {TOOL_NAME}", in_openai)
 
 
 print("\n=== 2. Destructive task is REFUSED before launch (no Hermes call) ===")

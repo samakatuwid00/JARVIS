@@ -1,18 +1,86 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>JARVIS HUD — Voice</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&family=Rajdhani:wght@600;700&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  :root { --holo: #ffb454; --ink: #0b0805;
+  :root {
+    --holo: #ffb454;          /* incumbent amber identity */
+    --holo-bright: #ffd9a0;
+    --ink: #070a0e;
+    --ok: #7ddba0;
+    --warn: #ffb454;
+    --bad: #ef7b64;
+    --info: #7cc4ff;
+    --hairline: color-mix(in srgb, var(--holo) 22%, transparent);
+    --hairline-soft: color-mix(in srgb, var(--holo) 14%, transparent);
+    --panel: rgba(10, 13, 18, .88);
     /* Amplitude-driven levers. JS rewrites these on every animation frame while
        the TTS clip plays, and resets them to exactly these idle values when it
        ends, so the whole reactive layer collapses to "off" with no leftovers. */
     --amp: 0; --hue: 0deg; --bright: 1; --sat: 1; --glow: 0; --glow-r: 48vmin; }
   html, body { height: 100%; background: var(--ink); overflow: hidden;
     font-family: Archivo, system-ui, sans-serif; color: #f2ead9; }
+
+  /* Typography voices: Rajdhani carries HUD lettering (status, labels, buttons);
+     Archivo carries reading text; monospace is reserved for data values. */
+  body { --font-display: 'Rajdhani', 'Archivo', system-ui, sans-serif;
+         --font-body: 'Archivo', system-ui, sans-serif;
+         --font-data: ui-monospace, 'Cascadia Mono', Consolas, monospace; }
+
+  /* Authored atmosphere: a faint scan texture + corner vignette over the orb.
+     Purely decorative, click-through, sits under every overlay. */
+  #jv-atmos { position: fixed; inset: 0; z-index: 30; pointer-events: none;
+    background:
+      radial-gradient(140% 110% at 50% 42%, transparent 55%, rgba(0, 0, 0, .5) 100%),
+      repeating-linear-gradient(0deg, rgba(255, 214, 150, .022) 0 1px, transparent 1px 5px); }
+
+  /* ---- background job cards (task tray, top-right) ---------------------- */
+  #job-tray {
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .job-card {
+    background: var(--panel);
+    border: 1px solid var(--hairline);
+    border-radius: 10px;
+    padding: 10px 13px 11px;
+    font-family: var(--font-body);
+    color: #f2ead9;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, .45), 0 1px 0 rgba(255, 214, 150, .06) inset;
+    animation: jobIn .22s ease-out;
+    backdrop-filter: blur(8px);
+  }
+  @keyframes jobIn { from { opacity: 0; transform: translateX(16px); } }
+  .job-head { display: flex; align-items: center; gap: 9px; }
+  /* Status glyph is drawn by CSS per state; the JS-set text glyph is muted so the
+     drawn icon is the only mark. Keeps the JS contract intact, upgrades the icon. */
+  .job-icon  { font-size: 0; width: 18px; height: 18px; flex: 0 0 auto;
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 6px; background: rgba(255, 180, 84, .12);
+    color: transparent; position: relative; }
+  .job-icon::before { content: ''; width: 12px; height: 12px; display: block;
+    background: currentColor; -webkit-mask: var(--glyph) center / contain no-repeat;
+            mask: var(--glyph) center / contain no-repeat; }
+  .job-card.is-running .job-icon { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffb454' stroke-width='2.6' stroke-linecap='round' stroke-dasharray='44 22'%3E%3Cpath d='M12 3a9 9 0 1 0 9 9'/%3E%3C/svg%3E"); color: #e8a74d; }
+  .job-card.is-running .job-icon::before { animation: jobSpin 1.1s linear infinite; }
+  .job-card.is-done    { border-color: rgba(125, 219, 160, .35); }
+  .job-card.is-done .job-icon { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%237ddba0' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4.5 12.5l5 5 10-11'/%3E%3C/svg%3E"); color: #7ddba0; background: rgba(125, 219, 160, .1); }
+  .job-card.is-error,
+  .job-card.is-timeout { border-color: rgba(239, 123, 100, .4); }
+  .job-card.is-error .job-icon,
+  .job-card.is-timeout .job-icon { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ef7b64' stroke-width='3' stroke-linecap='round'%3E%3Cpath d='M6 6l12 12M18 6L6 18'/%3E%3C/svg%3E"); color: #ef7b64; background: rgba(239, 123, 100, .1); }
+  .job-title { font-weight: 600; font-size: 13px; flex: 1;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; letter-spacing: .01em; }
+  .job-state { font-family: var(--font-data);
+    font-size: 10px; letter-spacing: .1em; color: #c9d4e3; }
+  .job-note  { font-size: 11.5px; color: #aab7c9; margin-top: 4px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
   /* Page = HUD only. The glow and the status strip float over it; the glow is
      pointer-events:none, the strip is a thin non-blocking overlay. */
@@ -68,14 +136,15 @@
   /* ------------------------------------------------------------ status strip */
   /* Voice-only UI: a thin floating readout in the corner. No transcript, no
      input. It never eats clicks except on its own two fallback buttons. */
-  #jv-head { position: fixed; z-index: 60; left: 16px; bottom: 14px;
-    display: flex; align-items: center; gap: 10px;
-    padding: 7px 13px; border-radius: 999px; pointer-events: none;
-    background: color-mix(in srgb, #0b0805 72%, transparent);
-    border: 1px solid color-mix(in srgb, var(--holo) 25%, transparent);
-    backdrop-filter: blur(6px); }
+  #jv-head { position: fixed; z-index: 60; left: 18px; bottom: 18px;
+    display: flex; align-items: center; gap: 11px;
+    padding: 9px 14px; border-radius: 14px; pointer-events: none;
+    background: color-mix(in srgb, #070a0e 78%, transparent);
+    border: 1px solid var(--hairline);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, .4);
+    backdrop-filter: blur(8px); }
   #jv-head .jv-btn { pointer-events: auto; }
-  #jv-dot { width: 11px; height: 11px; border-radius: 50%; flex: 0 0 auto;
+  #jv-dot { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto;
     background: color-mix(in srgb, var(--holo) 70%, transparent);
     box-shadow: 0 0 10px var(--holo); transition: background .2s, box-shadow .2s; }
   #jv-dot.listen { background: #9dff8a; box-shadow: 0 0 16px #9dff8a; animation: jvPulse .9s infinite; }
@@ -84,33 +153,41 @@
   #jv-dot.dead   { background: #ec3013; box-shadow: 0 0 12px #ec3013; animation: none; }
   @keyframes jvPulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.45); } }
 
-  #jv-status { font: 700 11px/1.4 Archivo, system-ui; letter-spacing: .2em;
-    text-transform: uppercase; color: color-mix(in srgb, var(--holo) 80%, #fff); }
+  #jv-status { font: 700 12px/1.4 var(--font-display); letter-spacing: .24em;
+    text-transform: uppercase; color: #ffd9a0; }
   #jv-status.live { color: #9dff8a; }
-  #jv-level { width: 74px; height: 4px; border-radius: 3px; overflow: hidden; flex: 0 0 auto;
+  #jv-level { width: 78px; height: 4px; border-radius: 3px; overflow: hidden; flex: 0 0 auto;
     background: color-mix(in srgb, var(--holo) 18%, transparent); }
   #jv-level i { display: block; height: 100%; width: 0%; background: var(--holo);
     transition: width .08s linear; }
   #jv-actions { display: flex; gap: 8px; }
 
-  .jv-btn { cursor: pointer; border: none; border-radius: 999px; padding: 6px 13px;
-    font: 800 10px/1 Archivo, system-ui; letter-spacing: .18em; text-transform: uppercase;
-    color: #0b0805; background: var(--holo); }
-  .jv-btn:hover { filter: brightness(1.12); }
+  .jv-btn { cursor: pointer; border-radius: 999px; padding: 7px 15px;
+    font: 700 10.5px/1 var(--font-display); letter-spacing: .18em; text-transform: uppercase;
+    color: #ffd9a0; background: transparent;
+    border: 1px solid color-mix(in srgb, var(--holo) 55%, transparent);
+    transition: background .12s, color .12s, border-color .12s; }
+  .jv-btn:hover { background: color-mix(in srgb, var(--holo) 18%, transparent);
+    border-color: var(--holo); color: #ffe7c4; }
+  .jv-btn:active { transform: translateY(1px); }
+  .jv-btn:focus-visible { outline: 2px solid var(--holo); outline-offset: 2px; }
   /* Fallback controls — only shown when they are actually needed */
   #jv-retry, #jv-unlock, #jv-end { display: none; }
   #jv-retry.show, #jv-unlock.show, #jv-end.show { display: inline-block; }
+  /* A fallback control demanding action reads as primary. */
+  #jv-unlock.show, #jv-retry.show { background: var(--holo); color: #1a1005; border-color: var(--holo); }
+  #jv-unlock.show:hover, #jv-retry.show:hover { background: #ffc87a; color: #1a1005; }
 
-  /* ------------------------------------------------------------ terminal chat */
+  /* ------------------------------------------------------------ transcript */
   /* Wrapper-side (NOT iframe) typed path. It sits above #jv-head and never
      covers the artifact's own footer controls. The container itself is
      click-through; only the transcript and the input strip take pointer events,
      so the mic path inside the iframe keeps working untouched. */
-  #jv-chat { position: fixed; z-index: 60; left: 0; right: 0; bottom: 104px;
+  #jv-chat { position: fixed; z-index: 60; left: 0; right: 0; bottom: 108px;
     width: min(720px, calc(100% - 32px)); margin: 0 auto;
     display: flex; flex-direction: column; gap: 9px; pointer-events: none;
-    font-family: Archivo, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    color: color-mix(in srgb, var(--holo) 86%, #fff); }
+    font-family: var(--font-body);
+    color: #ffe7c4; }
 
   #jv-log { pointer-events: auto; overflow-y: auto; max-height: 34vh;
     display: flex; flex-direction: column; gap: 6px; padding: 0 2px;
@@ -120,18 +197,23 @@
     background: color-mix(in srgb, var(--holo) 35%, transparent); }
 
   .jv-line { max-width: 86%; white-space: pre-wrap; word-break: break-word;
-    font: 500 13px/1.55 Archivo, ui-monospace, Menlo, Consolas, monospace;
-    letter-spacing: .02em; text-shadow: 0 0 12px color-mix(in srgb, var(--holo) 22%, transparent); }
-  .jv-line::before { content: '> '; opacity: .5; }
-  .jv-line-user { align-self: flex-end; text-align: right;
-    color: color-mix(in srgb, var(--holo) 70%, #fff); }
+    font: 500 13.5px/1.55 var(--font-body);
+    letter-spacing: .01em; text-shadow: 0 0 12px color-mix(in srgb, var(--holo) 18%, transparent); }
+  .jv-line::before { content: ''; display: none; }
+  .jv-line-user { align-self: flex-end; text-align: right; font-weight: 600;
+    color: #ffe7c4; }
+  .jv-line-user::before { content: '›'; display: inline; margin-right: 7px;
+    font-weight: 800; color: color-mix(in srgb, var(--holo) 70%, #fff); }
   /* The HUD line shows the reply currently being spoken; this panel is the
      scrollback. Hiding these outright (to kill the duplicate display) left the
      transcript showing only the user's own prompts, so every past reply
      vanished and the history looked frozen on one answer. Dimmed instead:
      the live line reads from the HUD, the record stays here. */
-  .jv-line-jarvis { align-self: flex-start; opacity: .62;
-    color: color-mix(in srgb, var(--holo) 92%, #fff); }
+  .jv-line-jarvis { align-self: flex-start; opacity: .78;
+    color: #f4e3c8; }
+  .jv-line-jarvis::before { content: ''; display: inline-block; width: 7px; height: 7px;
+    margin-right: 8px; border-radius: 2px; background: color-mix(in srgb, var(--holo) 75%, transparent);
+    vertical-align: 1px; }
   /* Block caret, alive only while the typewriter is still revealing the line. */
   .jv-line-jarvis.jv-typing .jv-text::after { content: '▌'; margin-left: 1px;
     animation: jvCaret .7s step-end infinite; }
@@ -144,11 +226,11 @@
      React cannot touch it — and is positioned over the HUD line each frame. */
   #jv-hudline { position: absolute; display: none; z-index: 40;
     align-items: center; justify-content: center; text-align: center;
-    font: 600 13px/20.15px Archivo, system-ui, sans-serif; letter-spacing: 1.69px;
-    color: rgb(255, 225, 187); pointer-events: none; padding: 0 6px;
-    background: #0b0a08; }
+    font: 600 13px/20.15px var(--font-body); letter-spacing: 1.69px;
+    color: #ffe1bb; pointer-events: none; padding: 3px 12px;
+    background: rgba(7, 10, 14, .96); border-radius: 8px; }
   #jv-hudline.show { display: flex; }
-  #jv-hudline .jv-hl-label { color: rgb(255, 225, 187); opacity: .85; margin-right: 7px;
+  #jv-hudline .jv-hl-label { color: #ffd9a0; opacity: .85; margin-right: 7px;
     white-space: nowrap; }
   #jv-hudline.jv-typing .jv-hl-text::after { content: '▌'; margin-left: 1px;
     animation: jvCaret .7s step-end infinite; }
@@ -156,28 +238,31 @@
   /* Left column: replaces ARCHIVE CRATE 07 / MASS / COMPOSITION / INTEGRITY,
      which are pure set dressing, with the local model's real figures. */
   #jv-left { position: absolute; display: none; z-index: 46; flex-direction: column;
-    gap: 6px; pointer-events: none; background: #0b0a08;
-    font-family: Archivo, system-ui, sans-serif; padding-top: 2px; }
+    gap: 6px; pointer-events: none;
+    background: rgba(7, 10, 14, .96);
+    border: 1px solid var(--hairline-soft); border-radius: 12px;
+    padding: 12px 14px; font-family: var(--font-body);
+    box-shadow: 0 14px 36px rgba(0, 0, 0, .35); }
   #jv-left.show { display: flex; }
-  #jv-left .jv-lf-label { font: 600 10.5px/1.3 Archivo, system-ui; letter-spacing: .18em;
-    text-transform: uppercase; color: color-mix(in srgb, var(--holo) 55%, #fff); opacity: .72; }
-  #jv-left .jv-lf-model { font: 800 21px/1.15 Archivo, system-ui; letter-spacing: .01em;
-    color: color-mix(in srgb, var(--holo) 96%, #fff); }
+  #jv-left .jv-lf-label { font: 700 10.5px/1.3 var(--font-display); letter-spacing: .22em;
+    text-transform: uppercase; color: #d8b98a; }
+  #jv-left .jv-lf-model { font: 700 21px/1.15 var(--font-display); letter-spacing: .02em;
+    color: #ffe1bb; }
   #jv-left .jv-lf-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 1px; }
-  #jv-left .jv-lf-chip { font: 700 9.5px/1 Archivo, system-ui; letter-spacing: .14em;
-    text-transform: uppercase; padding: 4px 7px; border-radius: 3px;
+  #jv-left .jv-lf-chip { font: 700 9.5px/1 var(--font-display); letter-spacing: .14em;
+    text-transform: uppercase; padding: 4px 8px; border-radius: 4px;
     border: 1px solid color-mix(in srgb, var(--holo) 34%, transparent);
-    color: color-mix(in srgb, var(--holo) 88%, #fff); }
-  #jv-left .jv-lf-chip.ok { border-color: color-mix(in srgb, #9dff8a 45%, transparent); color: #9dff8a; }
+    color: #ffd9a0; }
+  #jv-left .jv-lf-chip.ok { border-color: rgba(125, 219, 160, .5); color: #9fe6ba; }
   #jv-left .jv-lf-row { display: flex; justify-content: space-between; align-items: baseline;
-    gap: 8px; font: 600 11.5px/1.5 Archivo, system-ui; letter-spacing: .05em; }
-  #jv-left .jv-lf-k { color: color-mix(in srgb, var(--holo) 60%, #fff); opacity: .76;
-    text-transform: uppercase; white-space: nowrap; }
-  #jv-left .jv-lf-v { color: color-mix(in srgb, var(--holo) 95%, #fff); white-space: nowrap; }
-  #jv-left .jv-lf-sec { font: 700 10.5px/1.3 Archivo, system-ui; letter-spacing: .18em;
-    text-transform: uppercase; color: color-mix(in srgb, var(--holo) 62%, #fff);
-    opacity: .8; margin-top: 6px;
-    border-top: 1px solid color-mix(in srgb, var(--holo) 18%, transparent); padding-top: 7px; }
+    gap: 8px; font: 500 11.5px/1.5 var(--font-body); letter-spacing: .04em; }
+  #jv-left .jv-lf-k { color: #d8b98a; text-transform: uppercase; white-space: nowrap; }
+  #jv-left .jv-lf-v { font-family: var(--font-data); font-size: 11px;
+    color: #ffe1bb; white-space: nowrap; }
+  #jv-left .jv-lf-sec { font: 700 10.5px/1.3 var(--font-display); letter-spacing: .2em;
+    text-transform: uppercase; color: #d8b98a;
+    margin-top: 8px;
+    border-top: 1px solid var(--hairline-soft); padding-top: 8px; }
   /* Context budget: prompt / output / headroom as a share of the real window. */
   #jv-left .jv-lf-bar { height: 5px; border-radius: 3px; overflow: hidden; display: flex;
     background: color-mix(in srgb, var(--holo) 14%, transparent); margin-top: 3px; }
@@ -189,21 +274,23 @@
      overlay approach as the transcript: the HUD re-renders that subtree from
      React state, so anything written into it is wiped within the second. */
   #jv-stats { position: absolute; display: none; z-index: 46; flex-direction: column;
-    gap: 5px; pointer-events: none; padding: 2px 0 0 0;
-    background: #0b0a08; font-family: Archivo, system-ui, sans-serif; }
+    gap: 5px; pointer-events: none;
+    background: rgba(7, 10, 14, .96);
+    border: 1px solid var(--hairline-soft); border-radius: 12px;
+    padding: 12px 14px; font-family: var(--font-body);
+    box-shadow: 0 14px 36px rgba(0, 0, 0, .35); }
   #jv-stats.show { display: flex; }
-  #jv-stats .jv-st-title { font: 700 11px/1.4 Archivo, system-ui; letter-spacing: .2em;
-    text-transform: uppercase; color: color-mix(in srgb, var(--holo) 78%, #fff);
-    opacity: .9; margin-bottom: 3px; }
+  #jv-stats .jv-st-title { font: 700 11px/1.4 var(--font-display); letter-spacing: .24em;
+    text-transform: uppercase; color: #ffd9a0; margin-bottom: 3px; }
   #jv-stats .jv-st-row { display: flex; align-items: baseline; justify-content: space-between;
-    gap: 8px; font: 600 11.5px/1.5 Archivo, system-ui; letter-spacing: .06em; }
-  #jv-stats .jv-st-k { color: color-mix(in srgb, var(--holo) 62%, #fff); opacity: .78;
-    text-transform: uppercase; white-space: nowrap; }
-  #jv-stats .jv-st-v { color: color-mix(in srgb, var(--holo) 95%, #fff);
+    gap: 8px; font: 500 11.5px/1.5 var(--font-body); letter-spacing: .04em; }
+  #jv-stats .jv-st-k { color: #d8b98a; text-transform: uppercase; white-space: nowrap; }
+  #jv-stats .jv-st-v { font-family: var(--font-data); font-size: 11px;
+    color: #ffe1bb;
     text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  #jv-stats .jv-st-v.ok   { color: #9dff8a; }
-  #jv-stats .jv-st-v.warn { color: #ffb454; }
-  #jv-stats .jv-st-v.bad  { color: #ec6a4c; }
+  #jv-stats .jv-st-v.ok   { color: #9fe6ba; }
+  #jv-stats .jv-st-v.warn { color: #ffc14d; }
+  #jv-stats .jv-st-v.bad  { color: #f08a72; }
   /* Mic/TTS amplitude — the one genuinely live signal the client already has. */
   #jv-stats .jv-st-meter { height: 4px; border-radius: 3px; overflow: hidden; margin-top: 2px;
     background: color-mix(in srgb, var(--holo) 16%, transparent); }
@@ -215,13 +302,17 @@
      and is positioned over the iframe, so the HUD's own React re-renders cannot
      disturb it. The typed input stays where it is at the bottom. */
   #jv-side { position: absolute; display: none; z-index: 45; flex-direction: column;
-    pointer-events: none; padding: 2px 2px 0 2px; }
+    pointer-events: none;
+    background: rgba(7, 10, 14, .82);
+    border: 1px solid var(--hairline-soft); border-radius: 12px;
+    padding: 12px 14px;
+    box-shadow: 0 14px 36px rgba(0, 0, 0, .35); }
   #jv-side.show { display: flex; }
-  #jv-side-head { flex: 0 0 auto; font: 700 11px/1.4 Archivo, system-ui;
-    letter-spacing: .2em; text-transform: uppercase;
-    color: color-mix(in srgb, var(--holo) 78%, #fff); opacity: .9;
-    padding-bottom: 6px; margin-bottom: 8px;
-    border-bottom: 1px solid color-mix(in srgb, var(--holo) 22%, transparent); }
+  #jv-side-head { flex: 0 0 auto; font: 700 11px/1.4 var(--font-display);
+    letter-spacing: .24em; text-transform: uppercase;
+    color: #ffd9a0;
+    padding-bottom: 7px; margin-bottom: 9px;
+    border-bottom: 1px solid var(--hairline); }
   #jv-side-log { flex: 1 1 auto; overflow-y: auto; pointer-events: auto;
     display: flex; flex-direction: column; gap: 7px; padding-right: 4px;
     scrollbar-width: thin;
@@ -232,23 +323,25 @@
   /* The old bottom transcript is superseded by the side panel; the input stays. */
   #jv-log { display: none; }
 
-  #jv-input-wrap { pointer-events: auto; display: flex; align-items: center; gap: 9px;
-    padding: 9px 15px; border-radius: 999px;
-    background: color-mix(in srgb, #0b0805 76%, transparent);
-    border: 1px solid color-mix(in srgb, var(--holo) 26%, transparent);
-    backdrop-filter: blur(6px); transition: border-color .2s, box-shadow .2s; }
-  #jv-input-wrap::before { content: '>'; flex: 0 0 auto; opacity: .6;
-    font: 700 13px/1 Archivo, ui-monospace, monospace; color: var(--holo); }
-  #jv-input-wrap:focus-within { border-color: color-mix(in srgb, var(--holo) 55%, transparent);
-    box-shadow: 0 0 22px color-mix(in srgb, var(--holo) 18%, transparent); }
+  #jv-input-wrap { pointer-events: auto; display: flex; align-items: center; gap: 10px;
+    padding: 11px 17px; border-radius: 999px;
+    background: color-mix(in srgb, #070a0e 80%, transparent);
+    border: 1px solid var(--hairline);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, .45);
+    backdrop-filter: blur(8px); transition: border-color .2s, box-shadow .2s; }
+  #jv-input-wrap::before { content: '>'; flex: 0 0 auto; opacity: .7;
+    font: 700 13px/1 var(--font-data); color: var(--holo); }
+  #jv-input-wrap:focus-within { border-color: color-mix(in srgb, var(--holo) 60%, transparent);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--holo) 35%, transparent),
+                0 12px 34px rgba(0, 0, 0, .5); }
   #jv-input-wrap.jv-err { border-color: #ec3013; box-shadow: 0 0 20px color-mix(in srgb, #ec3013 40%, transparent); }
 
   #jv-input { flex: 1 1 auto; min-width: 0; border: 0; outline: 0; background: transparent;
-    font-family: Archivo, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    font-size: 13px; font-weight: 600; letter-spacing: .08em;
-    color: color-mix(in srgb, var(--holo) 92%, #fff); caret-color: var(--holo); }
-  #jv-input::placeholder { color: color-mix(in srgb, var(--holo) 45%, transparent);
-    letter-spacing: .16em; font-weight: 700; }
+    font-family: var(--font-body);
+    font-size: 13.5px; font-weight: 500; letter-spacing: .03em;
+    color: #ffe7c4; caret-color: var(--holo); }
+  #jv-input::placeholder { color: #8a7a5e;
+    letter-spacing: .14em; font-weight: 600; }
 
   /* Layer 1 (Intake) "did you mean?" clarification chips */
   #jv-clarify-root { position: fixed; inset: 0; pointer-events: none; z-index: 60; }
@@ -256,171 +349,294 @@
     position: fixed; left: 50%; bottom: 12%; transform: translateX(-50%);
     pointer-events: auto; max-width: min(560px, 92vw);
     display: flex; flex-direction: column; gap: 10px; padding: 16px 18px;
-    background: color-mix(in srgb, #05070d 88%, var(--holo));
+    background: color-mix(in srgb, #070a0e 90%, var(--holo));
     border: 1px solid color-mix(in srgb, var(--holo) 55%, transparent);
     border-radius: 14px; backdrop-filter: blur(8px);
-    box-shadow: 0 0 28px color-mix(in srgb, var(--holo) 30%, transparent);
-    font-family: Archivo, system-ui, sans-serif; animation: jvClarifyIn .18s ease-out;
+    box-shadow: 0 18px 44px rgba(0, 0, 0, .55), 0 0 30px color-mix(in srgb, var(--holo) 22%, transparent);
+    font-family: var(--font-body); animation: jvClarifyIn .18s ease-out;
   }
   @keyframes jvClarifyIn { from { opacity: 0; transform: translate(-50%, 8px); } }
-  .jv-clarify-head { color: color-mix(in srgb, var(--holo) 90%, #fff);
-    font: 700 12px/1.3 Archivo, system-ui; letter-spacing: .14em; text-transform: uppercase; }
+  .jv-clarify-head { color: #ffd9a0;
+    font: 700 12px/1.3 var(--font-display); letter-spacing: .18em; text-transform: uppercase; }
   .jv-clarify-chips { display: flex; flex-wrap: wrap; gap: 8px; }
   .jv-chip {
-    pointer-events: auto; cursor: pointer; padding: 8px 14px; border-radius: 999px;
+    pointer-events: auto; cursor: pointer; padding: 9px 15px; border-radius: 999px;
     border: 1px solid color-mix(in srgb, var(--holo) 50%, transparent);
     background: color-mix(in srgb, var(--holo) 12%, transparent);
-    color: color-mix(in srgb, var(--holo) 95%, #fff);
-    font: 700 13px/1 Archivo, system-ui; letter-spacing: .04em;
+    color: #ffe7c4;
+    font: 600 13px/1 var(--font-body); letter-spacing: .02em;
     transition: background .12s, transform .12s; }
-  .jv-chip:hover { background: color-mix(in srgb, var(--holo) 28%, transparent);
+  .jv-chip:hover { background: color-mix(in srgb, var(--holo) 26%, transparent);
     transform: translateY(-1px); }
   .jv-chip:active { transform: translateY(0); }
+  .jv-chip:focus-visible { outline: 2px solid var(--holo); outline-offset: 2px; }
 
   /* ---- Apps modal: same holo/dark language as the rest of the HUD. ---- */
   #jv-apps-modal { position: fixed; inset: 0; display: none; z-index: 80;
-    background: rgba(4, 8, 14, .72); backdrop-filter: blur(6px); }
+    background: rgba(4, 6, 10, .74); backdrop-filter: blur(6px); }
   #jv-apps-modal.show { display: flex; align-items: center; justify-content: center; }
-  #jv-apps-card { width: min(680px, 92vw); max-height: 82vh; display: flex;
-    flex-direction: column; border-radius: 10px;
-    background: linear-gradient(160deg, rgba(10, 18, 30, .97), rgba(6, 12, 22, .97));
+  #jv-apps-card { width: min(960px, 96vw); height: min(780px, 94vh); display: flex;
+    flex-direction: column; border-radius: 14px;
+    background: linear-gradient(165deg, #0c1118, #080c12);
     border: 1px solid color-mix(in srgb, var(--holo) 32%, transparent);
-    box-shadow: 0 24px 70px rgba(0, 0, 0, .55);
-    font-family: Archivo, system-ui, sans-serif; }
+    box-shadow: 0 32px 80px rgba(0, 0, 0, .6);
+    font-family: var(--font-body); }
   #jv-apps-head { display: flex; align-items: center; gap: 10px;
-    padding: 14px 16px 10px; }
-  #jv-apps-title { font-weight: 800; font-size: 13px; letter-spacing: .2em;
-    color: color-mix(in srgb, var(--holo) 90%, #fff); flex: 1; }
-  #jv-apps-count { font-size: 11px; letter-spacing: .1em; opacity: .7;
-    color: color-mix(in srgb, var(--holo) 70%, #fff); }
-  #jv-apps-close { background: none; border: none; cursor: pointer;
-    font-size: 20px; line-height: 1; padding: 2px 8px;
-    color: color-mix(in srgb, var(--holo) 75%, #fff); }
-  #jv-apps-search { margin: 0 16px 10px; padding: 8px 12px; border-radius: 6px;
-    border: 1px solid color-mix(in srgb, var(--holo) 26%, transparent);
-    background: rgba(255, 255, 255, .04); color: #eaf2ff;
-    font: 500 13px/1.3 Archivo, system-ui; outline: none; }
-  #jv-apps-search:focus { border-color: color-mix(in srgb, var(--holo) 55%, transparent); }
-  #jv-apps-cats { display: flex; gap: 6px; flex-wrap: wrap;
-    padding: 0 16px 10px; }
-  .jv-app-cat { font: 700 9.5px/1 Archivo, system-ui; letter-spacing: .12em;
-    text-transform: uppercase; padding: 5px 9px; border-radius: 999px;
-    cursor: pointer; user-select: none;
-    border: 1px solid color-mix(in srgb, var(--holo) 30%, transparent);
-    color: color-mix(in srgb, var(--holo) 78%, #fff); background: transparent; }
-  .jv-app-cat.on { background: color-mix(in srgb, var(--holo) 24%, transparent);
-    border-color: color-mix(in srgb, var(--holo) 60%, transparent); }
-  #jv-apps-list { overflow-y: auto; padding: 2px 10px 10px; flex: 1; }
-  .jv-app-row { display: flex; align-items: center; gap: 10px;
-    padding: 7px 8px; border-radius: 6px; cursor: pointer; }
-  .jv-app-row:hover { background: color-mix(in srgb, var(--holo) 12%, transparent); }
-  .jv-app-row.broken { cursor: not-allowed; opacity: .45; }
-  .jv-app-name { flex: 1; font-size: 13px; color: #e8f0ff; white-space: nowrap;
-    overflow: hidden; text-overflow: ellipsis; }
-  .jv-app-path { font-size: 10px; color: color-mix(in srgb, var(--holo) 55%, #fff);
-    opacity: .65; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    max-width: 42%; direction: rtl; text-align: left; }
-  .jv-app-badge { font: 700 9px/1 Archivo; letter-spacing: .1em;
-    text-transform: uppercase; padding: 3px 7px; border-radius: 999px;
-    border: 1px solid color-mix(in srgb, var(--holo) 35%, transparent);
-    color: color-mix(in srgb, var(--holo) 85%, #fff); }
-  .jv-app-badge.dead { border-color: rgba(255, 120, 120, .5); color: #ff9d9d; }
-  #jv-apps-foot { padding: 8px 16px 12px; font-size: 10px; letter-spacing: .08em;
-    opacity: .55; color: color-mix(in srgb, var(--holo) 60%, #fff); }
+    padding: 10px 14px 6px; }
+  #jv-apps-title { font: 700 13px/1 var(--font-display); letter-spacing: .22em;
+    color: #ffd9a0; flex: 1; }
+  #jv-apps-count { font-family: var(--font-data); font-size: 11px; letter-spacing: .08em;
+    color: #d8b98a; }
+  #jv-apps-close { background: none; border: 1px solid transparent; border-radius: 8px;
+    cursor: pointer; font-size: 18px; line-height: 1; padding: 3px 9px;
+    color: #ffd9a0; transition: background .12s, border-color .12s; }
+  #jv-apps-close:hover { background: color-mix(in srgb, var(--holo) 16%, transparent);
+    border-color: var(--hairline); }
+  #jv-apps-frame { width: 100%; height: calc(100% - 54px); border: none;
+    border-radius: 0 0 14px 14px; background: #0e0e12; }
+
+
+  /* ---- v3 layout: three-column shell over the dimmed artifact ------------- */
+  #jv-backdim { position: fixed; inset: 0; z-index: 20; pointer-events: none;
+    background: rgba(4, 6, 10, .52); backdrop-filter: saturate(.55); }
+  #jv-topfade, #jv-footfade { position: fixed; left: 0; right: 0; z-index: 22; pointer-events: none; }
+  #jv-topfade { top: 0; height: 96px; background: linear-gradient(#05080d 20%, rgba(5, 8, 13, 0)); }
+  #jv-footfade { bottom: 0; height: 110px; background: linear-gradient(rgba(5, 8, 13, 0), #05080d 32%); }
+
+  #jv-topbar { position: relative; z-index: 36; display: flex; align-items: center; gap: 12px;
+    padding: 10px 18px; border-radius: 14px;
+    background: rgba(7, 10, 14, .88); border: 1px solid var(--hairline);
+    box-shadow: 0 14px 36px rgba(0, 0, 0, .4); backdrop-filter: blur(10px); }
+  #jv-brand { font: 700 21px/1 var(--font-display); letter-spacing: .3em; color: var(--holo); }
+  .jv-pill { font: 700 10.5px/1 var(--font-display); letter-spacing: .16em; text-transform: uppercase;
+    padding: 6px 12px; border-radius: 999px; border: 1px solid var(--hairline); color: #ffd9a0;
+    display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .jv-pill.ok { border-color: rgba(125, 219, 160, .45); color: #9fe6ba; }
+  .jv-pill.grow { margin-left: auto; }
+
+  #jv-shell { position: relative; z-index: 35; display: grid; gap: 16px;
+    grid-template-columns: 288px minmax(0, 1fr) 324px; margin-top: 16px; }
+  @media (max-width: 1180px) { #jv-shell { grid-template-columns: 240px minmax(0, 1fr) 280px; } }
+  #jv-col-left, #jv-col-right { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  #jv-center { display: flex; flex-direction: column; min-width: 0; }
+  #jv-center .jv-spacer { flex: 1 1 auto; min-height: 120px; }
+
+  /* Panels live inside columns now: static flow, always shown. */
+  #jv-col-left #jv-left, #jv-col-left #jv-stats, #jv-col-right #jv-stats { position: static; }
+  .jv-sec { background: rgba(7, 10, 14, .92); border: 1px solid var(--hairline);
+    border-radius: 12px; padding: 13px 14px; box-shadow: 0 14px 36px rgba(0, 0, 0, .38);
+    backdrop-filter: blur(8px); }
+
+  /* Lucide icon sizing */
+  svg.lucide { width: 14px; height: 14px; stroke-width: 2; vertical-align: -2px; }
+  .jv-qa svg.lucide { width: 15px; height: 15px; margin-right: 7px; }
+  .job-icon svg.lucide { width: 12px; height: 12px; }
+  .jv-gate-btn svg.lucide { width: 13px; height: 13px; margin-right: 6px; }
+  .jv-npbtn svg.lucide { width: 13px; height: 13px; margin-right: 6px; }
+
+  /* Voice feedback mode switch */
+  .vf-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; text-align: center; }
+  .vf-opt { cursor: pointer; padding: 7px 0; border-radius: 8px; border: 1px solid var(--hairline);
+    font: 700 10.5px/1 var(--font-display); letter-spacing: .12em; text-transform: uppercase;
+    color: #d8b98a; transition: background .12s, color .12s, border-color .12s; }
+  .vf-opt:hover { color: #ffe7c4; }
+  .vf-opt.active { border-color: var(--holo); color: var(--holo);
+    background: color-mix(in srgb, var(--holo) 14%, transparent); }
+  .vf-cue { display: flex; align-items: center; gap: 7px; font-size: 11px;
+    color: #e8d9bd; margin-top: 6px; }
+  .vf-cue i { width: 6px; height: 6px; border-radius: 50%; background: var(--holo); flex: 0 0 auto; }
+  .vf-cue .v { margin-left: auto; }
+
+  /* Now playing */
+  .jv-npbtn { cursor: pointer; flex: 1 1 auto; text-align: center; padding: 7px 0;
+    border-radius: 8px; border: 1px solid var(--hairline); background: transparent;
+    font: 700 10px/1 var(--font-display); letter-spacing: .12em; text-transform: uppercase;
+    color: #ffd9a0; transition: background .12s, border-color .12s; }
+  .jv-npbtn:hover { background: color-mix(in srgb, var(--holo) 16%, transparent); border-color: var(--holo); }
+
+  /* Quick actions */
+  .jv-qa { cursor: pointer; padding: 10px 0; border-radius: 10px; border: 1px solid var(--hairline);
+    text-align: center; font: 600 11.5px/1 var(--font-body); letter-spacing: .04em;
+    color: #f4e3c8; transition: border-color .12s, color .12s, background .12s;
+    display: flex; align-items: center; justify-content: center; }
+  .jv-qa:hover { border-color: var(--holo); color: var(--holo);
+    background: color-mix(in srgb, var(--holo) 8%, transparent); }
+  .jv-qa-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+
+  /* Confirm gate card */
+  .jv-gate { border: 1px solid color-mix(in srgb, #ffc14d 55%, transparent);
+    background: color-mix(in srgb, #ffc14d 6%, transparent);
+    border-radius: 12px; padding: 12px 14px; margin-bottom: 4px; }
+  .jv-gate-head { display: flex; align-items: flex-start; gap: 8px; font-size: 12.5px; line-height: 1.45; }
+  .jv-gate-head .t { font: 700 12.5px/1.45 var(--font-display); letter-spacing: .1em;
+    color: #ffc14d; white-space: nowrap; }
+  .jv-gate-task { color: #d8b98a; font-size: 11.5px; margin-top: 2px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .jv-gate-btns { display: flex; gap: 8px; margin-top: 9px; }
+  .jv-gate-btn { cursor: pointer; border-radius: 8px; padding: 7px 16px;
+    font: 700 10.5px/1 var(--font-display); letter-spacing: .16em; text-transform: uppercase;
+    border: 1px solid var(--hairline); background: transparent; color: #d8b98a;
+    transition: background .12s, color .12s, border-color .12s; }
+  .jv-gate-btn.confirm { border-color: rgba(125, 219, 160, .6);
+    background: rgba(125, 219, 160, .14); color: #9fe6ba; }
+  .jv-gate-btn.confirm:hover { background: rgba(125, 219, 160, .26); }
+  .jv-gate-btn.cancel:hover { color: #ffe7c4; border-color: var(--holo); }
+  .jv-gate-btn:focus-visible { outline: 2px solid var(--holo); outline-offset: 2px; }
+
+  /* Cue chips */
+  #jv-cues { display: flex; flex-wrap: wrap; gap: 6px; }
+  .jv-cuechip { font: 500 10.5px/1 var(--font-body); letter-spacing: .02em;
+    padding: 5px 10px; border-radius: 999px; border: 1px solid var(--hairline);
+    color: #ffe7c4; display: inline-flex; align-items: center; gap: 5px; }
+  .jv-cuechip svg.lucide { width: 11px; height: 11px; color: var(--holo); }
+
+  /* Job tray lives in the right column now. */
+  #job-tray { position: static; width: auto; pointer-events: auto; }
 </style>
 </head>
 <body>
+  <div id="jv-atmos"></div>
   <div id="jv-clarify-root"></div>
+  <div id="jv-backdim"></div>
   <div id="stage">
     <iframe id="hud" src="/hud.html" allow="microphone"></iframe>
   </div>
   <div id="jv-glow"></div>
   <div id="jv-rings"></div><!-- filled by spawnPeak() while speaking -->
 
-  <!-- Sits over the HUD's scripted J.A.R.V.I.S. line and shows the real reply. -->
-  <!-- Blank by design: masks the HUD's scripted dialogue line. The reply is
-       shown in the transcript panel, never here. -->
+  <div id="jv-topfade"></div>
+  <div id="jv-footfade"></div>
+
+  <!-- Sits over the HUD's scripted J.A.R.V.I.S. line and masks it; the real
+       reply is drawn by hudSay() here. Position driven by positionHudLine(). -->
   <div id="jv-hudline">
     <span class="jv-hl-label"></span><span class="jv-hl-text"></span>
   </div>
 
-  <!-- Left column: the local model's real figures, over the set dressing. -->
-  <div id="jv-left">
-    <div class="jv-lf-label">Language Model</div>
-    <div class="jv-lf-model" id="lf-model">—</div>
-    <div class="jv-lf-chips">
-      <span class="jv-lf-chip ok" id="lf-mode">LOCAL</span>
-      <span class="jv-lf-chip" id="lf-quant">—</span>
-      <span class="jv-lf-chip" id="lf-size">—</span>
-    </div>
-    <div class="jv-lf-row"><span class="jv-lf-k">Parameters</span><span class="jv-lf-v" id="lf-params">—</span></div>
-    <div class="jv-lf-row"><span class="jv-lf-k">Context window</span><span class="jv-lf-v" id="lf-ctxwin">—</span></div>
-    <div class="jv-lf-row"><span class="jv-lf-k">Turns</span><span class="jv-lf-v" id="lf-turns">—</span></div>
-    <div class="jv-lf-row"><span class="jv-lf-k">History</span><span class="jv-lf-v" id="lf-hist">—</span></div>
+  <div id="jv-shell">
+    <header id="jv-topbar" style="grid-column: 1 / -1">
+      <span id="jv-brand">J.A.R.V.I.S.</span>
+      <span id="jv-dot"></span>
+      <span id="jv-status">BOOTING…</span>
+      <span id="jv-level"><i></i></span>
+      <span class="jv-pill grow" id="jv-pill-brain"><i data-lucide="cpu"></i><span>—</span></span>
+      <span class="jv-pill" id="jv-pill-voice"><i data-lucide="audio-lines"></i><span>—</span></span>
+      <span class="jv-pill" id="jv-pill-fb"><i data-lucide="volume-2"></i><span>—</span></span>
+      <span id="jv-actions" style="display:flex; gap:8px">
+        <button id="jv-apps" class="jv-btn" title="Apps JARVIS can open">Apps</button>
+        <button id="jv-unlock" class="jv-btn">Activate audio</button>
+        <button id="jv-retry" class="jv-btn">Enable mic</button>
+      </span>
+    </header>
 
-    <div class="jv-lf-sec">Context Budget</div>
-    <div class="jv-lf-bar"><i class="p" id="lf-bar-p"></i><i class="o" id="lf-bar-o"></i></div>
-    <div class="jv-lf-row"><span class="jv-lf-k">Prompt</span><span class="jv-lf-v" id="lf-prompt">—</span></div>
-    <div class="jv-lf-row"><span class="jv-lf-k">Output</span><span class="jv-lf-v" id="lf-output">—</span></div>
-    <div class="jv-lf-row"><span class="jv-lf-k">Headroom</span><span class="jv-lf-v" id="lf-head">—</span></div>
+    <!-- LEFT: system column -->
+    <aside id="jv-col-left">
+      <div id="jv-stats" class="jv-sec">
+        <div class="jv-st-title">System Analysis</div>
+        <div class="jv-st-row"><span class="jv-st-k">Brain</span><span class="jv-st-v" id="st-brain">—</span></div>
+        <div class="jv-st-row"><span class="jv-st-k">Route</span><span class="jv-st-v" id="st-route">—</span></div>
+        <div class="jv-st-row"><span class="jv-st-k">Voice in</span><span class="jv-st-v" id="st-mic">—</span></div>
+        <div class="jv-st-row"><span class="jv-st-k">Link</span><span class="jv-st-v" id="st-link">—</span></div>
+        <div class="jv-st-row"><span class="jv-st-k">State</span><span class="jv-st-v" id="st-state">—</span></div>
+        <div class="jv-st-row"><span class="jv-st-k">Wake</span><span class="jv-st-v" id="st-wake">—</span></div>
+        <div class="jv-st-row"><span class="jv-st-k">Speed</span><span class="jv-st-v" id="st-speed">—</span></div>
+        <div class="jv-st-meter"><i id="st-amp"></i></div>
+      </div>
+
+      <div id="jv-left" class="jv-sec">
+        <div class="jv-lf-label">Language Model</div>
+        <div class="jv-lf-model" id="lf-model">—</div>
+        <div class="jv-lf-chips">
+          <span class="jv-lf-chip ok" id="lf-mode">LOCAL</span>
+          <span class="jv-lf-chip" id="lf-quant">—</span>
+          <span class="jv-lf-chip" id="lf-size">—</span>
+        </div>
+        <div class="jv-lf-row"><span class="jv-lf-k">Parameters</span><span class="jv-lf-v" id="lf-params">—</span></div>
+        <div class="jv-lf-row"><span class="jv-lf-k">Context window</span><span class="jv-lf-v" id="lf-ctxwin">—</span></div>
+        <div class="jv-lf-row"><span class="jv-lf-k">Turns</span><span class="jv-lf-v" id="lf-turns">—</span></div>
+        <div class="jv-lf-row"><span class="jv-lf-k">History</span><span class="jv-lf-v" id="lf-hist">—</span></div>
+        <div class="jv-lf-sec">Context Budget</div>
+        <div class="jv-lf-bar"><i class="p" id="lf-bar-p"></i><i class="o" id="lf-bar-o"></i></div>
+        <div class="jv-lf-row"><span class="jv-lf-k">Prompt</span><span class="jv-lf-v" id="lf-prompt">—</span></div>
+        <div class="jv-lf-row"><span class="jv-lf-k">Output</span><span class="jv-lf-v" id="lf-output">—</span></div>
+        <div class="jv-lf-row"><span class="jv-lf-k">Headroom</span><span class="jv-lf-v" id="lf-head">—</span></div>
+      </div>
+
+      <div class="jv-sec" id="jv-vf">
+        <div class="jv-st-title">Voice Feedback</div>
+        <div class="vf-row">
+          <div class="vf-opt" data-mode="off">Off</div>
+          <div class="vf-opt active" data-mode="essential">Essential</div>
+          <div class="vf-opt" data-mode="full">Full</div>
+        </div>
+        <div class="vf-cue"><i></i>“Thinking, sir.”<span class="v">4s</span></div>
+        <div class="vf-cue"><i></i>“Still working on it.”<span class="v">12s</span></div>
+        <div class="vf-cue"><i></i>“Still on it, sir.”<span class="v">45s</span></div>
+      </div>
+
+      <div class="jv-sec" id="jv-np">
+        <div class="jv-st-title">Now Playing</div>
+        <div class="jv-st-row"><span class="jv-st-k">Source</span><span class="jv-st-v" id="np-source">—</span></div>
+        <div class="jv-st-row"><span class="jv-st-k">Track</span><span class="jv-st-v" id="np-title">—</span></div>
+        <div class="jv-gate-btns" style="margin-top:10px">
+          <button class="jv-npbtn" id="jv-music-stop"><i data-lucide="square"></i>STOP YT</button>
+          <button class="jv-npbtn" id="jv-music-spotify"><i data-lucide="play"></i>SPOTIFY</button>
+        </div>
+      </div>
+    </aside>
+
+    <!-- CENTER: open for the live orb; conversation anchored to the foot -->
+    <main id="jv-center">
+      <div class="jv-spacer"></div>
+      <div id="jv-feed" class="jv-sec">
+        <div id="jv-gate"></div>
+        <div id="jv-side-head">Transcript</div>
+        <div id="jv-side-log"></div>
+        <div id="jv-cues" style="margin-top:8px"></div>
+        <div id="jv-input-wrap" style="margin-top:10px">
+          <input id="jv-input" type="text" autocomplete="off" spellcheck="false"
+                 placeholder="SPEAK TO J.A.R.V.I.S. - TYPE, THEN PRESS ENTER" />
+        </div>
+      </div>
+    </main>
+
+    <!-- RIGHT: tasks + actions -->
+    <aside id="jv-col-right">
+      <div class="jv-sec">
+        <div class="jv-st-title" style="display:flex; align-items:center; justify-content:space-between">
+          Active Tasks <span id="jv-taskcount" class="jv-pill">0</span>
+        </div>
+        <div id="job-tray"></div>
+      </div>
+
+      <div class="jv-sec">
+        <div class="jv-st-title">Quick Actions</div>
+        <div class="jv-qa-grid">
+          <div class="jv-qa" id="jv-qa-apps"><i data-lucide="layout-grid"></i>APPS</div>
+          <div class="jv-qa" id="jv-qa-sites"><i data-lucide="globe"></i>SITES</div>
+          <div class="jv-qa" id="jv-qa-vault"><i data-lucide="brain"></i>VAULT</div>
+          <div class="jv-qa" id="jv-qa-report"><i data-lucide="bar-chart-3"></i>REPORT</div>
+        </div>
+      </div>
+
+      <div class="jv-sec">
+        <div class="jv-st-title">Last Turn</div>
+        <div class="jv-st-row"><span class="jv-st-k">Answered by</span><span class="jv-st-v" id="st-backend">—</span></div>
+        <div class="jv-st-row"><span class="jv-st-k">Turn</span><span class="jv-st-v" id="st-latency">—</span></div>
+        <div class="jv-st-row"><span class="jv-st-k">Context</span><span class="jv-st-v" id="st-ctx">—</span></div>
+        <div class="jv-st-row"><span class="jv-st-k">Last tool</span><span class="jv-st-v" id="st-tool">—</span></div>
+      </div>
+    </aside>
   </div>
 
-  <!-- Live telemetry, over the HUD's static THREAT ASSESSMENT block. -->
-  <div id="jv-stats">
-    <div class="jv-st-title">System Analysis</div>
-    <div class="jv-st-row"><span class="jv-st-k">Brain</span><span class="jv-st-v" id="st-brain">—</span></div>
-    <div class="jv-st-row"><span class="jv-st-k">Answered by</span><span class="jv-st-v" id="st-backend">—</span></div>
-    <div class="jv-st-row"><span class="jv-st-k">Route</span><span class="jv-st-v" id="st-route">—</span></div>
-    <div class="jv-st-row"><span class="jv-st-k">Voice in</span><span class="jv-st-v" id="st-mic">—</span></div>
-    <div class="jv-st-row"><span class="jv-st-k">Link</span><span class="jv-st-v" id="st-link">—</span></div>
-    <div class="jv-st-row"><span class="jv-st-k">State</span><span class="jv-st-v" id="st-state">—</span></div>
-    <div class="jv-st-row"><span class="jv-st-k">Wake</span><span class="jv-st-v" id="st-wake">—</span></div>
-    <div class="jv-st-row"><span class="jv-st-k">Speed</span><span class="jv-st-v" id="st-speed">—</span></div>
-    <div class="jv-st-row"><span class="jv-st-k">Turn</span><span class="jv-st-v" id="st-latency">—</span></div>
-    <div class="jv-st-row"><span class="jv-st-k">Context</span><span class="jv-st-v" id="st-ctx">—</span></div>
-    <div class="jv-st-row"><span class="jv-st-k">Last tool</span><span class="jv-st-v" id="st-tool">—</span></div>
-    <div class="jv-st-meter"><i id="st-amp"></i></div>
-  </div>
-
-  <!-- Conversation transcript, parked in the HUD's unused right column. -->
-  <div id="jv-side">
-    <div id="jv-side-head">Transcript</div>
-    <div id="jv-side-log"></div>
-  </div>
-
-  <!-- Typed path. Lives in the WRAPPER document, never inside the HUD iframe, so
-       it always owns focus and talks to the real backend over the same socket. -->
-  <div id="jv-chat">
-    <div id="jv-log"></div>
-    <div id="jv-input-wrap">
-      <input id="jv-input" type="text" autocomplete="off" spellcheck="false"
-             placeholder="SPEAK TO J.A.R.V.I.S. - TYPE, THEN PRESS ENTER" />
-    </div>
-  </div>
-
-  <div id="jv-head">
-    <span id="jv-dot"></span>
-    <span id="jv-status">BOOTING…</span>
-    <span id="jv-level"><i></i></span>
-    <span id="jv-actions">
-      <button id="jv-apps" class="jv-btn" title="Apps JARVIS can open">Apps</button>
-      <button id="jv-unlock" class="jv-btn">Activate audio</button>
-      <button id="jv-retry" class="jv-btn">Enable mic</button>
-    </span>
-  </div>
-
-  <!-- Apps modal: everything in the registry, searchable, click to open. -->
   <div id="jv-apps-modal">
     <div id="jv-apps-card">
       <div id="jv-apps-head">
-        <span id="jv-apps-title">SOFTWARE REGISTRY</span>
+        <span id="jv-apps-title">JARVIS APPS</span>
         <span id="jv-apps-count"></span>
         <button id="jv-apps-close" class="jv-btn">×</button>
       </div>
-      <input id="jv-apps-search" type="text" placeholder="Search apps…" autocomplete="off">
-      <div id="jv-apps-cats"></div>
-      <div id="jv-apps-list"></div>
-      <div id="jv-apps-foot">Click an app to open it · broken entries marked ✖</div>
+      <iframe id="jv-apps-frame" src="/apps.html" allowtransparency="false"></iframe>
     </div>
   </div>
 
@@ -1051,6 +1267,10 @@
       var now = Date.now();
       if (now - lastWakeAt < 2000) return;   // de-dupe against the browser listener
       lastWakeAt = now;
+      // Phase C barge-in: the user just spoke — JARVIS stops talking immediately
+      // and any ducked music is restored.
+      if (current) { try { current.pause(); } catch (e) {} current = null; stopSpeakLoop(); }
+      send({ type: 'speech', state: 'end' });
       // Open the voice session when resting (off after a reply, or idle from
       // enable-mic). Must match mode==='off' because goIdle() parks there.
       if (mode === 'off' || mode === 'idle') {
@@ -1154,13 +1374,72 @@
         // Never let the server yank us out of playback; goIdle() runs when TTS ends.
         if (mode !== 'speaking') goIdle();
       } else if (m.state === 'transcribing') {
+        earcon(880, 0.09);                       // Phase C: short high blip
         if (mode === 'busy') setState('transcribing', 'TRANSCRIBING…');
       } else if (m.state === 'thinking') {
+        earcon(560, 0.10); earcon(560, 0.06, 0.12);  // Phase C: soft double tone
         if (mode === 'busy') setState('thinking', 'THINKING…');
       }
     } else if (m.type === 'error') {
       goIdle();
       notice('ERROR — ' + m.text);
+    } else if (m.type === 'job') {
+      // Background job card: created/updated by jobs.py via the WS bridge.
+      renderJobCard(m);
+    }
+  }
+
+  // ------------------------------------------------- background job cards
+  // One card per background task (specialist/Hermes). States: queued/running
+  // (spinner + last note), done (auto-dismiss), error/timeout (sticky red).
+  var jobCards = {};                      // id -> card element
+
+  function renderJobCard(ev) {
+    var card = jobCards[ev.id];
+    if (!card) {
+      card = document.createElement('div');
+      card.className = 'job-card';
+      card.innerHTML =
+        '<div class="job-head"><span class="job-icon"></span>' +
+        '<span class="job-title"></span><span class="job-state"></span></div>' +
+        '<div class="job-note"></div>';
+      var host = document.getElementById('job-tray');
+      if (!host) {                        // lazy-create the tray once
+        host = document.createElement('div');
+        host.id = 'job-tray';
+        document.body.appendChild(host);
+      }
+      host.appendChild(card);
+      jobCards[ev.id] = card;
+    }
+    var icon   = card.querySelector('.job-icon');
+    var state  = card.querySelector('.job-state');
+    var note   = card.querySelector('.job-note');
+    var title  = card.querySelector('.job-title');
+    title.textContent = ev.task || '(untitled task)';
+    note.textContent  = ev.note || ev.summary || ev.error || '';
+    card.classList.remove('is-running', 'is-done', 'is-error', 'is-timeout');
+    if (ev.state === 'done') {
+      card.classList.add('is-done');
+      icon.textContent  = '✓';
+      state.textContent = 'DONE' + (ev.elapsed ? ' · ' + Math.round(ev.elapsed) + 's' : '');
+      setTimeout(function () {          // auto-dismiss completed cards
+        card.remove(); delete jobCards[ev.id];
+      }, 8000);
+    } else if (ev.state === 'error') {
+      card.classList.add('is-error');
+      icon.textContent  = '✕';
+      state.textContent = 'ERROR';
+      note.textContent  = ev.error || ev.note || 'failed';
+    } else if (ev.state === 'timeout') {
+      card.classList.add('is-timeout');
+      icon.textContent  = 'â±';
+      state.textContent = 'TIMEOUT';
+      note.textContent  = ev.error || 'timed out';
+    } else {                            // queued / running
+      card.classList.add('is-running');
+      icon.textContent  = 'â—';          // spins via CSS animation
+      state.textContent = ev.state.toUpperCase();
     }
   }
 
@@ -1306,16 +1585,38 @@
   // ---------------------------------------------------------------- audio out
   var current = null, audioUnlocked = false;
 
+  // Phase C: tiny WebAudio blip for state feedback (no server round-trip).
+  // Safe no-op until the user unlocks audio; never plays during speech.
+  function earcon(freq, dur, delaySec) {
+    try {
+      if (mode === 'speaking') return;
+      var actx = ctx || ampCtx;
+      if (!actx) return;
+      var osc = actx.createOscillator();
+      var g = actx.createGain();
+      var t0 = actx.currentTime + (delaySec || 0);
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(0.12, t0 + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+      osc.connect(g); g.connect(actx.destination);
+      osc.start(t0); osc.stop(t0 + dur + 0.02);
+    } catch (e) {}
+  }
+
   function speak(b64, preserveMode) {
     var prevMode = mode;
     mode = 'speaking';
     if (current) { try { current.pause(); } catch (e) {} }
     stopSpeakLoop();                       // never double-analyse two clips
-    setState('speaking', 'SPEAKING…');
+    setState('speaking', 'SPEAKING');
+    send({ type: 'speech', state: 'start' });   // Phase C: duck music while JARVIS talks
     var a = new Audio('data:audio/mp3;base64,' + b64);
     current = a;
     a.onended = a.onerror = function () {
       if (current === a) current = null;
+      send({ type: 'speech', state: 'end' });    // Phase C: restore music volume
       stopSpeakLoop();
       if (preserveMode) {
         // Restore the mode that was active before this clip (e.g. 'command'
@@ -1739,97 +2040,12 @@
   // ---------------------------------------------------------------- apps modal
   var appsData = null, appCat = 'all';
   var appsModal = document.getElementById('jv-apps-modal');
-  var appsList = document.getElementById('jv-apps-list');
-  var appsSearch = document.getElementById('jv-apps-search');
-  var appsCats = document.getElementById('jv-apps-cats');
-  var appsCount = document.getElementById('jv-apps-count');
-
-  function renderApps() {
-    if (!appsData) return;
-    var q = (appsSearch.value || '').toLowerCase().trim();
-    appsList.innerHTML = '';
-    var shown = 0;
-    appsData.apps.forEach(function (a) {
-      if (appCat !== 'all' && a.category !== appCat) return;
-      if (q && a.name.toLowerCase().indexOf(q) < 0 &&
-          a.key.toLowerCase().indexOf(q) < 0) return;
-      shown++;
-      var row = document.createElement('div');
-      row.className = 'jv-app-row' + (a.broken ? ' broken' : '');
-      var nm = document.createElement('span');
-      nm.className = 'jv-app-name';
-      nm.textContent = a.name + (a.broken ? '  ✖' : '');
-      var badge = document.createElement('span');
-      badge.className = 'jv-app-badge' + (a.broken ? ' dead' : '');
-      badge.textContent = a.broken ? 'broken' : a.kind;
-      row.appendChild(nm);
-      if (a.bin) {
-        var p = document.createElement('span');
-        p.className = 'jv-app-path';
-        p.textContent = a.bin;
-        p.title = a.bin;
-        row.appendChild(p);
-      }
-      row.appendChild(badge);
-      if (!a.broken) {
-        row.onclick = function () {
-          nm.style.opacity = '.4';
-          fetch('/apps/open', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ key: a.key })
-          }).then(function (r) { return r.json(); }).then(function (j) {
-            logConv('jarvis', j.result, null);
-          }).catch(function () {}).finally(function () {
-            setTimeout(function () { nm.style.opacity = ''; }, 1200);
-          });
-        };
-      }
-      appsList.appendChild(row);
-    });
-    appsCount.textContent = shown + ' / ' + appsData.count;
-  }
-
-  function renderCats() {
-    var cats = {};
-    appsData.apps.forEach(function (a) { cats[a.category] = (cats[a.category] || 0) + 1; });
-    var keys = Object.keys(cats).sort(function (a, b) { return cats[b] - cats[a]; });
-    appsCats.innerHTML = '';
-    ['all'].concat(keys).forEach(function (k) {
-      var chip = document.createElement('span');
-      chip.className = 'jv-app-cat' + (appCat === k ? ' on' : '');
-      chip.textContent = k === 'all'
-        ? 'all ' + appsData.count
-        : k + ' ' + cats[k];
-      chip.onclick = function () {
-        appCat = k;
-        Array.prototype.forEach.call(appsCats.children, function (el) {
-          el.classList.toggle('on', el === chip);
-        });
-        renderApps();
-      };
-      appsCats.appendChild(chip);
-    });
-  }
+  var appsFrame = document.getElementById('jv-apps-frame');
 
   function openApps() {
     appsModal.classList.add('show');
-    appsSearch.value = '';
-    appCat = 'all';
-    if (!appsData) {
-      appsList.innerHTML = '<div style="padding:20px;opacity:.6">Loading registry…</div>';
-      fetch('/apps').then(function (r) { return r.json(); }).then(function (j) {
-        appsData = j;
-        renderCats();
-        renderApps();
-      }).catch(function () {
-        appsList.innerHTML = '<div style="padding:20px;opacity:.6">Registry unavailable.</div>';
-      });
-    } else {
-      renderCats();
-      renderApps();
-    }
-    appsSearch.focus();
+    // iframe auto-loads /apps.html on each open; no local data fetch needed.
+    if (appsFrame) { try { appsFrame.contentWindow.location.reload(); } catch (e) {} }
   }
 
   document.getElementById('jv-apps').onclick = openApps;
@@ -1839,7 +2055,6 @@
   appsModal.onclick = function (e) {
     if (e.target === appsModal) appsModal.classList.remove('show');
   };
-  appsSearch.oninput = renderApps;
 
   // Watchdog: nothing may stay stuck, ever.
   setInterval(function () {

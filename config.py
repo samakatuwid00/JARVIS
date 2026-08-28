@@ -137,6 +137,14 @@ TTS_VOICE = os.getenv("TTS_VOICE", "en-GB-RyanNeural")
 TTS_RATE = os.getenv("TTS_RATE", "+20%")
 TTS_VOLUME = os.getenv("TTS_VOLUME", "+0%")
 
+# Voice state feedback (spoken cues while transcribing/thinking/executing).
+# essential = useful cues with throttling; full = Phase B milestones too; off = silent.
+VOICE_FEEDBACK_MODE = os.getenv("JARVIS_VOICE_FEEDBACK", "essential").strip().lower()
+VOICE_THINKING_CUE_S = float(os.getenv("JARVIS_VOICE_THINKING_CUE_S", "4"))
+VOICE_THINKING_ESCALATE_S = float(os.getenv("JARVIS_VOICE_THINKING_ESCALATE_S", "12"))
+VOICE_CUE_COOLDOWN_S = float(os.getenv("JARVIS_VOICE_CUE_COOLDOWN_S", "8"))
+
+
 # Conversation
 MAX_HISTORY = int(os.getenv("MAX_HISTORY", "20"))
 
