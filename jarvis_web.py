@@ -554,12 +554,22 @@ async def deliver_result(websocket: WebSocket, text: str, speak: bool):
         print(f"[WS] deliver_result error: {e}", flush=True)
 
 
+
+def _no_cache(resp):
+    """HUD pages must never be served from browser cache — a stale page makes
+    the user see an old HUD after every redesign (bit us 2026-08-28)."""
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
+
+
 @app.get("/")
 async def get():
     html_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "jarvis_visual.html")
     with open(html_path, "r", encoding="utf-8") as f:
         html = f.read()
-    return HTMLResponse(content=html, status_code=200)
+    return _no_cache(HTMLResponse(content=html, status_code=200))
 
 
 @app.get("/hud.html")
@@ -568,7 +578,7 @@ async def get_hud():
     html_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hud_artifact.html")
     with open(html_path, "r", encoding="utf-8") as f:
         html = f.read()
-    return HTMLResponse(content=html, status_code=200)
+    return _no_cache(HTMLResponse(content=html, status_code=200))
 
 
 @app.get("/apps")
@@ -854,7 +864,7 @@ async def get_apps_panel():
     html_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "apps_panel.html")
     with open(html_path, "r", encoding="utf-8") as f:
         html = f.read()
-    return HTMLResponse(content=html, status_code=200)
+    return _no_cache(HTMLResponse(content=html, status_code=200))
 
 
 @app.websocket("/ws")
