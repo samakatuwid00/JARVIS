@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -46,24 +46,24 @@
     display: flex; flex-direction: column; gap: 10px;
   }
   .job-card {
-    background: var(--panel);
-    border: 1px solid var(--hairline);
-    border-radius: 10px;
-    padding: 10px 13px 11px;
-    font-family: var(--font-body);
-    color: #f2ead9;
-    box-shadow: 0 12px 32px rgba(0, 0, 0, .45), 0 1px 0 rgba(255, 214, 150, .06) inset;
-    animation: jobIn .22s ease-out;
-    backdrop-filter: blur(8px);
-  }
-  @keyframes jobIn { from { opacity: 0; transform: translateX(16px); } }
-  .job-head { display: flex; align-items: center; gap: 9px; }
-  /* Status glyph is drawn by CSS per state; the JS-set text glyph is muted so the
-     drawn icon is the only mark. Keeps the JS contract intact, upgrades the icon. */
-  .job-icon  { font-size: 0; width: 18px; height: 18px; flex: 0 0 auto;
-    display: inline-flex; align-items: center; justify-content: center;
-    border-radius: 6px; background: rgba(255, 180, 84, .12);
-    color: transparent; position: relative; }
+      background: rgba(7, 10, 14, .92);
+      border: 1px solid var(--hairline);
+      border-radius: 10px;
+      padding: 9px 12px 10px;
+      font-family: var(--font-body);
+      color: #f2ead9;
+      animation: jobIn .22s ease-out;
+    }
+    @keyframes jobIn { from { opacity: 0; transform: translateX(16px); } }
+    /* Row layout matching System Status: title left, state right. */
+    .job-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+      font: 500 11.5px/1.5 var(--font-body); letter-spacing: .04em; }
+    /* Status glyph is drawn by CSS per state; the JS-set text glyph is muted so the
+       drawn icon is the only mark. Keeps the JS contract intact, upgrades the icon. */
+    .job-icon  { font-size: 0; width: 18px; height: 18px; flex: 0 0 auto; align-self: center;
+      display: inline-flex; align-items: center; justify-content: center;
+      border-radius: 6px; background: rgba(255, 180, 84, .12);
+      color: transparent; position: relative; }
   .job-icon::before { content: ''; width: 12px; height: 12px; display: block;
     background: currentColor; -webkit-mask: var(--glyph) center / contain no-repeat;
             mask: var(--glyph) center / contain no-repeat; }
@@ -75,12 +75,14 @@
   .job-card.is-timeout { border-color: rgba(239, 123, 100, .4); }
   .job-card.is-error .job-icon,
   .job-card.is-timeout .job-icon { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ef7b64' stroke-width='3' stroke-linecap='round'%3E%3Cpath d='M6 6l12 12M18 6L6 18'/%3E%3C/svg%3E"); color: #ef7b64; background: rgba(239, 123, 100, .1); }
-  .job-title { font-weight: 600; font-size: 13px; flex: 1;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; letter-spacing: .01em; }
-  .job-state { font-family: var(--font-data);
-    font-size: 10px; letter-spacing: .1em; color: #c9d4e3; }
-  .job-note  { font-size: 11.5px; color: #aab7c9; margin-top: 4px;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .job-title { color: #d8b98a; text-transform: uppercase; white-space: nowrap;
+      overflow: hidden; text-overflow: ellipsis; font: 500 11.5px/1.5 var(--font-body);
+      letter-spacing: .04em; flex: 1; }
+    .job-state { font-family: var(--font-data); font-size: 11px;
+      color: #ffe1bb; text-align: right; white-space: nowrap; }
+    .job-note  { font-size: 11.5px; color: #ffe1bb; margin-top: 3px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right;
+      font-family: var(--font-data); font-size: 11px; }
 
   /* Page = HUD only. The glow and the status strip float over it; the glow is
      pointer-events:none, the strip is a thin non-blocking overlay. */
@@ -233,7 +235,10 @@
     font: 600 13px/20.15px var(--font-body); letter-spacing: 1.69px;
     color: #ffe1bb; pointer-events: none; padding: 3px 12px;
     background: rgba(7, 10, 14, .96); border-radius: 8px; }
-  #jv-hudline.show { display: flex; }
+  /* The mask was positioned over the orb's scripted dialogue, but in the v3
+     shell it overlaps the real transcript feed. Keep it permanently hidden so
+     it never blocks the chat; the dimmed orb backdrop hides the fake text. */
+  #jv-hudline.show { display: none; }
   #jv-hudline .jv-hl-label { color: #ffd9a0; opacity: .85; margin-right: 7px;
     white-space: nowrap; }
   #jv-hudline.jv-typing .jv-hl-text::after { content: '▌'; margin-left: 1px;
@@ -241,8 +246,8 @@
 
   /* Left column: replaces ARCHIVE CRATE 07 / MASS / COMPOSITION / INTEGRITY,
      which are pure set dressing, with the local model's real figures. */
-  #jv-left { position: absolute; display: none; z-index: 46; flex-direction: column;
-    gap: 6px; pointer-events: none;
+  #jv-left { display: flex; flex-direction: column; width: 100%;
+    gap: 6px; pointer-events: auto;
     background: rgba(7, 10, 14, .96);
     border: 1px solid var(--hairline-soft); border-radius: 12px;
     padding: 12px 14px; font-family: var(--font-body);
@@ -284,18 +289,19 @@
     padding: 12px 14px; font-family: var(--font-body);
     box-shadow: 0 14px 36px rgba(0, 0, 0, .35); }
   #jv-stats.show { display: flex; }
-  #jv-stats .jv-st-title { font: 700 11px/1.4 var(--font-display); letter-spacing: .24em;
-    text-transform: uppercase; color: #ffd9a0; margin-bottom: 3px; }
-  #jv-stats .jv-st-row { display: flex; align-items: baseline; justify-content: space-between;
-    gap: 8px; font: 500 11.5px/1.5 var(--font-body); letter-spacing: .04em; }
-  #jv-stats .jv-st-k { color: #d8b98a; text-transform: uppercase; white-space: nowrap; }
-  #jv-stats .jv-st-v { font-family: var(--font-data); font-size: 11px;
+  /* ---- unified panel design (System Status chrome for ALL side panels) ---- */
+  .jv-sec .jv-st-title { font: 700 11px/1.4 var(--font-display); letter-spacing: .24em;
+    text-transform: uppercase; color: #ffd9a0; margin-bottom: 9px; }
+  .jv-sec .jv-st-row, .jv-cueline { display: flex; align-items: baseline; justify-content: space-between;
+    gap: 8px; font: 500 11.5px/1.5 var(--font-body); letter-spacing: .04em;
+    margin-top: 5px; padding: 1px 0; }
+  .jv-sec .jv-st-k { color: #d8b98a; text-transform: uppercase; white-space: nowrap; }
+  .jv-sec .jv-st-v { font-family: var(--font-data); font-size: 11px;
     color: #ffe1bb;
     text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  #jv-stats .jv-st-v.ok   { color: #9fe6ba; }
-  #jv-stats .jv-st-v.warn { color: #ffc14d; }
-  #jv-stats .jv-st-v.bad  { color: #f08a72; }
-  /* Mic/TTS amplitude — the one genuinely live signal the client already has. */
+  .jv-sec .jv-st-v.ok   { color: #9fe6ba; }
+  .jv-sec .jv-st-v.warn { color: #ffc14d; }
+  .jv-sec .jv-st-v.bad  { color: #f08a72; }
   #jv-stats .jv-st-meter { height: 4px; border-radius: 3px; overflow: hidden; margin-top: 2px;
     background: color-mix(in srgb, var(--holo) 16%, transparent); }
   #jv-stats .jv-st-meter i { display: block; height: 100%; width: 0%;
@@ -312,13 +318,19 @@
     padding: 12px 14px;
     box-shadow: 0 14px 36px rgba(0, 0, 0, .35); }
   #jv-side.show { display: flex; }
-  #jv-side-head { flex: 0 0 auto; font: 700 11px/1.4 var(--font-display);
+  #jv-side-head { flex: 0 0 auto; font: 700 10px/1.4 var(--font-display);
     letter-spacing: .24em; text-transform: uppercase;
     color: #ffd9a0;
-    padding-bottom: 7px; margin-bottom: 9px;
+    padding-bottom: 5px; margin-bottom: 6px;
     border-bottom: 1px solid var(--hairline); }
+  #jv-feed { display: flex; flex-direction: column; min-height: 200px; flex: 0 1 auto;
+    max-height: 38vh; padding: 9px 11px; overflow: hidden; }
+  #jv-feed #jv-side-head { flex: 0 0 auto; }
+  #jv-feed #jv-side-log { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+  #jv-feed #jv-cues { flex: 0 0 auto; }
+  #jv-feed #jv-input-wrap { flex: 0 0 auto; }
   #jv-side-log { flex: 1 1 auto; overflow-y: auto; pointer-events: auto;
-    display: flex; flex-direction: column; gap: 7px; padding-right: 4px;
+    display: flex; flex-direction: column; gap: 5px; padding-right: 4px;
     scrollbar-width: thin;
     scrollbar-color: color-mix(in srgb, var(--holo) 35%, transparent) transparent; }
   #jv-side-log::-webkit-scrollbar { width: 4px; }
@@ -328,7 +340,7 @@
   #jv-log { display: none; }
 
   #jv-input-wrap { pointer-events: auto; display: flex; align-items: center; gap: 10px;
-    padding: 11px 17px; border-radius: 999px;
+    padding: 8px 15px; border-radius: 999px;
     background: color-mix(in srgb, #070a0e 80%, transparent);
     border: 1px solid var(--hairline);
     box-shadow: 0 12px 32px rgba(0, 0, 0, .45);
@@ -421,19 +433,20 @@
   .jv-pill.grow { margin-left: auto; }
 
   #jv-shell { position: relative; z-index: 35; display: grid; gap: 16px;
-    grid-template-columns: 280px minmax(0, 1fr) 320px; margin-top: 16px; }
-  @media (max-width: 1180px) { #jv-shell { grid-template-columns: 240px minmax(0, 1fr) 280px; } }
-  #jv-col-left, #jv-col-right { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
-  #jv-center { display: flex; flex-direction: column; min-width: 0; }
-  #jv-center .jv-caption { margin: 0 auto 10px; padding: 6px 20px; border-radius: 10px;
-    background: rgba(7,10,14,.94); border: 1px solid rgba(255,180,84,.14);
-    font: 600 13px/1.5 Archivo, sans-serif; letter-spacing: .12em; text-align: center; color: #ffe1bb; }
-  #jv-center .jv-spacer { flex: 0 0 auto; height: 24vh; min-height: 160px; max-height: 320px; }
+      grid-template-columns: 300px minmax(0, 1fr) 300px;
+      grid-template-rows: auto 1fr; min-height: calc(100vh - 16px); margin-top: 16px; }
+  @media (max-width: 1180px) { #jv-shell { grid-template-columns: 260px minmax(0, 1fr) 260px; } }
+  #jv-col-left, #jv-col-right { align-self: stretch; }
+  #jv-center { align-self: end; margin-bottom: 14px; }
+  #jv-col-left, #jv-col-right { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+  #jv-col-left > .jv-sec, #jv-col-right > .jv-sec, #jv-col-left > #jv-left { flex: 1 1 auto; }
+  #jv-center { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+  #jv-center .jv-spacer { flex: 0 0 auto; height: 15vh; min-height: 100px; max-height: 200px; }
 
   /* Panels live inside columns now: static flow, always shown. */
   #jv-col-left #jv-left, #jv-col-left #jv-stats, #jv-col-right #jv-stats { position: static; }
   .jv-sec { background: rgba(7, 10, 14, .92); border: 1px solid var(--hairline);
-    border-radius: 12px; padding: 13px 14px; box-shadow: 0 14px 36px rgba(0, 0, 0, .38);
+    border-radius: 12px; padding: 16px 17px; box-shadow: 0 14px 36px rgba(0, 0, 0, .38);
     backdrop-filter: blur(8px); }
 
   /* Lucide icon sizing */
@@ -444,7 +457,7 @@
   .jv-npbtn svg.lucide { width: 13px; height: 13px; margin-right: 6px; }
 
   /* Voice feedback mode switch */
-  .vf-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; text-align: center; }
+  .vf-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; text-align: center; margin-top: 8px; margin-bottom: 6px; }
   .vf-opt { cursor: pointer; padding: 7px 0; border-radius: 8px; border: 1px solid var(--hairline);
     font: 700 10.5px/1 var(--font-display); letter-spacing: .12em; text-transform: uppercase;
     color: #d8b98a; transition: background .12s, color .12s, border-color .12s; }
@@ -463,14 +476,16 @@
     color: #ffd9a0; transition: background .12s, border-color .12s; }
   .jv-npbtn:hover { background: color-mix(in srgb, var(--holo) 16%, transparent); border-color: var(--holo); }
 
-  /* Quick actions */
-  .jv-qa { cursor: pointer; padding: 10px 0; border-radius: 10px; border: 1px solid var(--hairline);
-    text-align: center; font: 600 11.5px/1 var(--font-body); letter-spacing: .04em;
-    color: #f4e3c8; transition: border-color .12s, color .12s, background .12s;
-    display: flex; align-items: center; justify-content: center; }
-  .jv-qa:hover { border-color: var(--holo); color: var(--holo);
-    background: color-mix(in srgb, var(--holo) 8%, transparent); }
-  .jv-qa-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  /* Quick actions — uniform row design matching System Status */
+    .jv-qa { cursor: pointer; padding: 7px 12px; border-radius: 8px; border: 1px solid var(--hairline);
+      font: 500 11.5px/1.5 var(--font-body); letter-spacing: .04em;
+      color: #d8b98a; transition: border-color .12s, color .12s, background .12s;
+      display: flex; align-items: center; justify-content: space-between; }
+    .jv-qa::after { content: '›'; color: #8a7a5e; font-size: 14px; line-height: 1; }
+    .jv-qa:hover { border-color: var(--holo); color: var(--holo);
+      background: color-mix(in srgb, var(--holo) 8%, transparent); }
+    .jv-qa svg.lucide { width: 14px; height: 14px; margin-right: 7px; }
+    .jv-qa-grid { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
 
   /* Confirm gate card */
   .jv-gate { border: 1px solid color-mix(in srgb, #ffc14d 55%, transparent);
@@ -536,7 +551,6 @@
         <button id="jv-apps" class="jv-btn" title="Apps JARVIS can open">Apps</button>
         <button id="jv-unlock" class="jv-btn">Activate audio</button>
         <button id="jv-retry" class="jv-btn">Enable mic</button>
-        <button id="jv-end" class="jv-btn">End session</button>
       </span>
     </header>
 
@@ -574,36 +588,11 @@
         <div class="jv-lf-row"><span class="jv-lf-k">Output</span><span class="jv-lf-v" id="lf-output">—</span></div>
         <div class="jv-lf-row"><span class="jv-lf-k">Headroom</span><span class="jv-lf-v" id="lf-head">—</span></div>
       </div>
-
-      <div class="jv-sec" id="jv-vf">
-        <div class="jv-st-title">Voice Feedback</div>
-        <div class="vf-row">
-          <div class="vf-opt" data-mode="off">Off</div>
-          <div class="vf-opt active" data-mode="essential">Essential</div>
-          <div class="vf-opt" data-mode="full">Full</div>
-        </div>
-        <div class="vf-cue"><i></i>“Thinking, sir.”<span class="v">4s</span></div>
-        <div class="vf-cue"><i></i>“Still working on it.”<span class="v">12s</span></div>
-        <div class="vf-cue"><i></i>“Still on it, sir.”<span class="v">45s</span></div>
-      </div>
-
-      <div class="jv-sec" id="jv-np">
-        <div class="jv-st-title">Now Playing</div>
-        <div class="jv-st-row"><span class="jv-st-k">Source</span><span class="jv-st-v" id="np-source">—</span></div>
-        <div class="jv-st-row"><span class="jv-st-k">Track</span><span class="jv-st-v" id="np-title">—</span></div>
-        <div class="jv-gate-btns" style="margin-top:10px">
-          <button class="jv-npbtn" id="jv-music-stop"><i data-lucide="square"></i>STOP YT</button>
-          <button class="jv-npbtn" id="jv-music-spotify"><i data-lucide="play"></i>SPOTIFY</button>
-        </div>
-      </div>
     </aside>
 
     <!-- CENTER: open for the live orb; conversation anchored to the foot -->
     <main id="jv-center">
       <div class="jv-spacer"></div>
-      <div id="jv-caption" class="jv-caption">
-        J.A.R.V.I.S // GOOD EVENING, SIR — SHALL I BEGIN?
-      </div>
       <div id="jv-feed" class="jv-sec">
         <div id="jv-gate"></div>
         <div id="jv-side-head">Transcript</div>
@@ -625,13 +614,13 @@
         <div id="job-tray"></div>
       </div>
 
-      <div class="jv-sec">
-        <div class="jv-st-title">Quick Actions</div>
-        <div class="jv-qa-grid">
-          <div class="jv-qa" id="jv-qa-apps"><i data-lucide="layout-grid"></i>APPS</div>
-          <div class="jv-qa" id="jv-qa-sites"><i data-lucide="globe"></i>SITES</div>
-          <div class="jv-qa" id="jv-qa-vault"><i data-lucide="brain"></i>VAULT</div>
-          <div class="jv-qa" id="jv-qa-report"><i data-lucide="bar-chart-3"></i>REPORT</div>
+      <div class="jv-sec" id="jv-np">
+        <div class="jv-st-title">Now Playing</div>
+        <div class="jv-st-row"><span class="jv-st-k">Source</span><span class="jv-st-v" id="np-source">—</span></div>
+        <div class="jv-st-row"><span class="jv-st-k">Track</span><span class="jv-st-v" id="np-title">—</span></div>
+        <div class="jv-gate-btns" style="margin-top:10px">
+          <button class="jv-npbtn" id="jv-music-stop"><i data-lucide="square"></i>STOP YT</button>
+          <button class="jv-npbtn" id="jv-music-spotify"><i data-lucide="play"></i>SPOTIFY</button>
         </div>
       </div>
 
@@ -643,6 +632,19 @@
         <div class="jv-st-row"><span class="jv-st-k">Spoken</span><span class="jv-st-v" id="st-spoken">—</span></div>
         <div class="jv-st-row"><span class="jv-st-k">Turn</span><span class="jv-st-v" id="st-latency">—</span></div>
         <div class="jv-st-row"><span class="jv-st-k">Context</span><span class="jv-st-v" id="st-ctx">—</span></div>
+      </div>
+
+      <div class="jv-sec" id="jv-vf">
+        <div class="jv-st-title">Voice Feedback</div>
+        <div class="jv-st-row"><span class="jv-st-k">Mode</span><span class="jv-st-v">Essential</span></div>
+        <div class="vf-row">
+          <div class="vf-opt" data-mode="off">Off</div>
+          <div class="vf-opt active" data-mode="essential">Essential</div>
+          <div class="vf-opt" data-mode="full">Full</div>
+        </div>
+        <div class="jv-st-row"><span class="jv-st-k">“Thinking, sir.”</span><span class="jv-st-v">4s</span></div>
+        <div class="jv-st-row"><span class="jv-st-k">“Still working on it.”</span><span class="jv-st-v">12s</span></div>
+        <div class="jv-st-row"><span class="jv-st-k">“Still on it, sir.”</span><span class="jv-st-v">45s</span></div>
       </div>
     </aside>
   </div>
@@ -937,6 +939,16 @@
     el.className = 'jv-st-v' + (cls ? ' ' + cls : '');
   }
 
+  // Mirror the System Status "Brain" row into the topbar pill (full text, no dots).
+  function syncBrainPill() {
+    var pill = document.getElementById('jv-pill-brain');
+    if (!pill) return;
+    var lbl = pill.querySelector('span');
+    if (stBrain && stBrain.textContent && stBrain.textContent.indexOf('—') !== 0) {
+      if (lbl) lbl.textContent = 'BRAIN: ' + stBrain.textContent;
+    }
+  }
+
   // Covers the static rows only: from the THREAT ASSESSMENT label down to the
   // bottom of the column's real content (the PROTOCOL row). The transcript
   // panel already owns everything below that.
@@ -1019,19 +1031,9 @@
 
   function positionLeft() {
     if (!leftEl) return;
-    var box = hudLeftAside();
-    if (!box) { leftEl.classList.remove('show'); return; }
-    var r = box.getBoundingClientRect(), f = hud.getBoundingClientRect();
-    // Anchor inside the top-left corner of <main>; size to content.
-    var top = r.top + 16;
-    if (r.height < 200) { leftEl.classList.remove('show'); return; }
-    var w = Math.min(r.width * 0.5, 300) - 24;
-    if (w < 160) w = 160;
-    leftEl.style.left   = (f.left + r.left + 16) + 'px';
-    leftEl.style.top    = (f.top + top) + 'px';
-    leftEl.style.width  = w + 'px';
-    leftEl.style.height = 'auto';
+    // LM panel now lives in-flow in the left column (uniform width). Just show it.
     leftEl.classList.add('show');
+    leftEl.style.left = ''; leftEl.style.top = ''; leftEl.style.width = ''; leftEl.style.height = '';
   }
 
   function applyLeft(s) {
@@ -1078,6 +1080,7 @@
     fetch('/status', { cache: 'no-store' }).then(function (r) { return r.json(); })
       .then(function (s) {
         setVal(stBrain, s.brain || '—');
+        syncBrainPill();
         var b = s.last_backend;
         setVal(stBackend, b ? b : 'awaiting first turn',
                b === 'mock' ? 'bad' : (b === 'ollama' ? 'ok' : (b ? 'warn' : '')));
@@ -1091,7 +1094,7 @@
         else if (wk.error) setVal(stWake, 'Server off: ' + wk.error, 'warn');
         else setVal(stWake, 'Server off', 'warn');
       })
-      .catch(function () { setVal(stBrain, 'unreachable', 'bad'); });
+      .catch(function () { setVal(stBrain, 'unreachable', 'bad'); syncBrainPill(); });
   }
 
   window.addEventListener('resize', function () {
@@ -2102,6 +2105,69 @@
     if (e.target === appsModal) appsModal.classList.remove('show');
   };
 
+  // ---------------------------------------------------------------- voice feedback toggle
+  // The .vf-opt chips were decorative (cursor:pointer only). Wire them to the
+  // server's /voice_feedback endpoint so the mode actually changes at runtime.
+  var vfChips = document.querySelectorAll('#jv-vf .vf-opt');
+  function setVfMode(mode) {
+    fetch('/voice_feedback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: mode })
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      var m = (d && d.mode) || mode;
+      vfChips.forEach(function (c) {
+        c.classList.toggle('active', c.getAttribute('data-mode') === m);
+      });
+    }).catch(function () {});
+  }
+  vfChips.forEach(function (c) {
+    c.addEventListener('click', function () { setVfMode(c.getAttribute('data-mode')); });
+  });
+
+  // ---------------------------------------------------------------- now playing (live)
+  // HUD card was static in real mode (only painted in DEMO). Poll /music/now and
+  // wire the STOP YT / SPOTIFY buttons to the /music controls.
+  // NOTE: /music/now drives a Chromium worker (~2s each call), so it must NOT be
+  // polled aggressively — 30s, non-overlapping, and paused when the tab is
+  // hidden. A 5s poll was hammering the machine and made JARVIS feel laggy.
+  var npTitle = document.getElementById('np-title');
+  var npSource = document.getElementById('np-source');
+  var npBusy = false;
+  function refreshNowPlaying() {
+    if (npBusy) return;
+    if (document.hidden) return;
+    npBusy = true;
+    fetch('/music/now').then(function (r) { return r.json(); }).then(function (d) {
+      if (!d) return;
+      if (d.idle || (!d.title && !d.track)) {
+        setVal(npTitle, '—'); setVal(npSource, '—');
+      } else {
+        setVal(npTitle, d.title || d.track || '—', 'ok');
+        var src = [];
+        if (d.source) src.push(d.source);
+        if (d.artist) src.push(d.artist);
+        setVal(npSource, src.join(' · ') || '—', 'ok');
+      }
+    }).catch(function () {}).then(function () { npBusy = false; });
+  }
+  refreshNowPlaying();
+  setInterval(refreshNowPlaying, 30000);
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) refreshNowPlaying();
+  });
+
+  var npStop = document.getElementById('jv-music-stop');
+  var npSpotify = document.getElementById('jv-music-spotify');
+  if (npStop) npStop.addEventListener('click', function () {
+    fetch('/music', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'stop_yt' }) }).catch(function () {});
+  });
+  if (npSpotify) npSpotify.addEventListener('click', function () {
+    fetch('/music', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'spotify_toggle' }) }).catch(function () {});
+  });
+
   // Watchdog: nothing may stay stuck, ever.
   setInterval(function () {
     if (mode === 'busy' && Date.now() - busySince > BUSY_TIMEOUT) {
@@ -2120,6 +2186,7 @@
     setVal(document.getElementById('np-title'), 'Midnight City');
     // System status (mockup values)
     setVal(stBrain, 'cx/gpt-5.5 · router');
+    syncBrainPill();
     setVal(document.getElementById('st-stt'), 'RealtimeSTT');
     setVal(stRoute, 'router');
     setVal(document.getElementById('st-vault'), 'turbovec · 0.4s');

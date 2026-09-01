@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>JARVIS HUD v3 — Option B mockup (amber)</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&family=Rajdhani:wght@600;700&display=swap" rel="stylesheet">
+<script>
+tailwind.config = {
+  theme: { extend: {
+    fontFamily: { display: ['Rajdhani','sans-serif'], body: ['Archivo','sans-serif'], data: ['ui-monospace','Consolas','monospace'] },
+    colors: {
+      holo: '#ffb454', holob: '#ffd9a0', ok: '#7ddba0', bad: '#ef7b64', info: '#7cc4ff',
+      dim: '#d8b98a', text: '#ffe7c4', ink: '#070a0e', hair: 'rgba(255,180,84,.22)'
+    },
+    boxShadow: { plate: '0 14px 36px rgba(0,0,0,.4)' }
+  } }
+}
+</script>
+<style>
+  body { font-family: Archivo, sans-serif; color: #ffe7c4; }
+  .plate { background: rgba(7,10,14,.92); border: 1px solid rgba(255,180,84,.18);
+           border-radius: 12px; box-shadow: 0 14px 36px rgba(0,0,0,.4); backdrop-filter: blur(8px); }
+  .pill  { font-family: Rajdhani; font-weight: 700; letter-spacing: .18em; text-transform: uppercase;
+           font-size: 10.5px; padding: 5px 12px; border-radius: 999px;
+           border: 1px solid rgba(255,180,84,.3); color: #ffd9a0; }
+  .lbl   { font-family: Rajdhani; font-weight: 700; letter-spacing: .22em; text-transform: uppercase;
+           font-size: 11px; color: #ffd9a0; }
+  .row   { display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+           font-size: 11.5px; letter-spacing: .03em; }
+  .k     { color: #d8b98a; text-transform: uppercase; white-space: nowrap; }
+  .v     { font-family: ui-monospace, Consolas, monospace; font-size: 11px; color: #ffe1bb;
+           text-align: right; white-space: nowrap; }
+  .btn   { font-family: Rajdhani; font-weight: 700; letter-spacing: .18em; text-transform: uppercase;
+           font-size: 10.5px; padding: 6px 14px; border-radius: 999px;
+           border: 1px solid rgba(255,180,84,.5); color: #ffd9a0; }
+  .btn.primary { background: #ffb454; color: #1a1005; border-color: #ffb454; }
+</style>
+</head>
+<body class="min-h-screen relative">
+
+  <!-- ═══ OPTION B BACKDROP: the vendored artifact, dimmed + desaturated ═══ -->
+  <div class="fixed inset-0 z-0" style="background:#04060a">
+    <img src="artifact_backdrop.png" class="w-full h-full object-cover"
+         style="filter: brightness(.5) saturate(.55); opacity:.9">
+    <div class="absolute inset-0" style="background: radial-gradient(120% 100% at 50% 45%, transparent 45%, rgba(4,6,10,.72) 100%)"></div>
+  </div>
+
+  <div class="relative z-10 mx-auto max-w-[1600px] px-5 pt-4 pb-6 min-h-screen flex flex-col">
+
+    <!-- ═══ TOP BAR (masks the artifact's own header) ═══ -->
+    <header class="plate flex items-center gap-4 px-5 py-2.5">
+      <div class="font-display font-bold text-2xl tracking-[.28em] text-holo">J.A.R.V.I.S.</div>
+      <div class="flex-1"></div>
+      <span class="pill" style="border-color: rgba(125,219,160,.45); color:#9fe6ba">● ONLINE</span>
+      <span class="pill">BRAIN: CX/GPT-5.5</span>
+      <span class="pill">VOICE: KOKORO · LOCAL</span>
+      <span class="pill" style="border-color: rgba(124,196,255,.4); color:#a8d4ff">FEEDBACK: ESSENTIAL</span>
+    </header>
+
+    <!-- ═══ 3-COLUMN BODY ═══ -->
+    <div class="flex-1 grid mt-4 gap-4" style="grid-template-columns: 280px 1fr 320px">
+
+      <!-- LEFT: system column -->
+      <aside class="space-y-4">
+        <section class="plate p-4">
+          <div class="lbl mb-3">SYSTEM STATUS</div>
+          <div class="space-y-2">
+            <div class="row"><span class="k">Brain</span><span class="v">cx/gpt-5.5 · router</span></div>
+            <div class="row"><span class="k">STT</span><span class="v">RealtimeSTT</span></div>
+            <div class="row"><span class="k">Wake</span><span class="v" style="color:#9fe6ba">server live</span></div>
+            <div class="row"><span class="k">Vault index</span><span class="v">turbovec · 0.4s</span></div>
+            <div class="row"><span class="k">Voice in</span><span class="v" style="color:#9fe6ba">mic open</span></div>
+          </div>
+        </section>
+
+        <section class="plate p-4">
+          <div class="lbl mb-3">VOICE FEEDBACK</div>
+          <div class="grid grid-cols-3 gap-1.5 text-center" style="font-family:Rajdhani; font-weight:700; font-size:10.5px; letter-spacing:.12em">
+            <div class="py-1.5 rounded-lg border border-hair text-dim">OFF</div>
+            <div class="py-1.5 rounded-lg border border-holo text-holo" style="background:rgba(255,180,84,.14)">ESSNTL</div>
+            <div class="py-1.5 rounded-lg border border-hair text-dim">FULL</div>
+          </div>
+          <div class="mt-3 space-y-1.5 text-[11px]">
+            <div class="flex items-center gap-2"><span class="w-1.5 h-1.5 rounded-full bg-holo"></span>“Thinking, sir.”<span class="ml-auto v">4s</span></div>
+            <div class="flex items-center gap-2"><span class="w-1.5 h-1.5 rounded-full bg-holo"></span>“Still working on it.”<span class="ml-auto v">12s</span></div>
+            <div class="flex items-center gap-2"><span class="w-1.5 h-1.5 rounded-full bg-holo"></span>“Still on it, sir.”<span class="ml-auto v">45s</span></div>
+          </div>
+        </section>
+
+        <section class="plate p-4">
+          <div class="lbl mb-3">NOW PLAYING</div>
+          <div class="row"><span class="k">Source</span><span class="v" style="color:#9fe6ba">Spotify · ducked 15%</span></div>
+          <div class="row mt-1"><span class="k">Track</span><span class="v">Midnight City</span></div>
+          <div class="mt-3 flex gap-2">
+            <button class="btn flex-1">STOP MUSIC</button>
+            <button class="btn flex-1">RESUME</button>
+          </div>
+        </section>
+      </aside>
+
+      <!-- CENTER: open for the live orb; caption + conversation anchored to the foot -->
+      <main class="flex flex-col">
+        <div class="flex-1"></div>
+
+        <!-- caption plate over the artifact's scripted line -->
+        <div class="mx-auto mb-3 px-5 py-1.5 rounded-lg text-center"
+             style="background: rgba(7,10,14,.94); border:1px solid rgba(255,180,84,.14); font: 600 13px/1.5 Archivo; letter-spacing:.12em; color:#ffe1bb">
+          J.A.R.V.I.S // GOOD EVENING, SIR — SHALL I BEGIN?
+        </div>
+
+        <!-- conversation stack -->
+        <div class="plate p-4 space-y-3" style="background:rgba(7,10,14,.9)">
+          <div class="flex justify-end">
+            <div class="max-w-[75%] rounded-2xl px-4 py-2.5 text-[13px] font-semibold"
+                 style="background:#182436;border:1px solid rgba(255,180,84,.18)">create a folder called jarvis-latch-test in documents</div>
+          </div>
+
+          <div class="rounded-xl p-3" style="border:1px solid rgba(255,193,77,.55); background:rgba(255,193,77,.06)">
+            <div class="flex items-start gap-2">
+              <span class="font-display font-bold text-holo">⚠ CONFIRM</span>
+              <div class="text-[12.5px] leading-5">
+                That goal could change state on this machine. Run it autonomously?
+                <div class="text-dim mt-0.5">“create a folder called jarvis-latch-test…” · job 46600fcc</div>
+              </div>
+            </div>
+            <div class="mt-2 flex gap-2">
+              <button class="btn primary">CONFIRM</button>
+              <button class="btn">CANCEL</button>
+            </div>
+          </div>
+
+          <div class="flex gap-2.5">
+            <div class="w-8 h-8 rounded-full flex items-center justify-center font-display font-bold text-holo shrink-0"
+                 style="border:1px solid rgba(255,180,84,.4)">J</div>
+            <div class="rounded-2xl px-4 py-2.5 text-[13px] max-w-[80%]" style="background:rgba(255,255,255,.03); border:1px solid rgba(255,180,84,.14)">
+              Done, sir — <span style="color:#9fe6ba">folder verified on disk</span>. Anything else?
+              <div class="mt-1 text-[10.5px] text-dim">STEP 1 ✓ mkdir · STEP 2 ✓ ls -ld · 47.8s</div>
+            </div>
+          </div>
+
+          <div class="flex flex-wrap gap-1.5">
+            <span class="text-[10.5px] px-2.5 py-1 rounded-full border border-hair text-holob">🔈 “Thinking, sir.” 4.0s</span>
+            <span class="text-[10.5px] px-2.5 py-1 rounded-full border border-hair text-holob">🔈 “Still working on it.” 12.0s</span>
+            <span class="text-[10.5px] px-2.5 py-1 rounded-full border border-hair text-holob">🔈 “Step one done.”</span>
+          </div>
+
+          <!-- input strip -->
+          <div class="flex items-center gap-3 px-4 py-2.5 rounded-full"
+               style="background:rgba(7,10,14,.85); border:1px solid rgba(255,180,84,.24)">
+            <span class="font-data font-bold text-holo">&gt;</span>
+            <span class="text-[13px] font-semibold tracking-wide" style="color:#8a7a5e">SPEAK TO J.A.R.V.I.S. — TYPE, THEN PRESS ENTER</span>
+          </div>
+        </div>
+      </main>
+
+      <!-- RIGHT: tasks + actions -->
+      <aside class="space-y-4">
+        <section class="plate p-4">
+          <div class="flex items-center justify-between mb-3">
+            <div class="lbl">ACTIVE TASKS</div>
+            <span class="text-[11px] px-2 py-0.5 rounded-full border border-hair text-holo">1</span>
+          </div>
+          <div class="rounded-lg p-3" style="border:1px solid rgba(255,180,84,.16)">
+            <div class="flex justify-between text-[12px]">
+              <span class="font-display font-bold tracking-widest text-holo">AUTONOMOUS</span>
+              <span class="v">3m 12s</span>
+            </div>
+            <div class="text-[12px] mt-0.5" style="color:#f4e3c8">Update CUA driver</div>
+            <div class="mt-2 h-1.5 rounded-full overflow-hidden" style="background:rgba(255,180,84,.14)">
+              <div class="h-full rounded-full" style="width:66%; background:linear-gradient(90deg,#b97f2e,#ffb454)"></div>
+            </div>
+            <div class="mt-1 text-[10.5px] text-dim">STEP 2 ✓ driver downloaded · spoken ✓</div>
+          </div>
+        </section>
+
+        <section class="plate p-4">
+          <div class="lbl mb-3">QUICK ACTIONS</div>
+          <div class="grid grid-cols-2 gap-2 text-center text-[11.5px] font-semibold">
+            <div class="py-2.5 rounded-lg border border-hair">🖥 APPS</div>
+            <div class="py-2.5 rounded-lg border border-hair">🌐 SITES</div>
+            <div class="py-2.5 rounded-lg border border-hair">🧠 VAULT</div>
+            <div class="py-2.5 rounded-lg border border-hair">📊 REPORT</div>
+          </div>
+        </section>
+
+        <section class="plate p-4">
+          <div class="lbl mb-3">LAST TURN</div>
+          <div class="space-y-2">
+            <div class="row"><span class="k">Backend</span><span class="v">router · 7.9s</span></div>
+            <div class="row"><span class="k">Tools</span><span class="v">search_vault_semantic</span></div>
+            <div class="row"><span class="k">Grounded</span><span class="v" style="color:#9fe6ba">MASUBAE cited</span></div>
+            <div class="row"><span class="k">Spoken</span><span class="v">Kokoro · 2.7s</span></div>
+          </div>
+        </section>
+      </aside>
+    </div>
+  </div>
+</body>
+</html>

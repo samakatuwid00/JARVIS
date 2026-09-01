@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 JARVIS Web Interface - FastAPI backend for voice visual JARVIS
 
@@ -566,7 +566,7 @@ def _no_cache(resp):
 
 @app.get("/")
 async def get():
-    html_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "jarvis_visual.html")
+    html_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "jarvis_hud_v3.html")
     with open(html_path, "r", encoding="utf-8") as f:
         html = f.read()
     return _no_cache(HTMLResponse(content=html, status_code=200))
