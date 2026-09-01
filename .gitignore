@@ -28,6 +28,13 @@ Thumbs.db
 
 # Backup artifacts
 *.bak
+# Pre-v3 HUD rollback snapshot (kept on disk, not in repo)
+jarvis_hud_v3.backup.html
+# Local Gemini task briefs (transient, not repo artifacts)
+.gemini-brief-hud.md
+
+# Web app registry — auto-generated, contains visit history
+web_registry.json
 
 # Local-only persistent memory (PRIVACY: never commit)
 # Tier-2 durable profile (user/machine facts, harness contract)
