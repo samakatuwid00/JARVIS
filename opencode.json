@@ -3,6 +3,20 @@
   "model": "ninerouter/cx/gpt-5.4-mini",
   "small_model": "ninerouter/ag/gemini-3.5-flash-low",
   "provider": {
+    "opencode-go": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "OpenCode Go",
+      "options": {
+        "baseURL": "https://opencode.ai/zen/go/v1"
+      },
+      "models": {
+        "mimo-v2.5": {},
+        "qwen3.8-flash": {},
+        "deepseek-v4-flash": {},
+        "glm-5.3-flash": {},
+        "kimi-k3": {}
+      }
+    },
     "ninerouter": {
       "npm": "@ai-sdk/openai-compatible",
       "name": "OmniRoute (local)",

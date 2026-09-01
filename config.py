@@ -15,6 +15,12 @@ JARVIS_USE_9ROUTER = os.getenv("JARVIS_USE_9ROUTER", "true").lower() == "true"
 ROUTER_BASE_URL = os.getenv("ROUTER_BASE_URL", "http://localhost:20128/v1")
 ROUTER_MODEL = os.getenv("ROUTER_MODEL", "oc/mimo-v2.5-free")
 ROUTER_API_KEY = os.getenv("ROUTER_API_KEY", "dummy")
+# Free-tier 9router models tried (in order) when the primary is rate-limited
+# (429). They carry separate quotas, so a throttled primary hops to a fresh
+# model instead of dropping to demo mode. Last real fallback is Ollama (step 3).
+ROUTER_FALLBACK_MODELS = [m.strip() for m in
+    os.getenv("ROUTER_FALLBACK_MODELS",
+              "ag/gemini-3.5-flash-low,ag/gemini-3-flash,antigrav,cx/gpt-5.6-sol").split(",") if m.strip()]
 
 # --- Groq (OpenAI-compatible free tier) -------------------------------------
 # Lets JARVIS use a free Groq model so the Gemini quota isn't burned by JARVIS.

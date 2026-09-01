@@ -13,7 +13,7 @@ except ImportError:
 
 # Configuration
 from config import (GEMINI_API_KEY, GEMINI_MODEL, JARVIS_USE_9ROUTER, ROUTER_BASE_URL,
-                   ROUTER_MODEL, ROUTER_API_KEY, JARVIS_USE_GROQ, GROQ_API_KEY,
+                   ROUTER_MODEL, ROUTER_API_KEY, ROUTER_FALLBACK_MODELS, JARVIS_USE_GROQ, GROQ_API_KEY,
                    GROQ_BASE_URL, GROQ_MODEL, JARVIS_USE_CEREBRAS, CEREBRAS_API_KEY,
                    CEREBRAS_BASE_URL, CEREBRAS_MODEL, JARVIS_USE_OLLAMA,
                    JARVIS_PREFER_LOCAL, OLLAMA_BASE_URL, OLLAMA_MODEL,
@@ -1493,77 +1493,108 @@ class JarvisBrain:
                             "content": f"[{tr.get('name', 'tool')} result] {tr.get('content', '')}"
                         })
 
-        pending = []
-        for _ in range(10):
-            # P3: skip the ~2.7k-token tool schema (and the tool-decision step) for
-            # simple intents that can never need a tool. Tiered max_tokens too.
-            needs_tool = classify_intent(user_input) not in SIMPLE_INTENTS
-            tools_arg = otools if needs_tool else None
-            tool_choice_arg = "auto" if needs_tool else None
-            max_tokens_arg = 256 if not needs_tool else 1024
-            response = client.chat.completions.create(
-                model=ROUTER_MODEL,
-                messages=messages,
-                tools=tools_arg,
-                tool_choice=tool_choice_arg,
-                max_tokens=max_tokens_arg,
-                timeout=45,
-            )
+        # Retry across free-tier 9router models so a rate-limited (429) primary
+        # hops to a fresh model instead of dropping to demo mode. Separate
+        # quotas mean throttling is usually per-model, not per-account.
+        class _RateLimited(Exception):
+            pass
 
-            if not response.choices:
-                return None
-            message = response.choices[0].message
+        model_list = [ROUTER_MODEL] + [m for m in ROUTER_FALLBACK_MODELS if m != ROUTER_MODEL]
+        last_err = None
+        for model in model_list:
+            try:
+                pending = []
+                for _ in range(10):
+                    # P3: skip the ~2.7k-token tool schema (and the tool-decision step) for
+                    # simple intents that can never need a tool. Tiered max_tokens too.
+                    needs_tool = classify_intent(user_input) not in SIMPLE_INTENTS
+                    tools_arg = otools if needs_tool else None
+                    tool_choice_arg = "auto" if needs_tool else None
+                    max_tokens_arg = 256 if not needs_tool else 1024
+                    try:
+                        response = client.chat.completions.create(
+                            model=model,
+                            messages=messages,
+                            tools=tools_arg,
+                            tool_choice=tool_choice_arg,
+                            max_tokens=max_tokens_arg,
+                            timeout=45,
+                        )
+                    except Exception as ce:
+                        cs = str(ce)
+                        if "429" in cs or "rate" in cs.lower() or "quota" in cs.lower():
+                            print(f"[JARVIS] 9router model {model} rate-limited; trying next...")
+                            time.sleep(2)
+                            raise _RateLimited(cs)
+                        raise
 
-            if message.tool_calls:
-                assistant_block = {
-                    "role": "assistant",
-                    "content": message.content or "",
-                    "tool_calls": [{
-                        "id": tc.id,
-                        "name": tc.function.name,
-                        "arguments": _safe_json(tc.function.arguments)
-                    } for tc in message.tool_calls]
-                }
-                pending.append(assistant_block)
-                messages.append({
-                    "role": "assistant",
-                    "content": message.content or "",
-                    "tool_calls": [{
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {"name": tc.function.name, "arguments": tc.function.arguments}
-                    } for tc in message.tool_calls]
-                })
+                    if not response.choices:
+                        break
+                    message = response.choices[0].message
 
-                for tc in message.tool_calls:
-                    # Expose the progress callback to tools so they can stream
-                    # mid-task status while think() is still running.
-                    import tools as _tools_mod
-                    _tools_mod.set_progress_cb(_progress_local.cb)
-                    result = execute_tool(tc.function.name, _safe_json(tc.function.arguments),
-                                          user_input)
-                    pending.append({
-                        "role": "tool",
-                        "content": [{
-                            "name": tc.function.name,
-                            "content": result,
-                            "tool_call_id": tc.id
-                        }]
-                    })
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "content": result
-                    })
+                    if message.tool_calls:
+                        assistant_block = {
+                            "role": "assistant",
+                            "content": message.content or "",
+                            "tool_calls": [{
+                                "id": tc.id,
+                                "name": tc.function.name,
+                                "arguments": _safe_json(tc.function.arguments)
+                            } for tc in message.tool_calls]
+                        }
+                        pending.append(assistant_block)
+                        messages.append({
+                            "role": "assistant",
+                            "content": message.content or "",
+                            "tool_calls": [{
+                                "id": tc.id,
+                                "type": "function",
+                                "function": {"name": tc.function.name, "arguments": tc.function.arguments}
+                            } for tc in message.tool_calls]
+                        })
+
+                        for tc in message.tool_calls:
+                            # Expose the progress callback to tools so they can stream
+                            # mid-task status while think() is still running.
+                            import tools as _tools_mod
+                            _tools_mod.set_progress_cb(_progress_local.cb)
+                            result = execute_tool(tc.function.name, _safe_json(tc.function.arguments),
+                                                  user_input)
+                            pending.append({
+                                "role": "tool",
+                                "content": [{
+                                    "name": tc.function.name,
+                                    "content": result,
+                                    "tool_call_id": tc.id
+                                }]
+                            })
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": tc.id,
+                                "content": result
+                            })
+                        continue
+
+                    text = _clean_for_speech((message.content or "").strip())
+                    if not text:
+                        break
+                    pending.append({"role": "assistant", "content": text})
+                    self.conversation.extend(pending)
+                    return text
+
+                # inner loop ended with no answer from this model -> try next model
+                last_err = last_err or "no answer"
                 continue
-
-            text = _clean_for_speech((message.content or "").strip())
-            if not text:
-                return None
-            pending.append({"role": "assistant", "content": text})
-            self.conversation.extend(pending)
-            return text
-
+            except _RateLimited:
+                last_err = "rate-limited"
+                continue
+            except Exception as e:
+                last_err = str(e)
+                continue
+        # All 9router models failed (rate-limited or errored) -> caller falls
+        # back to Ollama, then demo mode only if Ollama also fails.
+        if last_err:
+            raise RuntimeError(f"all 9router models failed: {last_err}")
         return None
 
     def _preload_ollama(self):
