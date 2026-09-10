@@ -215,15 +215,22 @@ def default_report_path(topic: str) -> str:
 _SITE_WORDS = (r"youtube|facebook|gmail|google|reddit|twitter|github|netflix|"
                r"instagram|linkedin|chatgpt|amazon|wikipedia|tiktok|messenger|"
                r"shopee|lazada|hackernews|stackoverflow")
+# Installed-app names that mark a request as app_reference, not a website.
+_APP_WORDS = (r"ffmpeg|blender|vlc|photoshop|premiere|obs|gimp|audacity|"
+              r"docker|node|python|git|npm|code|notepad|chrome|brave|edge|firefox|"
+              r"spotify|discord|telegram|libreoffice|excel|word|powerpoint|"
+              r"7z|winrar")
 _OPEN_SITE_RE = re.compile(
-    r"^(?:please\s+|jarvis[,!]?\s+)*(?:visit|go\s+to|take\s+me\s+to|open|launch)\s+"
+    r"^(?:please\s+|jarvis[,!]?\s+)*"
+    r"(?P<verb>visit|go\s+to|take\s+me\s+to|open|launch)\s+"
     r"(?:the\s+|my\s+)?(?P<target>.+?)"
     r"(?:\s+(?:on|in|with)\s+(?:the\s+)?(?:chrome|brave|edge|firefox|browser)"
     r"(?:\s+browser)?)?\s*[.!?]*$", re.I)
 _SITE_LIKE_RE = re.compile(
     r"^(?:https?://\S+|www\.\S+|"
-    r"[\w-]+(?:\.[\w-]+)*\.(?:com|org|net|io|dev|edu|gov|ph|co|tv|me|ai|app|gg|info)"
+    r"[\w-]+(?:\.[\w-]+)*\.(?:com|org|net|io|dev|edu|gov|ph|co|cc|tv|me|ai|app|gg|info)"
     r"(?:/\S*)?|(?:" + _SITE_WORDS + r")(?:\s+(?:site|website))?)$", re.I)
+_CHAINED_RE = re.compile(r"\b(?:and|then|also)\b|[,;]", re.I)
 
 
 def parse_open_site(text: str):
@@ -232,12 +239,33 @@ def parse_open_site(text: str):
     if not m:
         return None
     target = m.group("target").strip()
-    return target if _SITE_LIKE_RE.match(target) else None
+    if _SITE_LIKE_RE.match(target):
+        return target
+    # "visit HD movies on Brave": a visit / go-to / take-me-to with a bare
+    # multi-word name is still a site request, even with no dot. open_site
+    # answers honestly when nothing matches; Hermes would burn 300s on it.
+    # "open X" stays app-first, and chained asks or app names are left alone.
+    n_words = len(target.split())
+    if not m.group("verb").lower().startswith("open") and \
+            not m.group("verb").lower().startswith("launch") and \
+            2 <= n_words <= 5 and not _CHAINED_RE.search(target) and \
+            not re.search(r"\b(?:" + _APP_WORDS + r")\b", target, re.I):
+        return target
+    return None
+
+
+def _strip_correction(text: str) -> str:
+    """'I mean visit X' -> 'visit X' (tools.strip_correction_prefix)."""
+    try:
+        import tools
+        return tools.strip_correction_prefix(text)
+    except Exception:
+        return text or ""
 
 
 def classify_intent(text: str) -> str:
     """Return a coarse intent label for fast-path / tool-gating decisions."""
-    t = (text or "").strip().lower()
+    t = _strip_correction(text).strip().lower()
     if not t:
         return "general"
     # math: a string that is essentially an arithmetic expression
@@ -420,10 +448,7 @@ def classify_intent(text: str) -> str:
     # known capability name. These route to the Hermes harness (which resolves
     # the app from the capability manifest) instead of the cloud brain.
     if re.search(r"\b(use|open|launch|run|with|via|in|on)\s+[\w .\-]+", t) and \
-       re.search(r"\b(ffmpeg|blender|vlc|photoshop|premiere|obs|gimp|audacity|"
-                 r"docker|node|python|git|npm|code|notepad|chrome|brave|edge|firefox|"
-                 r"spotify|discord|telegram|libreoffice|excel|word|powerpoint|"
-                 r"7z|winrar)\b", t):
+       re.search(r"\b(" + _APP_WORDS + r")\b", t):
         return "app_reference"
     if re.search(r"\b(use|open|launch|run|with|via|in)\s+\w+", t) and \
        re.search(r"\b(app|application|software|tool|program)\b", t):
@@ -1297,6 +1322,19 @@ class JarvisBrain:
         self._last_turn_ts = time.time()
         self.conversation.append({"role": "user", "content": user_input})
         self._cap_conversation()
+
+        # Correction prefix: "I mean visit X" routes exactly like "visit X".
+        # The conversation keeps the original wording; only routing sees the
+        # stripped form. Search commands keep the marker — parse_search_command
+        # reads it to replace the previous query instead of starting a new one.
+        try:
+            import tools as _tc
+            _routed = _tc.strip_correction_prefix(user_input)
+            if _routed != user_input and not _tc._SEARCH_START.match(_routed):
+                print(f"[JARVIS] correction prefix stripped: {user_input!r} -> {_routed!r}")
+                user_input = _routed
+        except Exception:
+            pass
 
         # Phase 23: passive preference capture — quietly remember stated preferences
         # as a NON-BLOCKING side-effect. Pure side-effect: never alters the answer.

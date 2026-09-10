@@ -928,10 +928,79 @@ def web_browse(url: str, mode: str = "open", query: str = "") -> str:
 
 # ---- Web registry (Phase 8): named site resolution ------------------------
 
+# A bare host the user actually spoke as a URL: text on both sides of every
+# dot and a TLD-like suffix, or a www. prefix. "holly." (sentence period) and
+# "holly" are site NAMES, never https://holly.
+_BARE_HOST_RE = re.compile(
+    r"(?:www\.[\w-]+(?:\.[\w-]+)*|[\w-]+(?:\.[\w-]+)*\.[a-z]{2,24})"
+    r"(?::\d+)?(?:/\S*)?", re.I)
+_RULE_URL_RE = re.compile(
+    r"https?://[^\s'\"<>]+|(?:www\.)?[\w-]+(?:\.[\w-]+)*\.[a-z]{2,24}"
+    r"(?:/[^\s'\"<>]*)?", re.I)
+_RULE_VERB_RE = re.compile(
+    r"^(?:please\s+|jarvis\s+)*(?:visit|go\s+to|take\s+me\s+to|open|launch)\s+"
+    r"(?:the\s+|my\s+)?", re.I)
+
+
+def _norm_phrase(s: str) -> str:
+    # "visit hd movies on brave" and a spoken "HD movies" (browser already
+    # stripped by the caller) must normalize to the same "hd movies".
+    s = re.sub(r"[^\w.\s-]", " ", (s or "").lower())
+    s = re.sub(r"\s+", " ", s).strip(" .")
+    s = re.sub(r"\s+(?:on|in|with)\s+(?:the\s+)?(?:chrome|brave|edge|firefox|browser)"
+               r"(?:\s+browser)?$", "", s)
+    s = re.sub(r"\s+(?:site|website)$", "", s)
+    return _RULE_VERB_RE.sub("", s).strip()
+
+
+def _rule_site_url(target: str):
+    """URL a user rule aliases to a spoken site name, or None.
+
+    A rule like source_phrase 'visit hd movies' / intent 'it will visit
+    hollyhdmovies.cc site' lives on an APP entry, so rules_engine.check never
+    sees it for an unresolved site. Phrase-substring match only: the spoken
+    target equals or contains the rule's phrase, or names one of the domains
+    in its intent. No NLP; no URL in the rule text means no alias.
+    """
+    t = _norm_phrase(target)
+    if len(t) < 3:
+        return None
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               "app_registry.json"), encoding="utf-8") as f:
+            apps = json.load(f).get("apps", {})
+    except Exception:
+        return None
+    squashed = t.replace(" ", "")
+    for entry in apps.values():
+        if not isinstance(entry, dict) or entry.get("enabled") is False:
+            continue
+        for rule in entry.get("compiled_rules") or []:
+            phrase = _norm_phrase(rule.get("source_phrase") or "")
+            text = f"{rule.get('intent') or ''} {rule.get('source_phrase') or ''}"
+            urls = [u.rstrip(".,;:!?)") for u in _RULE_URL_RE.findall(text)]
+            if not urls:
+                continue
+            hit = bool(phrase) and (t == phrase or re.search(
+                r"\b" + re.escape(phrase) + r"\b", t))
+            if not hit:
+                hit = any(re.search(r"\b" + re.escape(squashed) + r"\b", u, re.I)
+                          for u in urls)
+            if hit:
+                return urls[0] if "://" in urls[0] else "https://" + urls[0]
+    return None
+
+
 def open_site(name: str, url: str = None, _rule_hops: int = 0) -> str:
     """Resolve a spoken site name against web_registry.json and open it in
     the JARVIS debug-Chrome. Falls back to treating the input as a URL."""
     import web_registry as wr
+    # A spoken sentence ends in a period; it is not part of the name.
+    name = (name or "").strip().rstrip(".!?").strip()
+    if url is None and not _exact_site_key(name):
+        alias = _rule_site_url(name)
+        if alias:
+            return __import__("browser_agent").open_site(alias, name=name)
     key = wr.resolve_site(name) if url is None else None
     if key:
         site = wr.get_site(key)
@@ -953,8 +1022,8 @@ def open_site(name: str, url: str = None, _rule_hops: int = 0) -> str:
         if gate.get("warning"):
             opened = f"{opened}\n{gate['warning']}"
         return opened
-    raw = (url or name or "").strip()
-    if "://" not in raw and "." in raw:
+    raw = (url or name or "").strip().rstrip(".!?").strip()
+    if "://" not in raw and _BARE_HOST_RE.fullmatch(raw):
         raw = "https://" + raw
     if "://" in raw:
         return __import__("browser_agent").open_site(raw, name=name)
@@ -990,7 +1059,24 @@ def search_sessions(query: str, limit: int = 10) -> str:
 
 _SEARCH_START = re.compile(
     r"^(search|look ?up|find|google)\b[,:]?\s*", re.I)
-_CORRECTION_START = re.compile(r"^i mean\b|^actually\b|^no[, ]+", re.I)
+_CORRECTION_START = re.compile(
+    r"^(?:(?:no|oh|sorry|oops)[,.!]?\s+)*(?:i\s+meant?|actually)\b[,.:!]?\s*"
+    r"|^no[, ]+|^sorry[,.!]?\s+", re.I)
+
+
+def strip_correction_prefix(text: str) -> str:
+    """'I mean visit X' / 'no, I meant X' / 'sorry, X' -> the request itself.
+
+    Stops short of stripping everything: a bare 'sorry' or 'I mean' is left
+    as spoken, since there is no request behind it to route.
+    """
+    out = (text or "").strip()
+    while True:
+        m = _CORRECTION_START.match(out)
+        rest = out[m.end():].strip(" ,") if m else ""
+        if not rest:
+            return out
+        out = rest
 _TAIL_TARGET = re.compile(r"\b(?:inside|in|on|at)\s+([a-z0-9 .'-]{1,24}?)\s*$", re.I)
 
 # Spoken names for AI chats. History-searchable ones first.
@@ -1147,6 +1233,12 @@ def resolve_open_target(text: str, force: str | None = None):
         if t.endswith(suffix):
             t = t[: -len(suffix)].strip()
             force = force or forced
+
+    # A user rule that aliases this phrase to a URL ("visit hd movies" ->
+    # hollyhdmovies.cc) outranks the fuzzy registry match; open_site() takes
+    # the same alias when handed the name.
+    if force != "app" and _rule_site_url(t):
+        return ("site", t)
 
     import web_registry as wr
     site_key = wr.resolve_site(t)
@@ -2824,9 +2916,11 @@ def delegate(
     # ---- No-target guard: an open/visit that names nothing -----------------
     # "visit the..." went to Hermes as a 15-turn / 300s job with nothing to
     # act on. Ask instead — a bare open-site request never leaves JARVIS.
+    # "I mean visit X" is matched as "visit X"; cw logs keep the spoken text.
+    _otask = strip_correction_prefix(task)
     _open_m = re.match(r"^\W*(?:(?:please|jarvis|hey)\b\W*)*"
                        r"(open|launch|go\s+to|goto|visit|browse|take\s+me\s+to)\b(.*)$",
-                       task, flags=re.I | re.S)
+                       _otask, flags=re.I | re.S)
     if _open_m:
         _rest = re.sub(r"\bfor\s+me\b", " ", _open_m.group(2).lower())
         _words = re.findall(r"[a-z0-9]+(?:[.'][a-z0-9]+)*", _rest)
@@ -2835,8 +2929,8 @@ def delegate(
             return "Which site or app should I open?"
 
     # ---- Phase 8 fast path: dual-registry "open X" -----------------------
-    if re.match(r"^(open|launch|go to|goto|visit)\b", task.lower()):
-        stripped = re.sub(r"^(open|launch|go to|goto|visit)\s+", "", task, flags=re.I)
+    if re.match(r"^(open|launch|go to|goto|visit)\b", _otask.lower()):
+        stripped = re.sub(r"^(open|launch|go to|goto|visit)\s+", "", _otask, flags=re.I)
         # "visit X on Chrome": the browser is where to open it, not what.
         stripped = re.sub(r"\s+(?:on|in)\s+(?:the\s+)?(?:chrome|brave|edge|firefox)"
                           r"(?:\s+browser)?\s*[.!?]*$", "", stripped, flags=re.I)
@@ -2859,7 +2953,7 @@ def delegate(
             return result
         # A visit always means a website: an unresolved one gets open_site's
         # registry-miss answer (or opens a raw URL), never a Hermes job.
-        if task.lower().startswith("visit"):
+        if _otask.lower().startswith("visit"):
             result = open_site(re.sub(r"^(?:the|my)\s+", "", stripped, flags=re.I))
             if cw is not None:
                 cw.append(task, "command", tool="open_site", result=result)
