@@ -304,6 +304,18 @@ if os.path.exists(PANEL):
     check('class="v-question question"' in html, "panel renders the clarification question")
     check('class="v-answer"' in html, "panel has a clarification answer input")
     check(">Confirm<" in html, "panel offers a Confirm button")
+    # Redesign: rules live in a slide-over drawer, feedback goes through toasts
+    check('id="drawer"' in html and 'role="dialog"' in html and 'aria-modal="true"' in html,
+          "rule configuration opens in a modal drawer")
+    check('class="card"' not in html and "toggleDetails" not in html,
+          "the in-card accordion is gone")
+    for f in ("all", "app", "website", "capability"):
+        check('data-filter="%s"' % f in html, "panel has the %s type filter" % f)
+    check('id="toasts"' in html and 'aria-live="polite"' in html, "panel has a live toast region")
+    check("alert(" not in html, "panel reports results with toasts, not alert()")
+    check('onclick="' not in html, "panel wires events without inline handlers")
+    for cat in ("dev", "media", "browser", "office", "util", "website", "capability"):
+        check(re.search(r"\b%s:\s*'<" % cat, html) is not None, "panel has an icon for %s" % cat)
 
 
 if missing:
