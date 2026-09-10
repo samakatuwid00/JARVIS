@@ -1263,6 +1263,8 @@ def parse_search_command(text: str):
     returns it verbatim instead of searching for nothing.
     """
     raw = strip_fillers(text)
+    # "search movies, Jarvis." — the name spoken last is not part of the query.
+    raw = _TRAILING_VOCATIVE_RE.sub("", raw).strip() or raw
     # A correction marker may precede the verb ("I mean search ...").
     m_corr = _CORRECTION_START.match(raw)
     if m_corr:
@@ -1393,6 +1395,96 @@ def execute_search(parsed: dict) -> str:
     else:
         msg = f"Searching {q} on Google in {used}."
     return f"{msg}\n{note}" if note else msg
+
+
+# ---- Apps-panel action rules ----------------------------------------------
+# 'search a movie in brave' -> 'search hollymoviehd.cc for the name' is
+# compiled by rules_ai into an action; rules_engine.match_action finds it in
+# the spoken command (no model call) and run_rule_action carries it out. A
+# missing name is asked for once, and the next turn answers it.
+
+_PENDING_RULE_SLOT: dict = {}
+_RULE_SLOT_TTL = 120  # seconds the "Which movie, sir?" question stays open
+_RULE_CANCEL_RE = re.compile(
+    r"^(?:no|nope|cancel|never\s*mind|forget\s+it|stop)\b[\s.!]*$", re.I)
+_NEW_COMMAND_RE = re.compile(
+    r"^(?:search|find|look\s*up|open|launch|visit|go\s+to|play|close|stop|pause|"
+    r"what|who|how|why|when|where|which|can|could|is|are|do|does|tell|remember|"
+    r"rescan|volume|turn|set)\b", re.I)
+_SLOT_LEAD_RE = re.compile(r"^(?:it'?s|it\s+is|the\s+one\s+called|called|named)\s+", re.I)
+_TRAILING_VOCATIVE_RE = re.compile(r"[,\s]+(?:jarvis|sir)[.!?,\s]*$", re.I)
+
+
+def run_rule_action(rule: dict, owner: str, action: dict, slot: str = "") -> str:
+    """Carry out one runnable rule (search_site / open_site)."""
+    import time as _time
+    import rules_engine as _rules
+    t0 = _time.time()
+    slot = (slot or "").strip().strip(".,!?")
+    site = action.get("site") or _rules.bare_host(action.get("url") or "") or owner
+    browser = action.get("browser") or None
+    if action.get("type") == "search_site" and not slot:
+        _PENDING_RULE_SLOT.clear()
+        _PENDING_RULE_SLOT.update(rule=rule, owner=owner, action=action, ts=_time.time())
+        # slot "movie name" -> "Which movie, sir?"
+        label = re.sub(r"\s+name$", "", action.get("slot") or "") or "one"
+        return f"Which {label}, sir?"
+    url = _rules.build_action_url(action, slot)
+    if not url:
+        return f"[Error] The rule '{rule.get('source_phrase', '')}' has no website to open."
+    searching = (action.get("type") == "search_site"
+                 and "{query}" in (action.get("search_url") or ""))
+    opened = _open_url_in_browser(url, f"{site} search: {slot}" if searching else site,
+                                  browser, remember=not searching)
+    if opened.startswith("[Error]"):
+        out = opened
+    else:
+        note = opened.split("\n", 1)[1] if "\n" in opened else ""
+        used = "Chrome" if note else _browser_label(browser or "chrome")
+        if searching:
+            msg = f"Searching {site} for {slot} in {used}."
+        elif slot:
+            msg = (f"Opened {site} in {used} — look for {slot} there; this rule "
+                   f"has no search address yet.")
+        else:
+            msg = f"Opened {site} in {used}."
+        out = f"{msg}\n{note}" if note else msg
+    try:
+        import audit
+        audit.log_call("rules.action", {"rule": rule.get("rule_id"), "owner": owner,
+                                        "slot": slot, "url": url},
+                       _time.time() - t0, out)
+    except Exception:
+        pass
+    return out
+
+
+def try_rule_action(text: str):
+    """Answer a spoken command from the Apps-panel action rules, else None.
+
+    Also answers our own 'Which movie, sir?' follow-up: while that question is
+    open, a reply that is not a new command is the missing name.
+    """
+    import time as _time
+    t = _TRAILING_VOCATIVE_RE.sub("", strip_fillers(text or "")).strip()
+    if not t:
+        return None
+    pend = dict(_PENDING_RULE_SLOT)
+    _PENDING_RULE_SLOT.clear()
+    try:
+        import rules_engine as _rules
+        m = _rules.match_action(t)
+        if m:
+            return run_rule_action(m["rule"], m["owner"], m["action"], m["slot"])
+        if pend and _time.time() - pend.get("ts", 0) <= _RULE_SLOT_TTL:
+            if _RULE_CANCEL_RE.match(t):
+                return "Okay, cancelled."
+            if not _NEW_COMMAND_RE.match(t):
+                slot = _SLOT_LEAD_RE.sub("", t).strip(" .!?,")
+                return run_rule_action(pend["rule"], pend["owner"], pend["action"], slot)
+    except Exception as e:
+        print(f"[JARVIS] action-rule check failed: {e}")
+    return None
 
 
 def resolve_open_target(text: str, force: str | None = None,
@@ -3026,6 +3118,11 @@ def delegate(
     # Local routing reads the request without "now / okay / jarvis" lead-ins;
     # logs and non-local backends keep the spoken text.
     _rtask = strip_fillers(task)
+
+    # ---- Apps-panel action rules win over the generic search/open paths ----
+    _rule_out = try_rule_action(_rtask)
+    if _rule_out is not None:
+        return _rule_out
 
     # ---- Phase 9: conversation window (local fast path context) ----------
     try:

@@ -165,7 +165,7 @@ WHISPER_INITIAL_PROMPT = os.getenv(
     "JARVIS, Jarvis, Stark, DepEd, Department of Education, iRIMS-V, iRIMS, "
     "LRMIS, IRIMS, Haristay, Two Goals, Manila, Philippines, Philippine, "
     "dashboard, report, project, vault, compose, play music, YouTube Music, "
-    "Brave, analysis, system, online, open, search, weather."
+    "Brave, browser, movie, movies, analysis, system, online, open, search, weather."
 )
 
 # Wake Word

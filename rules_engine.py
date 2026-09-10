@@ -2,7 +2,9 @@
 # Stdlib only. Consumed by tools.open_application (Phase 3.5).
 import json
 import os
+import re
 import sys
+import urllib.parse
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 APP_REGISTRY_PATH = os.path.join(BASE_DIR, "app_registry.json")
@@ -232,6 +234,180 @@ def check(app_key, context=None):
         return {"action": "allow"}
     except Exception:
         return {"action": "allow"}
+
+
+# --------------------------------------------------------------------------
+# Action rules: find the user's runnable rule in a spoken command.
+# rules_ai compiles them at setup time; this side is deterministic (no model
+# call per command) so matching stays instant.
+# --------------------------------------------------------------------------
+
+_WORD_RE = re.compile(r"[A-Za-z0-9]+(?:['.-][A-Za-z0-9]+)*")
+# Words that carry no meaning for matching: articles, politeness, the
+# assistant's name, and "browser" ("in brave browser" == "in brave").
+# Prepositions too: "on brave" / "using brave" == "in brave".
+_MATCH_STOP = {"a", "an", "the", "some", "please", "jarvis", "sir", "hey", "ok",
+               "okay", "now", "browser", "me", "for", "my", "in", "on", "at",
+               "using", "with", "via", "into"}
+# Trimmed off the ends of the name the user filled in.
+_SLOT_EDGE = _MATCH_STOP | {"named", "called", "titled", "about", "in", "on", "at",
+                            "to", "and", "of"}
+_VERB_WORDS = {"search", "find", "look", "lookup", "open", "launch", "visit", "go",
+               "take", "play", "watch", "browse", "show"}
+_BROWSER_WORDS = {"brave", "chrome", "edge", "msedge", "firefox"}
+_ACTION_SEARCH_RE = re.compile(r"\b(search|find|look\s*up|look\s+for)\b", re.I)
+_ACTION_NEGATIVE_RE = re.compile(r"\b(never|block|don'?t|do\s+not|must\s+not)\b", re.I)
+_ACTION_DOMAIN_RE = re.compile(
+    r"https?://[^\s'\"<>]+|(?:www\.)?[\w-]+(?:\.[\w-]+)*\.[a-z]{2,24}(?:/[^\s'\"<>]*)?",
+    re.I)
+
+
+def bare_host(url_or_domain):
+    """'https://www.example.com/x' -> 'example.com'."""
+    h = re.sub(r"^https?://", "", (url_or_domain or "").strip().lower())
+    h = h.split("/", 1)[0].split("?", 1)[0].rstrip(".")
+    return h[4:] if h.startswith("www.") else h
+
+
+def _stem(word):
+    """Plural and singular share one key: movies/movie -> movie,
+    stories/story -> storie. Only ever compared with other stems."""
+    if len(word) > 3 and word.endswith("s") and not word.endswith("ss"):
+        word = word[:-1]
+    if len(word) > 3 and word.endswith("y"):
+        word = word[:-1] + "ie"
+    return word
+
+
+def _tokens(text):
+    """[(spoken word, match key or None)] — stop words get no key."""
+    out = []
+    for w in _WORD_RE.findall(text or ""):
+        low = w.lower()
+        out.append((w, None if low in _MATCH_STOP else _stem(low)))
+    return out
+
+
+def _match_trigger(trigger, toks):
+    """Match one trigger against the spoken tokens.
+
+    Every trigger word must appear, in order, and the command must open with
+    the trigger's verb. Words left over are the name the user filled in:
+    'search movies Dune in brave browser' vs 'search a movie in brave' ->
+    'Dune'. Later trigger words match from the right so a name containing
+    'in' ('coming in hot') stays whole.
+    """
+    t_keys = [k for _, k in _tokens(re.sub(r"\{[^}]*\}", " ", trigger or "")) if k]
+    if len(t_keys) < 2:
+        return None
+    first = next((i for i, (_, k) in enumerate(toks) if k), None)
+    if first is None or toks[first][1] != t_keys[0]:
+        return None
+    matched = {first}
+    j = len(toks) - 1
+    for key in reversed(t_keys[1:]):
+        while j > first and toks[j][1] != key:
+            j -= 1
+        if j <= first:
+            return None
+        matched.add(j)
+        j -= 1
+    words = [w for i, (w, _) in enumerate(toks) if i not in matched]
+    while words and words[0].lower() in _SLOT_EDGE:
+        words.pop(0)
+    while words and words[-1].lower() in _SLOT_EDGE:
+        words.pop()
+    return {"slot": " ".join(words), "score": len(t_keys)}
+
+
+def _slot_name(phrase):
+    """'search a movie in brave' -> 'movie name' (spoken form, not the stem)."""
+    for word, k in _tokens(phrase):
+        low = word.lower()
+        if k and low not in _VERB_WORDS and low not in _BROWSER_WORDS \
+                and low not in ("in", "on", "at"):
+            if len(low) > 3 and low.endswith("s") and not low.endswith("ss"):
+                low = low[:-1]
+            return f"{low} name"
+    return "name"
+
+
+def action_of(rule, owner, entry=None):
+    """The runnable action of a rule, or None.
+
+    Structured rules (rules_ai) carry an `action`. An older plain rule whose
+    words name a site ('it will search a movie on hollymoviehd.cc') still
+    runs: its action is derived here, with a guessed search address.
+    """
+    if not isinstance(rule, dict):
+        return None
+    is_browser = (entry or {}).get("category") == "browser"
+    act = rule.get("action")
+    if isinstance(act, dict):
+        if act.get("type") not in ("search_site", "open_site"):
+            return None
+        out = dict(act)
+        if not out.get("url") and out.get("site"):
+            out["url"] = "https://" + out["site"]
+        if not out.get("url"):
+            return None
+        if not out.get("browser") and is_browser:
+            out["browser"] = owner
+        return out
+    text = f"{rule.get('intent') or ''} {rule.get('source_phrase') or ''}"
+    if (rule.get("enforcement") or "soft").lower() not in ("soft", "action") \
+            or _ACTION_NEGATIVE_RE.search(text):
+        return None
+    hosts = [bare_host(u.rstrip(".,;:!?)")) for u in _ACTION_DOMAIN_RE.findall(text)]
+    if not hosts:
+        return None
+    site = hosts[0]
+    out = {"type": "search_site" if _ACTION_SEARCH_RE.search(text) else "open_site",
+           "site": site, "url": "https://" + site,
+           "browser": owner if is_browser else None}
+    if out["type"] == "search_site":
+        out.update(search_url=f"https://{site}/?s={{query}}", search_url_guessed=True,
+                   slot=_slot_name(rule.get("source_phrase") or ""))
+    return out
+
+
+def match_action(utterance, apps=None):
+    """Best runnable rule for a spoken command, or None.
+
+    Returns {"rule", "owner", "action", "slot", "trigger", "score"}; the most
+    specific trigger (most words) wins. Disabled apps are skipped.
+    """
+    if apps is None:
+        try:
+            apps = _load_json(APP_REGISTRY_PATH).get("apps") or {}
+        except Exception:
+            return None
+    toks = _tokens(utterance)
+    if not toks:
+        return None
+    best = None
+    for owner, entry in apps.items():
+        if not isinstance(entry, dict) or entry.get("enabled") is False:
+            continue
+        for rule in entry.get("compiled_rules") or []:
+            action = action_of(rule, owner, entry)
+            if not action:
+                continue
+            for trig in [rule.get("source_phrase")] + list(rule.get("triggers") or []):
+                if not isinstance(trig, str) or not trig.strip():
+                    continue
+                m = _match_trigger(trig, toks)
+                if m and (best is None or m["score"] > best["score"]):
+                    best = dict(m, rule=rule, owner=owner, action=action, trigger=trig)
+    return best
+
+
+def build_action_url(action, slot=""):
+    """The address a runnable rule opens: its search page for `slot`, or the site."""
+    search_url = action.get("search_url") or ""
+    if action.get("type") == "search_site" and slot and "{query}" in search_url:
+        return search_url.replace("{query}", urllib.parse.quote_plus(slot))
+    return action.get("url") or ""
 
 
 if __name__ == "__main__":

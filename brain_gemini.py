@@ -1338,6 +1338,21 @@ class JarvisBrain:
         except Exception:
             pass
 
+        # Apps-panel action rules ("search movies Dune in brave" -> the rule's
+        # site, in the rule's browser). Deterministic, no model call; also
+        # answers our own "Which movie, sir?" follow-up before any other path
+        # can mistake the bare name for a new request.
+        try:
+            import tools as _tr
+            _rule_out = _tr.try_rule_action(user_input)
+        except Exception:
+            _rule_out = None
+        if _rule_out is not None:
+            self.conversation.append({"role": "assistant", "content": _rule_out})
+            self.last_backend = "instant"
+            self.last_stats = {"backend": "instant", "intent": "rule_action"}
+            return _rule_out
+
         # Phase 23: passive preference capture — quietly remember stated preferences
         # as a NON-BLOCKING side-effect. Pure side-effect: never alters the answer.
         try:

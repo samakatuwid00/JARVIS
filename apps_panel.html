@@ -461,7 +461,7 @@
       <section class="sec" id="sec-voice">
         <div class="sec-h">
           <h3>Voice Rule Setup</h3>
-          <span class="sub">Say it plainly. JARVIS asks when something is unclear.</span>
+          <span class="sub">Type a command, then tell JARVIS what it should do. JARVIS works out the rule with AI.</span>
         </div>
         <div class="thread" id="v-thread"></div>
         <div class="ask" id="v-clarify" hidden>
@@ -473,10 +473,14 @@
             <button class="btn btn-sm btn-quiet" id="v-cancel">Cancel</button>
             <button class="btn btn-sm btn-primary" id="v-confirm">Confirm</button>
           </div>
+          <div class="composer" id="v-testrow" hidden>
+            <input class="v-sample" placeholder="Try it with a name, e.g. Dune" />
+            <button class="btn btn-sm" id="v-test">Test</button>
+          </div>
         </div>
         <div class="composer" id="v-compose">
           <span id="mic-ico"></span>
-          <input class="v-phrase" placeholder="e.g. no explicit stuff and keep it quiet" />
+          <input class="v-phrase" placeholder="e.g. search movies in brave browser" />
           <button class="btn btn-sm btn-primary" id="v-begin">Propose Rules</button>
         </div>
       </section>
@@ -488,8 +492,8 @@
       </section>
 
       <details class="sec" id="sec-drafts">
-        <summary><h3>Rule drafts</h3><span class="sub">One phrase per line</span><span id="drafts-chev"></span></summary>
-        <textarea class="drafts" id="drafts" spellcheck="false" placeholder="never play explicit tracks even if I ask"></textarea>
+        <summary><h3>Rule drafts</h3><span class="sub">One rule per line</span><span id="drafts-chev"></span></summary>
+        <textarea class="drafts" id="drafts" spellcheck="false" placeholder="search movies in brave -> search hollymoviehd.cc for the name&#10;never play explicit tracks even if I ask"></textarea>
         <div class="btn-row">
           <button class="btn btn-sm" id="d-save">Save rules</button>
           <button class="btn btn-sm btn-quiet" id="d-compile">Compile with JARVIS</button>
@@ -965,7 +969,8 @@ function renderCurrentRules(rules) {
       <span class="tag">${escapeHtml((r.scope || "all_sessions").replace(/_/g, " "))}</span>
       ${r.rule_id ? `<button class="rule-x" data-rid="${escapeHtml(r.rule_id)}" aria-label="Remove rule ${escapeHtml(r.rule_id)}" title="Remove rule">${svg("close", 13)}</button>` : ""}
     </div>
-    ${r.intent ? `<div class="rule-intent">${escapeHtml(r.intent)}</div>` : ""}
+    ${(r.summary || r.intent) ? `<div class="rule-intent">${escapeHtml(r.summary || r.intent)}</div>` : ""}
+    ${(r.triggers || []).length > 1 ? `<div class="rule-intent muted">Also works for: ${escapeHtml(r.triggers.slice(1).join(" · "))}</div>` : ""}
     ${r.adapter_check ? `<code class="rule-check">${escapeHtml(r.adapter_check)}</code>` : ""}
   </div>`).join("");
 }
@@ -1005,9 +1010,9 @@ async function compileRules(key, btn) {
   DR.proposed = d.proposed || [];
   const prop = $("#proposal");
   prop.querySelector(".prop-body").textContent = d.proposal_markdown || "(no proposal)";
-  const q = d.questions || [];
+  const q = d.notes || d.questions || [];
   prop.querySelector(".prop-q").textContent = q.length
-    ? "JARVIS assumed: " + q.join(" · ") + " — edit the drafts if that's wrong."
+    ? q.join(" · ") + " — edit the drafts if that's wrong."
     : "";
   prop.hidden = false;
   toast("Proposal ready — review before accepting");
@@ -1076,14 +1081,17 @@ function voiceStep(step) {
       : "Proposal ready";
     const answer = $(".v-answer");
     answer.value = "";
-    answer.placeholder = clarify ? "Your answer…" : "Optional — or just Confirm";
+    answer.placeholder = clarify ? "Your answer…" : "Save as is — or type what to change";
+    $("#v-confirm").textContent = clarify ? "Send" : "Save";
+    $("#v-testrow").hidden = !(step.status === "proposal" && step.testable);
     showAsk(true);
     answer.focus({ preventScroll: true });
   } else if (step.status === "committed") {
     DR.voiceRuleId = "";
     DR.voiceStatus = "";
     showAsk(false);
-    say("jarvis", `Done — ${step.count} rule${step.count === 1 ? "" : "s"} now active.`, "ok");
+    const total = step.total || step.count;
+    say("jarvis", `Saved. ${total} rule${total === 1 ? "" : "s"} active for this app.`, "ok");
     toast("Rules saved");
   } else if (step.status === "cancelled") {
     DR.voiceRuleId = "";
@@ -1127,6 +1135,20 @@ async function voiceClarify(key, btn, answerOverride) {
   say("user", answer);
   voiceStep(d);
   if (d.status === "committed") await refreshRules(key);
+}
+
+// Runs the proposed rule once for real (opens the browser), before saving.
+async function voiceTest(key, btn) {
+  const sample = ($(".v-sample").value || "").trim();
+  setBusy(btn, true);
+  let res = null, d = {};
+  try {
+    res = await fetch("/apps/rules/test", post({ app_key: key, sample }));
+    d = await res.json().catch(() => ({}));
+  } catch (e) {}
+  setBusy(btn, false);
+  if (!res || !res.ok) { toast(d.error || "Test failed", "err"); return; }
+  say("jarvis", "Test: " + (d.result || "done") + (d.url ? " — " + d.url : ""), d.ok ? "ok" : "");
 }
 
 async function refreshRules(key) {
@@ -1213,6 +1235,8 @@ function init() {
   $("#v-begin").addEventListener("click", e => voiceBegin(DR.key, e.currentTarget));
   $("#v-confirm").addEventListener("click", e => voiceClarify(DR.key, e.currentTarget));
   $("#v-cancel").addEventListener("click", e => voiceClarify(DR.key, e.currentTarget, "cancel"));
+  $("#v-test").addEventListener("click", e => voiceTest(DR.key, e.currentTarget));
+  $(".v-sample").addEventListener("keydown", e => { if (e.key === "Enter") $("#v-test").click(); });
   $("#d-save").addEventListener("click", e => saveRules(DR.key, e.currentTarget));
   $("#d-compile").addEventListener("click", e => compileRules(DR.key, e.currentTarget));
   $("#d-accept").addEventListener("click", e => acceptProposal(DR.key, e.currentTarget));

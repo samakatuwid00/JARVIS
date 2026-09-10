@@ -24,15 +24,21 @@ no per-command / runtime hook.
 import json
 import os
 
+import rules_ai
 import rules_compiler as rc
 
 CONFIG_TIME_ONLY = True  # setup-time only, never per spoken command.
 
 # app_key -> {"phrase": str, "candidate_rules": [...], "answers": {rule_id: str}}
+# Command rules ("search movies in brave") add "mode": "action", "stage",
+# "action_text", "feedback" and "proposed_rule".
 _PENDING = {}
 
 _CONFIRM_IDS = {"", "confirm", "*", "all"}
 _NEGATIVE = {"no", "nope", "cancel", "stop", "nevermind", "never mind", "forget it", "abort"}
+_YES = {"yes", "y", "yep", "yeah", "yup", "sure", "ok", "okay", "confirm", "save",
+        "accept", "do it", "go ahead", "looks good", "correct", "right"}
+ACTION_Q_ID = "__action__"
 
 
 # ------------------------------------------------------------------ helpers --
@@ -104,6 +110,44 @@ def _rule_line(idx, r):
     return " ".join(bits)
 
 
+def _app_entry(app_key, registry_path=None):
+    return (_load_registry(registry_path).get("apps") or {}).get(app_key) or {}
+
+
+def _ai_step(app_key, pending, registry_path=None):
+    """Compile the pending command rule with AI and return the next step."""
+    rule, notes = rules_ai.compile_rule(
+        app_key, pending["phrase"], pending.get("action_text", ""),
+        feedback=pending.get("feedback", ""), entry=_app_entry(app_key, registry_path))
+    if rule is None:
+        # No model answered and nothing names a site: keep the plain rule.
+        rule = _escalate([{
+            "rule_id": rc._slug(pending["phrase"]),
+            "intent": pending.get("action_text") or pending["phrase"],
+            "enforcement": "soft", "adapter_check": "", "scope": "all_sessions",
+            "source_phrase": pending["phrase"], "needs_clarification": False,
+            "clarification_question": None}])[0]
+    pending["proposed_rule"] = rule
+    if rule.get("needs_clarification"):
+        pending["stage"] = "need_detail"
+        return {"status": "clarify", "key": app_key, "rule_id": ACTION_Q_ID,
+                "question": rule["clarification_question"], "remaining": 1,
+                "notes": notes}
+    pending["stage"] = "proposal"
+    summary = rule.get("summary") or rule.get("intent", "")
+    return {
+        "status": "proposal",
+        "key": app_key,
+        "rule_id": "",
+        "proposed": [rule],
+        "summary": summary,
+        "proposal": rules_ai.propose_markdown(app_key, [rule], notes),
+        "question": f"{summary} Save it? Or tell me what to change.",
+        "notes": notes,
+        "testable": (rule.get("action") or {}).get("type") in rules_ai.RUNNABLE_TYPES,
+    }
+
+
 def pending_setup(app_key):
     """The in-flight setup for an app, or None. Exposed for tests / the HUD."""
     return _PENDING.get(app_key)
@@ -129,6 +173,21 @@ def begin_rule_setup(app_key, phrase, registry_path=None):
         return {"status": "error", "error": "missing app_key"}
     if not phrase:
         return {"status": "error", "error": "missing phrase"}
+
+    # A command ("search movies in brave") is one rule, never split on
+    # "and"/commas: ask what it should do, then compile it with AI.
+    # Preferences ("no explicit stuff and keep it quiet") keep the clause flow.
+    trig, act = rules_ai.split_draft(phrase)
+    if act or rules_ai.is_command_phrase(trig):
+        pending = {"mode": "action", "phrase": trig, "action_text": act,
+                   "feedback": "", "stage": None if act else "need_action",
+                   "candidate_rules": [], "answers": {}}
+        _PENDING[app_key] = pending
+        if act:
+            return _ai_step(app_key, pending, registry_path)
+        return {"status": "clarify", "key": app_key, "rule_id": ACTION_Q_ID,
+                "question": f'What should JARVIS do when you say "{trig}"?',
+                "remaining": 1, "candidate_rules": []}
 
     parsed = rc.parse_scaffold(app_key, phrase)
     pending = {
@@ -183,6 +242,24 @@ def handle_clarification(app_key, rule_id, answer, registry_path=None):
         _PENDING.pop(app_key, None)
         return {"status": "cancelled", "key": app_key}
 
+    if pending.get("mode") == "action":
+        if pending.get("stage") == "need_action":
+            pending["action_text"] = answer
+            return _ai_step(app_key, pending, registry_path)
+        if pending.get("stage") == "proposal" and answer.lower().strip(" .!") in _YES:
+            rule = pending["proposed_rule"]
+            rc.commit_rules(app_key, [rule], _registry_path(registry_path),
+                            accept=True, merge=True)
+            _PENDING.pop(app_key, None)
+            total = list_rules(app_key, registry_path).get("count", 1)
+            return {"status": "committed", "key": app_key, "count": 1, "total": total,
+                    "rules": [rule],
+                    "proposal": rules_ai.propose_markdown(app_key, [rule])}
+        # Anything else is a correction ("use the site's /search/ page") or the
+        # missing detail (a website address): recompile with it.
+        pending["feedback"] = f"{pending.get('feedback', '')} {answer}".strip()
+        return _ai_step(app_key, pending, registry_path)
+
     rid = (rule_id or "").strip()
     if rid.lower() not in _CONFIRM_IDS:
         known = {r["rule_id"] for r in pending["candidate_rules"]}
@@ -206,12 +283,15 @@ def handle_clarification(app_key, rule_id, answer, registry_path=None):
         }
 
     finalized = _finalize(app_key, pending)
-    rc.commit_rules(app_key, finalized, _registry_path(registry_path), accept=True)
+    # merge: adding rules by voice keeps the app's other rules.
+    rc.commit_rules(app_key, finalized, _registry_path(registry_path),
+                    accept=True, merge=True)
     _PENDING.pop(app_key, None)
     return {
         "status": "committed",
         "key": app_key,
         "count": len(finalized),
+        "total": list_rules(app_key, registry_path).get("count", len(finalized)),
         "rules": finalized,
         "proposal": rc.propose_ruleset(app_key, finalized),
     }

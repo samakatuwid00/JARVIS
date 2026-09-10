@@ -243,7 +243,8 @@ check(step["rules"][0]["enforcement"] == "hard",
 
 # 5) list_rules
 out = rules_voice.list_rules("spotify", registry_path=voice_reg)
-check(out["status"] == "ok" and out["count"] == 1, "list_rules reports the committed rules")
+# voice setup adds rules, never replaces: no_explicit_stuff, keep_it_quiet, the hard one
+check(out["status"] == "ok" and out["count"] == 3, "list_rules reports every committed rule")
 check("Rules for spotify" in out["summary"], "list_rules summary is human-readable")
 check("hard" in out["summary"], "list_rules summary shows enforcement")
 out = rules_voice.list_rules("chrome", registry_path=voice_reg)
@@ -251,14 +252,15 @@ check(out["count"] == 0 and "No rules set" in out["summary"],
       "list_rules handles an app with no rules")
 
 # 6) forget_rule (shares rules_compiler.remove_rule with /apps/rules/clear)
-hard_id = rules_voice.list_rules("spotify", registry_path=voice_reg)["rules"][0]["rule_id"]
+hard_id = [r["rule_id"] for r in rules_voice.list_rules("spotify", registry_path=voice_reg)["rules"]
+           if r["enforcement"] == "hard"][0]
 check(rules_voice.forget_rule("spotify", "nope_rule", registry_path=voice_reg)["error"]
       == "unknown rule_id", "forget_rule rejects an unknown rule_id")
 check(rules_voice.forget_rule("chrome", registry_path=voice_reg)["error"] == "unknown app",
       "forget_rule rejects an unknown app")
 out = rules_voice.forget_rule("spotify", hard_id, registry_path=voice_reg)
-check(out["status"] == "removed" and out["count"] == 0, "forget_rule removes the rule")
-check(rules_voice.list_rules("spotify", registry_path=voice_reg)["count"] == 0,
+check(out["status"] == "removed" and out["count"] == 2, "forget_rule removes only that rule")
+check(rules_voice.list_rules("spotify", registry_path=voice_reg)["count"] == 2,
       "forget_rule persists to the registry")
 
 if live:

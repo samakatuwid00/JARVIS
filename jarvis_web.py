@@ -973,13 +973,15 @@ async def post_apps_register(message: Request):
 
 @app.post("/apps/compile")
 async def post_apps_compile(message: Request):
-    """Phase 3.5 wizard: turn raw rule drafts into a proposed ruleset.
+    """Compile with JARVIS: turn the drafts into a proposed rule set with AI.
 
-    Runs rules_compiler.parse_scaffold, then auto-resolves ambiguous clauses
-    with a SAFE DEFAULT answer (volume -> 60% all sessions; else -> the phrase
-    as intent, all sessions) so the UI receives a complete proposed ruleset.
-    The inferred `questions` are returned so the user can correct JARVIS's
-    guess before accepting. User owns the commit (POST /apps/rules).
+    Each draft line may hold a command and what it should do ('search movies
+    in brave -> search hollymoviehd.cc'). rules_ai reads the intent (router,
+    then local Ollama); lines no model can read keep the keyword parser. A
+    line that already has a structured rule is kept, and an older plain rule
+    is recompiled with its saved action so the site it named is not lost.
+    Returned `notes` say what JARVIS guessed. User owns the commit
+    (POST /apps/rules).
     """
     try:
         body = await message.json()
@@ -990,41 +992,24 @@ async def post_apps_compile(message: Request):
     if not key or not drafts:
         return JSONResponse({"error": "missing key or drafts"}, status_code=400)
 
-    import rules_compiler as rc
-    phrase = " and ".join(drafts)
-    parsed = rc.parse_scaffold(key, phrase)
-    candidates = parsed["candidate_rules"]
-
-    # Auto-resolve ambiguous clauses with a safe default; capture the question
-    # so the UI can surface "JARVIS assumed X — correct me if wrong".
-    answers = {}
-    questions = []
-    for r in candidates:
-        if r.get("needs_clarification"):
-            low = (r.get("source_phrase") or "").lower()
-            if any(m in low for m in ("quiet", "loud", "soft", "low", "calm", "chill")):
-                answers[r["rule_id"]] = f"under 60% {key} volume all sessions"
-            else:
-                answers[r["rule_id"]] = f"{r['source_phrase']}, all sessions"
-            if r.get("clarification_question"):
-                questions.append(r["clarification_question"])
-
-    proposed = rc.apply_clarifications(key, candidates, answers)
-
-    # Phase 3.5 guard: a draft like "never X even if I ask" is a HARD block,
-    # not a soft preference. Promote any rule the escalation detector flags so
-    # we never silently downgrade a user's explicit "must not" into a soft nudge.
-    for r in proposed:
-        if rc.detect_hard_escalation(r) and r.get("enforcement") != "hard":
-            r["enforcement"] = "hard"
-            r["intent"] = (r.get("intent") or "") + " (hard-escalated: user said never/even if I ask)"
-
+    import rules_ai
+    from machine_capabilities import REGISTRY_PATH
+    entry = {}
+    try:
+        with open(REGISTRY_PATH, "r", encoding="utf-8") as f:
+            entry = (json.load(f).get("apps") or {}).get(key) or {}
+    except Exception:
+        pass
+    # The model call can take seconds: keep it off the event loop.
+    proposed, notes = await asyncio.to_thread(
+        rules_ai.compile_drafts, key, drafts, entry.get("compiled_rules") or [], entry)
     return JSONResponse({
         "ok": True,
         "key": key,
         "proposed": proposed,
-        "questions": questions,
-        "proposal_markdown": rc.propose_ruleset(key, proposed),
+        "questions": notes,
+        "notes": notes,
+        "proposal_markdown": rules_ai.propose_markdown(key, proposed, notes),
     })
 
 
@@ -1060,7 +1045,7 @@ async def post_apps_rules_begin(message: Request):
         return JSONResponse({"error": "unknown app"}, status_code=400)
 
     import rules_voice
-    step = rules_voice.begin_rule_setup(key, phrase)
+    step = await asyncio.to_thread(rules_voice.begin_rule_setup, key, phrase)
     if step.get("status") == "error":
         return JSONResponse(step, status_code=400)
     return JSONResponse(dict(step, ok=True))
@@ -1087,10 +1072,49 @@ async def post_apps_rules_clarify(message: Request):
         return JSONResponse({"error": "missing answer"}, status_code=400)
 
     import rules_voice
-    step = rules_voice.handle_clarification(key, rule_id, answer)
+    step = await asyncio.to_thread(rules_voice.handle_clarification, key, rule_id, answer)
     if step.get("status") == "error":
         return JSONResponse(step, status_code=400)
     return JSONResponse(dict(step, ok=True))
+
+
+@app.post("/apps/rules/test")
+async def post_apps_rules_test(message: Request):
+    """Run a command rule once, for real, before or after saving it.
+
+    Body: {"app_key": "brave", "sample": "Dune", "rule_id": ""} — an empty
+    rule_id means the proposal in progress. Opens the browser exactly like
+    the spoken command would, so the user sees where the rule lands.
+    """
+    try:
+        body = await message.json()
+    except Exception:
+        return JSONResponse({"error": "bad json"}, status_code=400)
+    key = (body.get("app_key") or body.get("key") or "").strip()
+    rid = (body.get("rule_id") or "").strip()
+    sample = (body.get("sample") or "").strip()
+    if not key:
+        return JSONResponse({"error": "missing app_key"}, status_code=400)
+    import rules_engine
+    import rules_voice
+    rule = None
+    pend = rules_voice.pending_setup(key)
+    if not rid and pend:
+        rule = pend.get("proposed_rule")
+    if rule is None and rid:
+        rule = next((r for r in rules_voice.list_rules(key).get("rules") or []
+                     if r.get("rule_id") == rid), None)
+    if not rule:
+        return JSONResponse({"error": "no rule to test"}, status_code=404)
+    action = rules_engine.action_of(rule, key, rules_voice._app_entry(key))
+    if not action:
+        return JSONResponse({"error": "this rule doesn't open anything to test"},
+                            status_code=400)
+    if action.get("type") == "search_site" and not sample:
+        sample = "test"
+    result = await asyncio.to_thread(tools.run_rule_action, rule, key, action, sample)
+    return JSONResponse({"ok": not result.startswith("[Error]"), "result": result,
+                         "url": rules_engine.build_action_url(action, sample)})
 
 
 @app.get("/apps/rules/list")

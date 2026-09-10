@@ -194,14 +194,24 @@ def _write_registry(registry_path, data):
     os.replace(tmp, registry_path)
 
 
-def commit_rules(app_id, compiled_rules, registry_path, accept=False):
+def commit_rules(app_id, compiled_rules, registry_path, accept=False, merge=False):
+    """Write a finalized rule set. merge=True adds/updates by rule_id and keeps
+    the app's other rules (voice setup adds one rule at a time); the default
+    replaces the whole set (the drafts editor holds every rule)."""
     if accept != True:
         return propose_ruleset(app_id, compiled_rules)
 
     registry_path = Path(registry_path)
     data = _load_registry(registry_path)
     app_entry = data["apps"].setdefault(app_id, {})
-    app_entry["rule_drafts"] = [r["source_phrase"] for r in compiled_rules]
+    compiled_rules = list(compiled_rules)
+    if merge:
+        incoming = {r.get("rule_id") for r in compiled_rules}
+        kept = [r for r in (app_entry.get("compiled_rules") or [])
+                if isinstance(r, dict) and r.get("rule_id") not in incoming]
+        compiled_rules = kept + compiled_rules
+    app_entry["rule_drafts"] = [r["source_phrase"] for r in compiled_rules
+                                if r.get("source_phrase")]
     app_entry["compiled_rules"] = compiled_rules
     _write_registry(registry_path, data)
 
@@ -219,8 +229,6 @@ def commit_rules(app_id, compiled_rules, registry_path, accept=False):
             duration_s=0.0,
             result="finalized",
             confirmed=True,
-            caller="rules_compiler",
-            decision="confirmed",
         )
     except Exception:
         print(json.dumps(entry, ensure_ascii=False))
@@ -267,8 +275,6 @@ def remove_rule(app_id, rule_id, registry_path):
             duration_s=0.0,
             result="removed",
             confirmed=True,
-            caller="rules_compiler",
-            decision="confirmed",
         )
     except Exception:
         print(json.dumps(entry, ensure_ascii=False))
