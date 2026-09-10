@@ -22,6 +22,7 @@ import queue
 import re
 import subprocess
 import threading
+import time
 import traceback
 import urllib.parse
 import webbrowser
@@ -55,6 +56,11 @@ BRAVE_EXE = os.getenv(
     "JARVIS_BRAVE_EXE",
     r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe",
 )
+# Total wall-clock budget for one play_music command, warm-up included. The
+# driver used to get 240s for the warm-up AND another 240s for the job, so a
+# stuck launch answered nothing for eight minutes. A voice turn that cannot be
+# answered inside this window is a failure and must say so.
+MUSIC_BUDGET = float(os.getenv("JARVIS_MUSIC_TIMEOUT", "110"))
 # Dedicated profile: Brave's default profile is locked while Brave runs, and
 # pointing at it would let JARVIS act as the user's everyday logged-in browser.
 PROFILE_DIR = Path(os.getenv("JARVIS_MUSIC_PROFILE",
@@ -1012,21 +1018,37 @@ def play_music(query: str, navigate_only: bool = False) -> str:
         return (f"[Error] Loaded '{query}' on YouTube Music but playback did not start "
                 f"({why}). You may need to press play in the Brave window.")
 
+    # Watchdog: ONE wall-clock budget for the whole command (warm-up + job)
+    # instead of two independent 240s waits, which let a wedged Brave launch
+    # burn 8 minutes and answer nothing. On expiry the caller gets the honest
+    # _fallback_open message rather than an open-ended hang.
     # Cold start - launching headed Brave against a fresh profile - can eat most
     # of a play_music budget on its own and used to blow the 150s deadline,
-    # silently degrading the very first request to the no-playback fallback.
+    # silently degrading the very first request to the no-playback fallback,
+    # so the warm-up still gets the larger share.
+    deadline = time.monotonic() + MUSIC_BUDGET
     if not _warmed:
-        _worker.call(lambda page: "ready", timeout=240)
+        warm = _worker.call(lambda page: "ready",
+                            timeout=max(15.0, MUSIC_BUDGET * 0.6))
+        if isinstance(warm, str) and warm.startswith("[Error]"):
+            return _fallback_open(url, warm[len("[Error]"):].strip())
         _warmed = True
 
-    out = _worker.call(job, timeout=240)
+    left = deadline - time.monotonic()
+    if left < 10:
+        return _fallback_open(
+            url, f"the music browser did not become usable within {MUSIC_BUDGET:.0f}s")
+
+    out = _worker.call(job, timeout=left)
     if isinstance(out, str) and out.startswith("[Error]"):
         return _fallback_open(url, out[len("[Error]"):].strip())
     # Phase 12a: one retry with navigate_only on a MatchError — the first
     # click landed on a wrong/unverifiable track; reloading the results page
     # and picking fresh often finds the right one. Only once, only when we
-    # have not already retried (navigate_only calls never recurse).
-    if isinstance(out, str) and out.startswith("[MatchError]") and not navigate_only:
+    # have not already retried (navigate_only calls never recurse), and only
+    # while the budget still has room for a second pass.
+    if isinstance(out, str) and out.startswith("[MatchError]") and not navigate_only \
+       and time.monotonic() < deadline:
         _emit("That doesn't look like the right song — trying once more...")
         retry = play_music(query, navigate_only=False)
         return f"{retry} (second attempt after a wrong first match)"

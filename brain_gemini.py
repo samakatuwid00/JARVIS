@@ -70,7 +70,8 @@ import datetime
 
 # Intents that can NEVER need a tool. Used by both the fast path (P1) and the
 # tool-gating in _think_router (P3): a "simple" intent skips the tool schema.
-SIMPLE_INTENTS = {"math", "greeting", "thanks", "time", "help"}
+SIMPLE_INTENTS = {"math", "greeting", "thanks", "time", "help",
+                  "clarify_play", "clarify_search"}
 
 def _safe_eval(expr: str):
     """Evaluate a basic arithmetic expression safely via AST (no builtins/names)."""
@@ -92,6 +93,40 @@ def _fmt_num(x):
             return str(int(x))
         return f"{x:.2f}".rstrip("0").rstrip(".")
     return str(x)
+
+# add_site: "add hackernews, news.ycombinator.com" is a registry WRITE, but every
+# phrasing of it carries a URL-shaped token, so classify_intent used to hand it to
+# the web_browse branch below — JARVIS fetched and read out the page and no entry
+# was ever written. Both orders are accepted ("add <name>, <url>" and
+# "add <url> as <name>"); a URL token is required, so "add milk to the list" is
+# untouched.
+_ADD_SITE_URL = r"(?:https?://\S+|(?:[\w-]+\.)+[a-z]{2,}(?:/\S*)?)"
+_ADD_SITE_HEAD = (r"^(?:please\s+|jarvis[,!]?\s+)*(?:add|register|bookmark)\s+"
+                  r"(?:(?:a|the)\s+)?(?:new\s+)?(?:site|website|url|link)?\s*")
+_ADD_SITE_RE = re.compile(
+    _ADD_SITE_HEAD +
+    r"(?P<name>[\w][\w '\-]*?)\s*(?:,|:|=|\bas\b|\bat\b|\bis\b|\s)\s*"
+    r"(?P<url>" + _ADD_SITE_URL + r")\s*[.!?]*$", re.I)
+_ADD_SITE_REV_RE = re.compile(
+    _ADD_SITE_HEAD +
+    r"(?P<url>" + _ADD_SITE_URL + r")\s*"
+    r"(?:,|:|\bas\b|\bcalled\b|\bnamed\b)\s*"
+    r"(?P<name>[\w][\w '\-]*?)\s*[.!?]*$", re.I)
+
+
+def parse_add_site(text: str):
+    """(name, url) for an 'add <name>, <url>' request, else None."""
+    t = " ".join((text or "").strip().split())
+    for rx in (_ADD_SITE_RE, _ADD_SITE_REV_RE):
+        m = rx.match(t)
+        if not m:
+            continue
+        name = m.group("name").strip(" ,.'-").lower()
+        url = m.group("url").strip(" ,.")
+        if name and url and not name.startswith("http"):
+            return name, url
+    return None
+
 
 def classify_intent(text: str) -> str:
     """Return a coarse intent label for fast-path / tool-gating decisions."""
@@ -126,6 +161,15 @@ def classify_intent(text: str) -> str:
             return "time"
     if re.fullmatch(r"(help|what can you do\??|commands\??|options\??)", t):
         return "help"
+    # Clarify gate (bare verb, no entity): a lone "play" or "search" names
+    # nothing to act on, and guessing was expensive — play_music(query="play")
+    # sat in the Brave driver for minutes, and the search path fired an empty
+    # query ("Opened search: "). Ask instead. EXACT bare verb only, so the
+    # continuation routes below ("play it", "search X in chatgpt") are untouched.
+    _bare_verb = re.fullmatch(
+        r"(?:please\s+|jarvis[,!]?\s+)*(play|search|google|look\s?up)\s*[.!?]*", t)
+    if _bare_verb:
+        return "clarify_play" if _bare_verb.group(1) == "play" else "clarify_search"
     # report / launch: JARVIS-specific side-routes (compose_report, launch_project).
     # These run on JARVIS's local brain + signed-in browser, NOT Hermes, so they
     # must NOT be classified as `general` (which routes to the Hermes harness).
@@ -248,6 +292,10 @@ def classify_intent(text: str) -> str:
     if re.search(r"\b(use|open|launch|run|with|via|in)\s+\w+", t) and \
        re.search(r"\b(app|application|software|tool|program)\b", t):
         return "app_reference"
+    # add_site: registry write. MUST sit ahead of web_browse — that branch fires
+    # on any URL-shaped token, so registration requests were read as page reads.
+    if parse_add_site(t):
+        return "add_site"
     # web_browse: token-cheap read of a specific page via the local oc CLI.
     # "scrape/read/browse/extract <url>", "summarize this page <url>", or any
     # URL-bearing read intent. Fast local path (no 22s Hermes round-trip).
@@ -347,6 +395,10 @@ def fast_path_answer(text: str):
     if intent == "help":
         return ("I can answer questions, do quick math, tell you the time, "
                 "search the web, write reports, and more, sir."), intent
+    if intent == "clarify_play":
+        return "Which song, sir? Name a track or an artist.", intent
+    if intent == "clarify_search":
+        return "What should I search for, sir?", intent
     return None, intent
 
 
@@ -1291,13 +1343,39 @@ class JarvisBrain:
                 return res
             except Exception as e:
                 print(f"[JARVIS] List installed failed ({e}); falling back to cloud brain...")
+        # ADD_SITE: instant local route — write the entry into web_registry.json
+        # and confirm. Deliberately ahead of WEB_BROWSE and with NO page fetch:
+        # "add hackernews, news.ycombinator.com" asks for a registration, and
+        # browsing the URL answered a question nobody asked while the registry
+        # stayed empty.
+        if intent == "add_site":
+            try:
+                import tools as _tools_mod
+                _tools_mod.set_progress_cb(_progress_local.cb)
+                parsed = parse_add_site(user_input)
+                if parsed:
+                    site_name, site_url = parsed
+                    _progress(f"Registering {site_name}...")
+                    res = execute_tool("add_site",
+                                       {"name": site_name, "url": site_url},
+                                       user_input)
+                    self.conversation.append({"role": "assistant", "content": res})
+                    self.last_backend = "instant"
+                    self.last_stats = {"backend": "instant", "intent": "add_site"}
+                    return res
+            except Exception as e:
+                print(f"[JARVIS] add_site failed ({e}); falling back to cloud brain...")
+
         # WEB_BROWSE: instant local route — token-cheap page read via oc CLI.
         # Runs before the Hermes delegation so reading a URL costs only the
         # local subprocess, not a 22s cloud round-trip. Falls back to Hermes
         # if the local read fails (e.g. login-walled page).
         if intent == "web_browse":
             try:
-                from tools import execute_tool
+                # No local import of execute_tool — Python binds a name per FUNCTION,
+                # not per block, so importing it anywhere inside think() made the
+                # module-level 3-arg wrapper unreachable from EVERY route in this
+                # function, including the close_app/stop ones further down.
                 import tools as _tools_mod, re as _re3
                 _tools_mod.set_progress_cb(_progress_local.cb)
                 tu = (user_input or "").strip()
@@ -1325,7 +1403,7 @@ class JarvisBrain:
         # persistent memory and answers via the cloud brain.
         if intent == "recall_memory":
             try:
-                from tools import execute_tool
+                # See web_browse above: no local execute_tool import in think().
                 import tools as _tools_mod
                 _tools_mod.set_progress_cb(_progress_local.cb)
                 _progress("Recalling what I remember...")
@@ -1343,7 +1421,14 @@ class JarvisBrain:
         # CLOSE_APP: instant local route — close a named application.
         if intent == "close_app":
             try:
-                from tools import execute_tool
+                # NO local `from tools import execute_tool` here. That shadowed the
+                # module-level 3-arg wrapper with tools.execute_tool (2 params), so
+                # the 3-arg call below raised
+                #   TypeError: execute_tool() takes 2 positional arguments but 3 were given
+                # every single time. The bare `except` swallowed it and fell through
+                # to the cloud brain, so this deterministic route never once ran —
+                # and the call also skipped _apply_consent_policy, which the wrapper
+                # is what applies.
                 import tools as _tools_mod, re as _re2
                 _tools_mod.set_progress_cb(_progress_local.cb)
                 m = _re2.search(
@@ -1360,7 +1445,7 @@ class JarvisBrain:
                 print(f"[JARVIS] close_app failed ({e}); falling back to cloud brain...")
         if intent == "stop":
             try:
-                from tools import execute_tool
+                # Same shadowing bug as close_app above — see that comment.
                 import tools as _tools_mod
                 _tools_mod.set_progress_cb(_progress_local.cb)
                 _progress("Stopping music...")

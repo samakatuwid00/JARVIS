@@ -44,6 +44,13 @@ CHROME_USER_DATA = os.getenv(
 # Relaunching the daily Chrome opens a real window, so it stays switchable.
 CHROME_AUTOLAUNCH = os.getenv("JARVIS_CHROME_AUTOLAUNCH", "true").lower() == "true"
 CHROME_LAUNCH_WAIT = int(os.getenv("JARVIS_CHROME_LAUNCH_WAIT", "30"))
+# open_site budget. A heavy page (facebook.com) could sit past the old 45s
+# navigation AND then block again inside page.title(), so the whole turn hung
+# with no answer. Both halves are bounded now and expiry is reported honestly.
+OPEN_SITE_NAV_MS = int(os.getenv("JARVIS_OPEN_SITE_NAV_MS", "25000"))
+OPEN_SITE_BUDGET = int(os.getenv("JARVIS_OPEN_SITE_TIMEOUT", "60"))
+# Non-launching ChatGPT session probe (see chatgpt_session_ready).
+CHATGPT_PROBE_TIMEOUT = int(os.getenv("JARVIS_CHATGPT_PROBE_TIMEOUT", "30"))
 CHROME_PATHS = (
     r"C:\Program Files\Google\Chrome\Application\chrome.exe",
     r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",

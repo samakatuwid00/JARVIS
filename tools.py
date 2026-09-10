@@ -996,11 +996,24 @@ def _exact_site_key(cand: str):
     return wr._index["exact"].get(q)
 
 
+# A search verb with no query behind it. Same guard shape as
+# close_application's bare-pronoun reject: name the missing thing and give an
+# example, never fire the tool. Without this, "search" opened a Google tab for
+# the empty string and reported "Opened search: ".
+_BARE_SEARCH_OBJECT = {"", "it", "this", "that", "them", "something",
+                       "anything", "stuff", "things", "for it", "for that",
+                       "for this", "for something", "for anything"}
+_SEARCH_CLARIFY = ("[Error] What should I search for, sir? Name the query, "
+                   "e.g. 'search Bohemian Rhapsody'.")
+
+
 def parse_search_command(text: str):
     """Parse a spoken search command.
 
-    Returns dict: {query, target, is_history_search, corrected}
+    Returns dict: {query, target, is_history_search, corrected, clarify?}
     or None when this isn't a search command. Target may be None (= Google).
+    `clarify` is set when the verb arrived with no query — execute_search
+    returns it verbatim instead of searching for nothing.
     """
     raw = (text or "").strip()
     # A correction marker may precede the verb ("I mean search ...").
@@ -1032,7 +1045,8 @@ def parse_search_command(text: str):
         body = re.sub(_LEAD_HISTORY, "", body).strip()
         if not body:
             return {"query": "", "target": "chatgpt",
-                    "is_history_search": True, "corrected": corrected}
+                    "is_history_search": True, "corrected": corrected,
+                    "clarify": _SEARCH_CLARIFY}
 
     # tail qualifier: "... in <target>" — candidate capped at a few words,
     # resolved EXACTLY against AI names then the site registry.
@@ -1066,14 +1080,19 @@ def parse_search_command(text: str):
             target = typed
             body = body[:tail.start()].strip().rstrip(",.")
 
-    return {"query": body, "target": target,
-            "is_history_search": is_hist,
-            "corrected": corrected}
+    out = {"query": body, "target": target,
+           "is_history_search": is_hist,
+           "corrected": corrected}
+    if body.strip().lower().rstrip("?.!, ") in _BARE_SEARCH_OBJECT:
+        out["clarify"] = _SEARCH_CLARIFY
+    return out
 
 
 def execute_search(parsed: dict) -> str:
     """Run a parsed search command against the right backend."""
     import web_registry as wr
+    if parsed.get("clarify"):
+        return parsed["clarify"]
     q, target = parsed["query"], parsed.get("target")
 
     if parsed.get("is_history_search"):
@@ -3768,8 +3787,12 @@ TOOLS = [
     },
     {
         "name": "add_site",
-        "description": ("Manually register a website (manual entries always win over "
-                        "history scans). Use when the user says 'add site <name> <url>'."),
+        "description": ("Manually register a website in the user's site registry "
+                        "(manual entries always win over history scans). Use for ANY "
+                        "'add/register/bookmark <name>, <url>' request, with or without "
+                        "the word 'site' — e.g. 'add hackernews, news.ycombinator.com'. "
+                        "This only WRITES the entry: never browse or fetch the page to "
+                        "register it (web_browse would dump the page and register nothing)."),
         "input_schema": {
             "type": "object",
             "properties": {
