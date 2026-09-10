@@ -19,7 +19,8 @@ from config import (GEMINI_API_KEY, GEMINI_MODEL, JARVIS_USE_9ROUTER, ROUTER_BAS
                    JARVIS_PREFER_LOCAL, OLLAMA_BASE_URL, OLLAMA_MODEL,
                    OLLAMA_API_KEY, OLLAMA_MAX_TOKENS, OLLAMA_TIMEOUT,
                    OLLAMA_KEEP_WARM, OLLAMA_WARM_INTERVAL, JARVIS_LOCAL_ONLY,
-                   LOCAL_HISTORY_TOKEN_BUDGET, IDLE_RESET_MINUTES)
+                   LOCAL_HISTORY_TOKEN_BUDGET, IDLE_RESET_MINUTES,
+                   ROUTER_HISTORY_TOKEN_BUDGET, TOOL_RESULT_HISTORY_CHARS)
 
 MAX_HISTORY = 20
 
@@ -71,7 +72,11 @@ import datetime
 # Intents that can NEVER need a tool. Used by both the fast path (P1) and the
 # tool-gating in _think_router (P3): a "simple" intent skips the tool schema.
 SIMPLE_INTENTS = {"math", "greeting", "thanks", "time", "help",
-                  "clarify_play", "clarify_search"}
+                  "clarify_play", "clarify_search", "clarify_open"}
+
+# Bare "open" names neither an app nor a site. Asked verbatim so the follow-up
+# turn can recognise its own question (see resolve_open_choice / think()).
+OPEN_CLARIFY_Q = "Open an app or a website, sir?"
 
 def _safe_eval(expr: str):
     """Evaluate a basic arithmetic expression safely via AST (no builtins/names)."""
@@ -128,6 +133,80 @@ def parse_add_site(text: str):
     return None
 
 
+def _run_bounded(fn, budget, label):
+    """Run `fn()` on a worker thread, giving up after `budget` seconds.
+
+    Returns (result, timed_out). Used by routes whose tool can block for
+    minutes on a browser it cannot reach: the turn must end in an honest
+    sentence, never in silence. The worker is abandoned, not killed — it can
+    still finish its own work, it just no longer owns the reply.
+    """
+    import concurrent.futures as _cf
+    ex = _cf.ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"jv-{label}")
+    try:
+        return ex.submit(fn).result(timeout=budget), False
+    except _cf.TimeoutError:
+        return None, True
+    finally:
+        ex.shutdown(wait=False)
+
+
+# Spotify playback resolves a track through a headless browser against
+# open.spotify.com (3 retries, lazy-load scrolls). Cold, that is well over two
+# minutes, which is what the live probe saw as total silence. Bound the route.
+SPOTIFY_ROUTE_BUDGET = float(os.getenv("JARVIS_SPOTIFY_ROUTE_TIMEOUT", "50"))
+
+_MUSIC_VERB_RE = re.compile(
+    r"^(?:please\s+|jarvis[,!]?\s+)*(?:can you\s+|could you\s+|i want you to\s+)?"
+    r"(?:play|put on|queue|listen to|start)\s+", re.I)
+_MUSIC_TAIL_RE = re.compile(
+    r"\s*\b(?:on|in|from|with|using|through)\s+(?:the\s+)?"
+    r"(?:spotify(?:\s+app)?|ytmusic|youtube\s+music)\b|\s*\b(?:for me|please)\b", re.I)
+
+
+def parse_music_query(text: str) -> str:
+    """'play Hotel California on Spotify' -> 'Hotel California'."""
+    q = " ".join((text or "").strip().split())
+    q = _MUSIC_VERB_RE.sub("", q)
+    q = _MUSIC_TAIL_RE.sub("", q)
+    q = re.sub(r"^(?:the\s+)?(?:song|track|album)\s+", "", q, flags=re.I)
+    return q.strip(" ,.!?\"'")
+
+
+_REPORT_TAIL_RE = re.compile(
+    r"\b(?:and\s+)?(?:then\s+)?(?:write|compose|draft|prepare|produce|generate|make)\b.*$",
+    re.I)
+
+
+def parse_report_topic(text: str) -> str:
+    """Pull the subject out of a research-and-write request.
+
+    'research WebGPU and write me a short report' -> 'WebGPU'.
+    """
+    t = " ".join((text or "").strip().split())
+    for rx in (r"\b(?:report|write-?up|brief)\b\s+(?:about|on|for|of)\s+(.+)$",
+               r"\b(?:research|look\s+up|find\s+out\s+about|investigate)\s+(.+)$",
+               r"\b(?:about|on)\s+(.+)$"):
+        m = re.search(rx, t, re.I)
+        if m:
+            t = m.group(1)
+            break
+    t = _REPORT_TAIL_RE.sub("", t)
+    t = re.sub(r"\b(?:a|an|the)\s+(?:short|brief|quick|small|long|detailed)?\s*"
+               r"(?:report|write-?up|brief)\b", "", t, flags=re.I)
+    return t.strip(" ,.!?;:-\"'") or " ".join((text or "").strip().split())
+
+
+def default_report_path(topic: str) -> str:
+    """Sensible default destination for a written report.
+
+    A bare filename is anchored to the user's Documents folder by
+    tools._resolve_write_path — never to the JARVIS source directory.
+    """
+    safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", topic or "").strip() or "Report"
+    return f"JARVIS Report - {safe[:60]} {datetime.date.today().isoformat()}.docx"
+
+
 def classify_intent(text: str) -> str:
     """Return a coarse intent label for fast-path / tool-gating decisions."""
     t = (text or "").strip().lower()
@@ -161,20 +240,41 @@ def classify_intent(text: str) -> str:
             return "time"
     if re.fullmatch(r"(help|what can you do\??|commands\??|options\??)", t):
         return "help"
-    # Clarify gate (bare verb, no entity): a lone "play" or "search" names
-    # nothing to act on, and guessing was expensive — play_music(query="play")
-    # sat in the Brave driver for minutes, and the search path fired an empty
-    # query ("Opened search: "). Ask instead. EXACT bare verb only, so the
-    # continuation routes below ("play it", "search X in chatgpt") are untouched.
+    # Clarify gate (bare verb, no entity): a lone "play", "search" or "open"
+    # names nothing to act on, and guessing was expensive — play_music(query=
+    # "play") sat in the Brave driver for minutes, the search path fired an
+    # empty query ("Opened search: "), and a bare "open" was handed to the
+    # executor, which skipped the app-or-website question and went straight to
+    # picking between openssl and opencode. Ask instead. EXACT bare verb only,
+    # so the continuation routes below ("play it", "open notepad") are untouched.
     _bare_verb = re.fullmatch(
-        r"(?:please\s+|jarvis[,!]?\s+)*(play|search|google|look\s?up)\s*[.!?]*", t)
+        r"(?:please\s+|jarvis[,!]?\s+)*(play|search|google|look\s?up|open)\s*[.!?]*", t)
     if _bare_verb:
-        return "clarify_play" if _bare_verb.group(1) == "play" else "clarify_search"
+        _verb = _bare_verb.group(1)
+        if _verb == "play":
+            return "clarify_play"
+        return "clarify_open" if _verb == "open" else "clarify_search"
+    # list_sites: a question ABOUT the site registry, not a request to visit one.
+    # These used to fall through to `general` and were answered by the cloud
+    # brain from thin air ("I can browse the web...") while web_registry.json
+    # went unread. Excludes any navigation/registration verb so "open facebook"
+    # and "add hackernews, ..." keep their own routes.
+    if re.search(r"\b(sites?|websites?|bookmarks?)\b", t) and \
+       not re.search(r"\b(open|go\s+to|visit|browse|add|register|bookmark|remove|delete|forget)\b", t) and \
+       (re.match(r"^(what|which|list|show|tell me)\b", t) or
+            re.search(r"\b(do you know|you know|are registered|i have|my sites|my websites)\b", t)):
+        return "list_sites"
     # report / launch: JARVIS-specific side-routes (compose_report, launch_project).
     # These run on JARVIS's local brain + signed-in browser, NOT Hermes, so they
     # must NOT be classified as `general` (which routes to the Hermes harness).
     if re.search(r"\b(report|compose|recap|summary\s+doc|write\s+(me\s+)?a\s+report)\b", t) and \
        re.search(r"\b(about|on|for|of)\b", t):
+        return "report"
+    # ...and the preposition-less phrasing of the same request: "research WebGPU
+    # and write me a short report". Without this it landed in `general`, the
+    # cloud brain simply talked, and no document was ever written.
+    if re.search(r"\b(write|compose|draft|prepare|produce|generate|make)\b"
+                 r"[^.]{0,40}\b(report|write-?up|brief)\b", t):
         return "report"
     if re.search(r"\b(launch|start|open|run|boot)\b", t) and \
        re.search(r"\b(project|app|server|dev)\b", t):
@@ -399,7 +499,43 @@ def fast_path_answer(text: str):
         return "Which song, sir? Name a track or an artist.", intent
     if intent == "clarify_search":
         return "What should I search for, sir?", intent
+    if intent == "clarify_open":
+        return OPEN_CLARIFY_Q, intent
     return None, intent
+
+
+# Answer to OPEN_CLARIFY_Q: "an app" / "a website" / "a website, youtube".
+_OPEN_CHOICE_RE = re.compile(
+    r"^(?:an?\s+|the\s+)?(app|application|program|software|website|web\s?site|"
+    r"site|web|url|page)\b[\s,:.\-]*(.*)$", re.I)
+
+
+def last_assistant_message(conversation):
+    """The most recent assistant turn, or '' — the user turn is already appended."""
+    for m in reversed(conversation or []):
+        if m.get("role") == "assistant":
+            return (m.get("content") or "").strip()
+    return ""
+
+
+def resolve_open_choice(text: str):
+    """Route the reply to OPEN_CLARIFY_Q.
+
+    Returns (answer, rewritten_input). A bare choice gets the second half of the
+    question; a choice that already names the target ("a website, youtube") is
+    rewritten to "open youtube" so it routes through the normal open path
+    instead of being answered as chat. (None, None) when the reply is neither —
+    the turn then falls through to ordinary routing.
+    """
+    m = _OPEN_CHOICE_RE.match((text or "").strip())
+    if not m:
+        return None, None
+    kind, rest = m.group(1).lower(), m.group(2).strip(" ,.?!")
+    if rest:
+        return None, f"open {rest}"
+    if kind in ("app", "application", "program", "software"):
+        return "Which app should I open, sir?", None
+    return "Which website, sir? Name it or give me the address.", None
 
 
 def _trim_history(messages, budget=LOCAL_HISTORY_TOKEN_BUDGET):
@@ -429,6 +565,21 @@ def _trim_history(messages, budget=LOCAL_HISTORY_TOKEN_BUDGET):
     print(f"[JARVIS] history trimmed: dropped {cut} of {len(rest)} message(s) "
           f"to stay inside the local context window", flush=True)
     return [head] + rest[cut:]
+
+
+def _truncate_for_history(result, limit=TOOL_RESULT_HISTORY_CHARS):
+    """Clip a tool result down to what is worth REPLAYING on later turns.
+
+    The current turn always receives the untruncated result — this only shapes
+    the copy stored in self.conversation. Without it, one page read stays in
+    every subsequent prompt for the life of the conversation.
+    """
+    text = result if isinstance(result, str) else str(result)
+    if len(text) <= limit:
+        return text
+    marker = ("\n[... " + str(len(text) - limit) +
+              " more characters truncated from replay history]")
+    return text[:limit] + marker
 
 
 JARVIS_SYSTEM = """You are JARVIS (Just A Rather Very Intelligent System), an AI assistant inspired by Iron Man's JARVIS.
@@ -928,6 +1079,17 @@ _CONSENT_FLAGS = {
         r"and send)\b")),
 }
 
+# Tools whose `confirm` flag authorizes acting ON the machine. Each already has
+# its own NEEDS_CONFIRM latch, but that latch lives inside the tool — this
+# applies the same rule at the boundary: consent must appear in the USER's own
+# words, which the model cannot fabricate. Defense in depth, one regex per call.
+_CONFIRM_WORDS = re.compile(
+    r"(?i)\b(confirm(?:ed)?|proceed|go ahead|do it|yes|approved?|"
+    r"run it|execute it|send it|that'?s right|correct)\b")
+for _consent_tool in ("desktop_control", "run_opencli", "delegate_to_hermes",
+                      "delegate_to_hermes_grounded", "delegate"):
+    _CONSENT_FLAGS[_consent_tool] = ("confirm", _CONFIRM_WORDS)
+
 # A bare confirm utterance: ONLY the confirm words, nothing else. Must never
 # match sentences that merely CONTAIN "yes"/"confirm" — those route normally.
 _BARE_CONFIRM_RE = re.compile(r"^(?:confirm(?:ed)?|proceed|go ahead|do it|yes)[.!\s]*$", re.I)
@@ -1156,6 +1318,23 @@ class JarvisBrain:
                 print(f"[JARVIS] confirm-release failed ({e}); falling back...")
 
 
+        # Bare-"open" clarify follow-up: the previous turn asked
+        # OPEN_CLARIFY_Q, so this turn picks the branch. A bare choice ("an
+        # app") gets the second half of the question; a choice that already
+        # names the target ("a website, youtube") is rewritten to "open
+        # youtube" and routed normally, so the answer actually reaches the
+        # open path instead of being chatted at.
+        if last_assistant_message(self.conversation[:-1]) == OPEN_CLARIFY_Q:
+            _open_ans, _open_rewrite = resolve_open_choice(user_input)
+            if _open_ans:
+                self.conversation.append({"role": "assistant", "content": _open_ans})
+                self.last_backend = "instant"
+                self.last_stats = {"backend": "instant", "intent": "clarify_open"}
+                return _open_ans
+            if _open_rewrite:
+                user_input = _open_rewrite
+                self.conversation[-1] = {"role": "user", "content": user_input}
+
         # P1: fast path for trivial intents — answer locally with NO cloud call and
         # NO tool schema. Removes the ~4s 9router round-trip for simple tasks.
         ans, intent = fast_path_answer(user_input)
@@ -1365,6 +1544,19 @@ class JarvisBrain:
                     return res
             except Exception as e:
                 print(f"[JARVIS] add_site failed ({e}); falling back to cloud brain...")
+
+        # LIST_SITES: question ABOUT the registry — answer from it, never freelance.
+        if intent == "list_sites":
+            try:
+                import tools as _tools_mod
+                _tools_mod.set_progress_cb(_progress_local.cb)
+                res = execute_tool("list_sites", {}, user_input)
+                self.conversation.append({"role": "assistant", "content": res})
+                self.last_backend = "instant"
+                self.last_stats = {"backend": "instant", "intent": "list_sites"}
+                return res
+            except Exception as e:
+                print(f"[JARVIS] list_sites failed ({e}); falling back to cloud brain...")
 
         # WEB_BROWSE: instant local route — token-cheap page read via oc CLI.
         # Runs before the Hermes delegation so reading a URL costs only the
@@ -1592,6 +1784,10 @@ class JarvisBrain:
                 for _ in range(10):
                     # P3: skip the ~2.7k-token tool schema (and the tool-decision step) for
                     # simple intents that can never need a tool. Tiered max_tokens too.
+                    # Bound the replay by TOKENS, not just _cap_conversation's
+                    # message count. Cloud windows are large but quality decays
+                    # long before they fill.
+                    messages = _trim_history(messages, ROUTER_HISTORY_TOKEN_BUDGET)
                     needs_tool = classify_intent(user_input) not in SIMPLE_INTENTS
                     tools_arg = otools if needs_tool else None
                     tool_choice_arg = "auto" if needs_tool else None
@@ -1645,11 +1841,14 @@ class JarvisBrain:
                             _tools_mod.set_progress_cb(_progress_local.cb)
                             result = execute_tool(tc.function.name, _safe_json(tc.function.arguments),
                                                   user_input)
+                            # pending -> self.conversation (replayed on every later
+                            # turn), so it gets the clipped copy. messages is this
+                            # turn only and keeps the full result.
                             pending.append({
                                 "role": "tool",
                                 "content": [{
                                     "name": tc.function.name,
-                                    "content": result,
+                                    "content": _truncate_for_history(result),
                                     "tool_call_id": tc.id
                                 }]
                             })

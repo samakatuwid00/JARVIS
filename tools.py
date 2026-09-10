@@ -3197,7 +3197,35 @@ def open_application(app: str, action: str = None, query: str = None) -> str:
                 from machine_capabilities import resolve as _resolve
             except Exception:
                 _resolve = None
-        entry = _resolve(requested) if _resolve else None
+        # Resolve-before-act. resolve() returns the FIRST substring match and
+        # throws the rest away, so an underspecified name ("open ch" -> 46
+        # manifest keys) launched an arbitrary app with full confidence. Ask
+        # when the name is genuinely ambiguous; stay instant when it is not.
+        # Only this last-chance fuzzy step is gated — the registry paths above
+        # already match on word boundaries and longest-key-wins.
+        if _resolve:
+            try:
+                from machine_capabilities import resolve_candidates as _rc
+                _tier, _cands = _rc(requested)
+                _launchable_cands = []
+                try:
+                    from machine_capabilities import _is_launchable as _lc
+                    _launchable_cands = [(k, v) for k, v in _cands
+                                         if _lc(v.get("bin"))]
+                except Exception:
+                    _launchable_cands = list(_cands)
+                if _tier in ("prefix", "substring") and len(_launchable_cands) > 1:
+                    _names = ", ".join(k for k, _ in _launchable_cands[:5])
+                    _audit_log("open_application", requested, "AMBIGUOUS",
+                               result=f"{len(_launchable_cands)} candidates")
+                    return (f"[NEEDS_PICK] \"{requested}\" matches "
+                            f"{len(_launchable_cands)} applications: {_names}. "
+                            f"Which one should I open?")
+                entry = _launchable_cands[0][1] if _launchable_cands else _resolve(requested)
+            except Exception:
+                entry = _resolve(requested)
+        else:
+            entry = None
     # Phase 14b: never launch a non-launchable bin. If the registry handed us a
     # directory / document / MSI icon string, drop the entry and keep searching
     # via aliases + raw name instead of startfile-ing junk.
@@ -3597,7 +3625,16 @@ def play_spotify(query: str) -> str:
             pass
         import time as _t
         _t.sleep(3)
-    uri = _resolve_spotify_track(q)
+    uri = None
+    try:
+        # Track resolution scrapes open.spotify.com in a headless browser —
+        # cold, that wedges past two minutes (live probe: total silence).
+        # Bound it: on expiry answer honestly instead of hanging the turn.
+        import concurrent.futures as _cf
+        with _cf.ThreadPoolExecutor(max_workers=1) as _ex:
+            uri = _ex.submit(_resolve_spotify_track, q).result(timeout=45)
+    except Exception:
+        uri = None
     if not uri:
         return (f"I couldn't find a Spotify track for '{q}', sir. Try a more "
                 f"specific title or artist.")
