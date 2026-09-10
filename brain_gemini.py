@@ -1323,15 +1323,17 @@ class JarvisBrain:
         self.conversation.append({"role": "user", "content": user_input})
         self._cap_conversation()
 
-        # Correction prefix: "I mean visit X" routes exactly like "visit X".
-        # The conversation keeps the original wording; only routing sees the
-        # stripped form. Search commands keep the marker — parse_search_command
-        # reads it to replace the previous query instead of starting a new one.
+        # Correction prefix / leading filler: "I mean visit X" and "Now visit
+        # X" route exactly like "visit X". The conversation keeps the original
+        # wording; only routing sees the stripped form. Search commands keep
+        # the marker — parse_search_command reads it to replace the previous
+        # query instead of starting a new one, and strips fillers itself.
         try:
             import tools as _tc
-            _routed = _tc.strip_correction_prefix(user_input)
+            _routed = _tc.strip_fillers(_tc.strip_correction_prefix(
+                _tc.strip_fillers(user_input)))
             if _routed != user_input and not _tc._SEARCH_START.match(_routed):
-                print(f"[JARVIS] correction prefix stripped: {user_input!r} -> {_routed!r}")
+                print(f"[JARVIS] routing prefix stripped: {user_input!r} -> {_routed!r}")
                 user_input = _routed
         except Exception:
             pass

@@ -972,6 +972,31 @@ _CHROME_KEYS = {"chrome", "google chrome"}
 _BROWSER_SUFFIX_RE = re.compile(
     r"\s+(?:on|in)\s+(?:the\s+)?(chrome|brave|edge|firefox)(?:\s+browser)?\s*[.!?]*$",
     re.I)
+# Same phrase mid-sentence ("search me a movie on Brave named X"). A bare
+# "edge" needs "browser" after it here — "in edge cases" is not a browser.
+_BROWSER_ANY_RE = re.compile(
+    r"\s+(?:on|in)\s+(?:the\s+)?(chrome|brave|firefox|edge(?=\s+browser))"
+    r"(?:\s+browser)?\b[.!?,]*", re.I)
+_CHAIN_WORD_RE = re.compile(r"\b(?:and|then|also)\b", re.I)
+
+
+def _split_browser(text: str):
+    """(text without its 'on|in <browser>' phrase, browser word or None).
+
+    Trailing phrase first (the original behavior); otherwise the phrase
+    anywhere mid-sentence, unless a chained ask follows it ('open youtube
+    in chrome and play lofi' is not a single open).
+    """
+    text = text or ""
+    m = _BROWSER_SUFFIX_RE.search(text)
+    if not m:
+        m = _BROWSER_ANY_RE.search(text)
+        if m and _CHAIN_WORD_RE.search(text[m.end():]):
+            m = None
+    if not m:
+        return text, None
+    rest = f"{text[:m.start()]} {text[m.end():]}"
+    return re.sub(r"\s{2,}", " ", rest).strip(), m.group(1).lower()
 
 
 def _browser_key(word: str, apps: dict | None = None) -> str | None:
@@ -993,28 +1018,42 @@ def _browser_label(key: str) -> str:
     return key
 
 
-def _open_url_in_browser(url: str, name: str, browser: str | None = None) -> str:
+def _remember_site(result: str, name: str, url: str, browser: str) -> str:
+    """Record a successful site open so a follow-up 'search X' can reuse it."""
+    if not str(result).startswith("[Error]"):
+        try:
+            import conversation_window as cw
+            cw.record_site(name or url, url, browser)
+        except Exception:
+            pass
+    return result
+
+
+def _open_url_in_browser(url: str, name: str, browser: str | None = None,
+                         remember: bool = True) -> str:
     """Open url in the requested browser (an app_registry key).
 
     Chrome, or no browser, is the unchanged browser_agent debug-Chrome path.
     Any other browser gets its registered bin launched with the URL; a
-    missing bin falls back to Chrome and says so.
+    missing bin falls back to Chrome and says so. remember=False for search
+    result pages, which are not a site the user visited.
     """
     ba = __import__("browser_agent")
+    keep = _remember_site if remember else (lambda r, *a: r)
     if not browser or browser in _CHROME_KEYS:
-        return ba.open_site(url, name=name)
+        return keep(ba.open_site(url, name=name), name, url, "chrome")
     label = _browser_label(browser)
     exe = (_load_app_registry().get(browser) or {}).get("bin") or ""
     if not exe or not os.path.isfile(exe):
-        return (f"{ba.open_site(url, name=name)}\n{label} isn't installed where "
-                f"I expected it, so I used Chrome.")
+        return keep(f"{ba.open_site(url, name=name)}\n{label} isn't installed "
+                    f"where I expected it, so I used Chrome.", name, url, "chrome")
     try:
         subprocess.Popen([exe, url], close_fds=True,
                          creationflags=getattr(subprocess, "DETACHED_PROCESS", 0)
                          | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
     except OSError as e:
         return f"[Error] Could not launch {label} for {name or url}: {e}"
-    return f"Opened {name or url} in {label}."
+    return keep(f"Opened {name or url} in {label}.", name, url, browser)
 
 
 def _rule_site_url(target: str):
@@ -1150,6 +1189,37 @@ def strip_correction_prefix(text: str) -> str:
         if not rest:
             return out
         out = rest
+
+
+# Conversational lead-ins: "Now search me X", "okay, jarvis, visit Y".
+_FILLER_START = re.compile(
+    r"^(?:now|so|ok(?:ay)?|well|please|jarvis|sir)\b[,.!:]?\s*", re.I)
+
+
+def strip_fillers(text: str) -> str:
+    """Drop leading conversational filler words; the rest stays verbatim.
+
+    Same shape as strip_correction_prefix: a bare 'okay' or 'now' is left
+    as spoken, since there is no request behind it to route.
+    """
+    out = (text or "").strip()
+    while True:
+        m = _FILLER_START.match(out)
+        rest = out[m.end():].strip(" ,") if m else ""
+        if not rest:
+            return out
+        out = rest
+
+
+# Request framing between the verb and the query: "search me a movie named
+# X" / "find me X" / "search for X" -> X.
+_SEARCH_FRAMING = re.compile(r"^(?:(?:for\s+me|me|for)\b[,:]?\s*)+", re.I)
+_SEARCH_NAMED = re.compile(
+    r"^(?:(?:an?|the|some)\s+)?(?:[\w'-]+\s+){0,3}?(?:named|called|titled)\s+(?=\S)",
+    re.I)
+# "search how to clear cache in chrome": the browser is part of the question.
+_QUESTION_START = re.compile(
+    r"^(?:how|what|why|where|when|which|who|can|does|do|is|are|should)\b", re.I)
 _TAIL_TARGET = re.compile(r"\b(?:inside|in|on|at)\s+([a-z0-9 .'-]{1,24}?)\s*$", re.I)
 
 # Spoken names for AI chats. History-searchable ones first.
@@ -1186,16 +1256,17 @@ _SEARCH_CLARIFY = ("[Error] What should I search for, sir? Name the query, "
 def parse_search_command(text: str):
     """Parse a spoken search command.
 
-    Returns dict: {query, target, is_history_search, corrected, clarify?}
-    or None when this isn't a search command. Target may be None (= Google).
+    Returns dict: {query, target, browser, is_history_search, corrected,
+    clarify?} or None when this isn't a search command. Target may be None
+    (= Google); browser is an app_registry key when one was spoken.
     `clarify` is set when the verb arrived with no query — execute_search
     returns it verbatim instead of searching for nothing.
     """
-    raw = (text or "").strip()
+    raw = strip_fillers(text)
     # A correction marker may precede the verb ("I mean search ...").
     m_corr = _CORRECTION_START.match(raw)
     if m_corr:
-        raw = re.sub(_CORRECTION_START, "", raw).strip()
+        raw = strip_fillers(re.sub(_CORRECTION_START, "", raw).strip())
         corrected = True
     else:
         corrected = False
@@ -1220,9 +1291,18 @@ def parse_search_command(text: str):
     if lead_history:
         body = re.sub(_LEAD_HISTORY, "", body).strip()
         if not body:
-            return {"query": "", "target": "chatgpt",
+            return {"query": "", "target": "chatgpt", "browser": None,
                     "is_history_search": True, "corrected": corrected,
                     "clarify": _SEARCH_CLARIFY}
+
+    # Query cleaning: "me a movie on Brave named The Odyssey" -> query
+    # "The Odyssey", browser brave. A question keeps its browser words.
+    body = _SEARCH_FRAMING.sub("", body, count=1).strip()
+    browser = None
+    if not _QUESTION_START.match(body):
+        body, bword = _split_browser(body)
+        browser = _browser_key(bword) if bword else None
+    body = _SEARCH_NAMED.sub("", body, count=1).strip()
 
     # tail qualifier: "... in <target>" — candidate capped at a few words,
     # resolved EXACTLY against AI names then the site registry.
@@ -1256,7 +1336,7 @@ def parse_search_command(text: str):
             target = typed
             body = body[:tail.start()].strip().rstrip(",.")
 
-    out = {"query": body, "target": target,
+    out = {"query": body, "target": target, "browser": browser,
            "is_history_search": is_hist,
            "corrected": corrected}
     if body.strip().lower().rstrip("?.!, ") in _BARE_SEARCH_OBJECT:
@@ -1284,7 +1364,35 @@ def execute_search(parsed: dict) -> str:
         result = __import__("browser_agent").open_site(url, name=target)
         return f"{result} — search for '{q}' manually there; I can't search inside that site yet."
 
-    return search_web(q)
+    # No site named: reuse the last site opened this session, if any, as a
+    # Google site: query in its browser (a spoken browser wins). Nothing
+    # remembered and no browser spoken -> the unchanged default search.
+    browser = parsed.get("browser")
+    try:
+        import conversation_window as cw
+        site = cw.last_site()
+    except Exception:
+        site = None
+    if not site and not browser:
+        return search_web(q)
+    browser = browser or site.get("browser") or None
+    host = ""
+    if site:
+        host = urllib.parse.urlsplit(site["url"]).netloc.lower()
+        host = host[4:] if host.startswith("www.") else host
+    terms = f"site:{host} {q}" if host else q
+    url = "https://www.google.com/search?q=" + urllib.parse.quote_plus(terms)
+    opened = _open_url_in_browser(url, f"search: {q}", browser, remember=False)
+    if opened.startswith("[Error]"):
+        return opened
+    note = opened.split("\n", 1)[1] if "\n" in opened else ""
+    used = "Chrome" if note else _browser_label(browser or "chrome")
+    if host:
+        msg = (f"Searching {q} (on {site.get('key') or host}, {used}) — Google "
+               f"results limited to {host}; I can't search inside the site itself.")
+    else:
+        msg = f"Searching {q} on Google in {used}."
+    return f"{msg}\n{note}" if note else msg
 
 
 def resolve_open_target(text: str, force: str | None = None,
@@ -2915,6 +3023,9 @@ def delegate(
     task = str(task or "").strip()
     if not task:
         return "[Error] No task given."
+    # Local routing reads the request without "now / okay / jarvis" lead-ins;
+    # logs and non-local backends keep the spoken text.
+    _rtask = strip_fillers(task)
 
     # ---- Phase 9: conversation window (local fast path context) ----------
     try:
@@ -2923,12 +3034,12 @@ def delegate(
         cw = None
 
     if cw is not None:
-        kind = cw.classify(task)
+        kind = cw.classify(_rtask)
 
         # 1) Answering our own app-vs-site question ("site" / "the app")
         if kind == "clarify_answer":
             pend = cw.pending_clarify()
-            choice = cw.answer_clarify(task)
+            choice = cw.answer_clarify(_rtask)
             if pend and choice:
                 name = pend.get("payload", {}).get("name", "")
                 cw.append(task, "clarify_answer")
@@ -2944,7 +3055,7 @@ def delegate(
         # 2) Fragment / follow-up ("also youtube", "again")
         elif kind in ("fragment", "contextual"):
             comp = cw.complete_fragment(re.sub(r"^(and|also|too|then)\s+", "",
-                                               task.strip(), flags=re.I))
+                                               _rtask, flags=re.I))
             if comp:
                 tag, target = comp
                 if tag == "repeat":
@@ -2973,7 +3084,7 @@ def delegate(
     # Gemini; correction ("I mean ...") replaces the previous query.
     if cw is not None:
         try:
-            parsed = parse_search_command(task)
+            parsed = parse_search_command(_rtask)
         except Exception:
             parsed = None
         if parsed is not None:
@@ -2994,7 +3105,7 @@ def delegate(
     # "visit the..." went to Hermes as a 15-turn / 300s job with nothing to
     # act on. Ask instead — a bare open-site request never leaves JARVIS.
     # "I mean visit X" is matched as "visit X"; cw logs keep the spoken text.
-    _otask = strip_correction_prefix(task)
+    _otask = strip_fillers(strip_correction_prefix(_rtask))
     _open_m = re.match(r"^\W*(?:(?:please|jarvis|hey)\b\W*)*"
                        r"(open|launch|go\s+to|goto|visit|browse|take\s+me\s+to)\b(.*)$",
                        _otask, flags=re.I | re.S)
@@ -3008,11 +3119,10 @@ def delegate(
     # ---- Phase 8 fast path: dual-registry "open X" -----------------------
     if re.match(r"^(open|launch|go to|goto|visit)\b", _otask.lower()):
         stripped = re.sub(r"^(open|launch|go to|goto|visit)\s+", "", _otask, flags=re.I)
-        # "visit X on Brave": the browser is where to open it, not what.
-        _bm = _BROWSER_SUFFIX_RE.search(stripped)
-        browser8 = _browser_key(_bm.group(1)) if _bm else None
-        if _bm:
-            stripped = stripped[:_bm.start()]
+        # "visit X on Brave" / "visit X on Brave now": the browser is where
+        # to open it, not what.
+        stripped, _bword = _split_browser(stripped)
+        browser8 = _browser_key(_bword) if _bword else None
         kind8, target8 = resolve_open_target(stripped, browser=browser8)
         if kind8 == "site":
             result = open_site(target8, browser=browser8)

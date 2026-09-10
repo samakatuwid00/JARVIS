@@ -25,9 +25,26 @@ TURN_TTL = 120                # seconds a turn stays referable
 
 _turns = []   # [{t, text, kind, tool, result}]
 
+# Last site opened this session. No TTL, unlike turns: "search X" a few
+# minutes after "visit HD movies on Brave" still means that site and browser.
+_last_site = {}   # {t, key, url, browser}
+
 
 def reset() -> None:
     _turns.clear()
+    _last_site.clear()
+
+
+def record_site(key: str, url: str, browser: str) -> None:
+    """Remember a successful site open (site key/name, URL, browser key)."""
+    _last_site.clear()
+    _last_site.update({"t": time.time(), "key": (key or "").strip(),
+                       "url": url or "", "browser": browser or ""})
+
+
+def last_site():
+    """{t, key, url, browser} of the last site opened this session, or None."""
+    return dict(_last_site) if _last_site.get("url") else None
 
 
 def append(text: str, kind: str, tool: str = "", result: str = "",
