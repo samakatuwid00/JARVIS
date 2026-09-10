@@ -144,6 +144,31 @@
     color: var(--muted);
   }
   .tab.active .count { background: rgba(110,168,254,0.18); color: var(--accent); }
+  .voice { margin-top: 14px; border-top: 1px solid #2a2a36; padding-top: 10px; }
+  .voice input {
+    width: 100%;
+    background: var(--card2);
+    border: 1px solid #2a2a36;
+    color: var(--text);
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-family: inherit;
+    font-size: 13px;
+  }
+  .voice .question { color: var(--accent); font-size: 12px; margin-bottom: 6px; }
+  .voice .proposal-text {
+    white-space: pre-wrap;
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 11px;
+    color: var(--muted);
+    background: var(--card2);
+    border: 1px solid #2a2a36;
+    border-radius: 8px;
+    padding: 8px;
+    margin-top: 8px;
+    max-height: 180px;
+    overflow: auto;
+  }
   .toolbar { margin-bottom: 16px; display: flex; gap: 10px; align-items: center; }
   .toolbar input {
     flex: 1;
@@ -263,6 +288,24 @@ function card(a) {
           <button onclick="acceptProposal('${escapeAttr(a.key)}', this)">Accept proposal</button>
         </div>
       </div>
+      <div class="voice">
+        <div class="section-h">Voice Rule Setup</div>
+        <input class="v-phrase" placeholder="Say it plainly — e.g. no explicit stuff and keep it quiet" />
+        <div style="margin-top:8px;display:flex;gap:8px;align-items:center;">
+          <button onclick="voiceBegin('${escapeAttr(a.key)}', this)">Propose Rules</button>
+          <span class="v-msg msg"></span>
+        </div>
+        <div class="v-proposal proposal-text" style="display:none;"></div>
+        <div class="v-clarify" style="display:none;margin-top:10px;">
+          <div class="v-question question"></div>
+          <input class="v-answer" placeholder="Your answer…" />
+          <div style="margin-top:8px;">
+            <button onclick="voiceClarify('${escapeAttr(a.key)}', this)">Confirm</button>
+          </div>
+        </div>
+        <div class="section-h">Current Rules</div>
+        <div class="v-current"></div>
+      </div>
     </div>
   `;
   const rulesBox = el.querySelector(".rules");
@@ -279,7 +322,28 @@ function card(a) {
       rulesBox.appendChild(rEl);
     }
   }
+  renderCurrentRules(el, cr);
   return el;
+}
+
+// Read-only mirror of the committed rules, under the voice section.
+function renderCurrentRules(card, rules) {
+  const box = card.querySelector(".v-current");
+  if (!box) return;
+  box.innerHTML = "";
+  if (!rules || !rules.length) {
+    box.innerHTML = '<div class="meta">No rules set yet.</div>';
+    return;
+  }
+  for (const r of rules) {
+    const rEl = document.createElement("div");
+    rEl.className = "rule";
+    rEl.innerHTML = `<span class="rid">${escapeHtml(r.rule_id || "rule")}</span>
+      <span class="enf">· ${escapeHtml(r.enforcement || "soft")} · ${escapeHtml(r.scope || "all_sessions")}</span>
+      <div class="meta">${escapeHtml(r.intent || "")}</div>
+      ${r.adapter_check ? `<div class="chk">check: ${escapeHtml(r.adapter_check)}</div>` : ""}`;
+    box.appendChild(rEl);
+  }
 }
 
 function toggleDetails(btn) {
@@ -415,6 +479,88 @@ async function acceptProposal(key, btn) {
   } else {
     msg.textContent = "Accept failed"; msg.className = "msg err";
   }
+}
+
+// ------------------------------------------------ Phase 4: voice authoring --
+
+function voiceStep(card, step) {
+  const msg = card.querySelector(".v-msg");
+  const prop = card.querySelector(".v-proposal");
+  const clarify = card.querySelector(".v-clarify");
+  msg.className = "v-msg msg";
+  if (step.status === "clarify" || step.status === "proposal") {
+    card._vRuleId = step.rule_id || "";
+    card.querySelector(".v-question").textContent = step.question || "";
+    card.querySelector(".v-answer").value = "";
+    clarify.style.display = "block";
+    if (step.proposal) {
+      prop.textContent = step.proposal;
+      prop.style.display = "block";
+    }
+    msg.textContent = step.status === "clarify" ? "Needs clarification" : "Proposal ready";
+  } else if (step.status === "committed") {
+    clarify.style.display = "none";
+    prop.style.display = "none";
+    card._vRuleId = null;
+    msg.textContent = "Committed ✓ (" + step.count + " rules)";
+    msg.className = "v-msg msg ok";
+  } else if (step.status === "cancelled") {
+    clarify.style.display = "none";
+    prop.style.display = "none";
+    card._vRuleId = null;
+    msg.textContent = "Cancelled";
+  }
+}
+
+async function voiceBegin(key, btn) {
+  const card = btn.closest(".card");
+  const phrase = (card.querySelector(".v-phrase").value || "").trim();
+  const msg = card.querySelector(".v-msg");
+  msg.className = "v-msg msg";
+  if (!phrase) { msg.textContent = "Say a rule first"; msg.className = "v-msg msg err"; return; }
+  btn.disabled = true;
+  const res = await fetch("/apps/rules/begin", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ app_key: key, phrase })
+  });
+  btn.disabled = false;
+  const d = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    msg.textContent = d.error || "Failed"; msg.className = "v-msg msg err"; return;
+  }
+  voiceStep(card, d);
+}
+
+async function voiceClarify(key, btn) {
+  const card = btn.closest(".card");
+  const answer = (card.querySelector(".v-answer").value || "").trim();
+  const msg = card.querySelector(".v-msg");
+  msg.className = "v-msg msg";
+  if (!answer) { msg.textContent = "Answer first"; msg.className = "v-msg msg err"; return; }
+  btn.disabled = true;
+  const res = await fetch("/apps/rules/clarify", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ app_key: key, rule_id: card._vRuleId || "", answer })
+  });
+  btn.disabled = false;
+  const d = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    msg.textContent = d.error || "Failed"; msg.className = "v-msg msg err"; return;
+  }
+  voiceStep(card, d);
+  if (d.status === "committed") await refreshRules(key, card);
+}
+
+async function refreshRules(key, card) {
+  const res = await fetch("/apps/rules/list?key=" + encodeURIComponent(key));
+  if (!res.ok) return;
+  const d = await res.json().catch(() => ({}));
+  const rules = d.rules || [];
+  renderCurrentRules(card, rules);
+  const a = findApp(key);
+  if (a) a.compiled_rules = rules;
 }
 
 function escapeHtml(s) {

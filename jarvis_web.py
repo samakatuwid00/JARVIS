@@ -956,6 +956,84 @@ async def post_apps_compile(message: Request):
     })
 
 
+def _known_app(key):
+    """True when `key` names an app in the on-disk registry."""
+    from machine_capabilities import REGISTRY_PATH
+    if not os.path.exists(REGISTRY_PATH):
+        return False
+    with open(REGISTRY_PATH, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return key in (data.get("apps") or {})
+
+
+@app.post("/apps/rules/begin")
+async def post_apps_rules_begin(message: Request):
+    """Phase 4: start voice rule authoring for an app.
+
+    Body: {"app_key": "spotify", "phrase": "no explicit stuff and keep it quiet"}
+    Returns either a clarification question or a proposal awaiting confirmation.
+    Nothing is written here — the user owns the commit (/apps/rules/clarify).
+    """
+    try:
+        body = await message.json()
+    except Exception:
+        return JSONResponse({"error": "bad json"}, status_code=400)
+    key = (body.get("app_key") or body.get("key") or "").strip()
+    phrase = (body.get("phrase") or "").strip()
+    if not key:
+        return JSONResponse({"error": "missing app_key"}, status_code=400)
+    if not phrase:
+        return JSONResponse({"error": "missing phrase"}, status_code=400)
+    if not _known_app(key):
+        return JSONResponse({"error": "unknown app"}, status_code=400)
+
+    import rules_voice
+    step = rules_voice.begin_rule_setup(key, phrase)
+    if step.get("status") == "error":
+        return JSONResponse(step, status_code=400)
+    return JSONResponse(dict(step, ok=True))
+
+
+@app.post("/apps/rules/clarify")
+async def post_apps_rules_clarify(message: Request):
+    """Phase 4: answer one clarification question, or confirm the proposal.
+
+    Body: {"app_key": "spotify", "rule_id": "keep_it_quiet", "answer": "under 40%"}
+    An empty `rule_id` means "accept the proposal as-is". Once nothing is open
+    the finalized rule set is committed to the registry.
+    """
+    try:
+        body = await message.json()
+    except Exception:
+        return JSONResponse({"error": "bad json"}, status_code=400)
+    key = (body.get("app_key") or body.get("key") or "").strip()
+    rule_id = (body.get("rule_id") or "").strip()
+    answer = (body.get("answer") or "").strip()
+    if not key:
+        return JSONResponse({"error": "missing app_key"}, status_code=400)
+    if not answer:
+        return JSONResponse({"error": "missing answer"}, status_code=400)
+
+    import rules_voice
+    step = rules_voice.handle_clarification(key, rule_id, answer)
+    if step.get("status") == "error":
+        return JSONResponse(step, status_code=400)
+    return JSONResponse(dict(step, ok=True))
+
+
+@app.get("/apps/rules/list")
+async def get_apps_rules_list(key: str = ""):
+    """Phase 4: the rules currently committed for an app, human-readable."""
+    key = (key or "").strip()
+    if not key:
+        return JSONResponse({"error": "missing key"}, status_code=400)
+    import rules_voice
+    out = rules_voice.list_rules(key)
+    if out.get("status") == "error":
+        return JSONResponse(out, status_code=400)
+    return JSONResponse(dict(out, ok=True))
+
+
 @app.get("/apps/registry")
 async def get_apps_registry():
     """Full registry with registered/enabled/hidden flags, grouped for the

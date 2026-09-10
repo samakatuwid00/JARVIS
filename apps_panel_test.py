@@ -157,12 +157,125 @@ else:
     with open(WEB, encoding="utf-8") as f:
         src = f.read()
     names = set(re.findall(
-        r"async def (post_apps_toggle|post_apps_rules|post_apps_hide|get_apps)\b", src))
+        r"async def (post_apps_toggle|post_apps_rules|post_apps_hide|get_apps"
+        r"|post_apps_rules_begin|post_apps_rules_clarify|get_apps_rules_list)\b", src))
     check("get_apps" in names, "get_apps defined in source")
     check("post_apps_toggle" in names, "post_apps_toggle defined in source")
     check("post_apps_rules" in names, "post_apps_rules defined in source")
     check("post_apps_hide" in names, "post_apps_hide defined in source")
+    check("post_apps_rules_begin" in names, "post_apps_rules_begin defined in source")
+    check("post_apps_rules_clarify" in names, "post_apps_rules_clarify defined in source")
+    check("get_apps_rules_list" in names, "get_apps_rules_list defined in source")
     check('"curated"' in src and '"all"' in src, "/apps returns curated + all")
+
+
+# --------------------------------------------- Phase 4: voice rule authoring --
+# rules_voice is pure stdlib + rules_compiler, so it is exercised directly
+# against a throwaway registry whether or not jarvis_web imported.
+import rules_voice  # noqa: E402
+
+voice_reg = os.path.join(tmpdir, "voice_registry.json")
+with open(voice_reg, "w", encoding="utf-8") as f:
+    json.dump({"apps": {"spotify": {"name": "Spotify"}}}, f)
+
+# 1) explicit phrase -> proposal, no clarification, nothing committed yet
+step = rules_voice.begin_rule_setup("spotify", "no explicit stuff", registry_path=voice_reg)
+check(step["status"] == "proposal", "begin_rule_setup: explicit phrase returns a proposal")
+check("no explicit stuff" in (step.get("proposal") or ""),
+      "proposal text quotes the source phrase")
+check(len(step.get("proposed") or []) == 1, "explicit phrase yields one rule")
+check(step["proposed"][0]["adapter_check"] == "pre_play: skip if track.explicit",
+      "explicit rule carries the pre_play adapter check")
+saved = json.load(open(voice_reg, encoding="utf-8"))
+check("compiled_rules" not in saved["apps"]["spotify"],
+      "begin_rule_setup does not commit — the user owns that")
+
+# confirming a proposal (empty rule_id) commits it
+step = rules_voice.handle_clarification("spotify", "", "yes", registry_path=voice_reg)
+check(step["status"] == "committed", "confirming a proposal commits it")
+saved = json.load(open(voice_reg, encoding="utf-8"))
+check(len(saved["apps"]["spotify"].get("compiled_rules") or []) == 1,
+      "confirmed proposal reaches the registry")
+
+# 2) ambiguous phrase -> clarification question
+step = rules_voice.begin_rule_setup(
+    "spotify", "no explicit stuff and keep it quiet", registry_path=voice_reg)
+check(step["status"] == "clarify", "begin_rule_setup: ambiguous phrase asks for clarification")
+check(step["rule_id"] == "keep_it_quiet", "clarification targets the ambiguous clause")
+check("%" in (step.get("question") or ""), "clarification question asks for a volume %")
+check(step.get("remaining") == 1, "one open question remains")
+
+# 3) answering the question commits the whole finalized set
+step = rules_voice.handle_clarification(
+    "spotify", "keep_it_quiet", "under 40% volume all sessions", registry_path=voice_reg)
+check(step["status"] == "committed", "handle_clarification commits once nothing is open")
+check(step["count"] == 2, "both clauses are committed")
+saved = json.load(open(voice_reg, encoding="utf-8"))
+committed = saved["apps"]["spotify"]["compiled_rules"]
+quiet = [r for r in committed if r["rule_id"] == "keep_it_quiet"][0]
+check(quiet["adapter_check"] == "pre_play: cap spotify volume at 40%",
+      "the answer is compiled into the adapter check")
+check(quiet["scope"] == "all_sessions", "the answer sets the rule scope")
+check(quiet["needs_clarification"] is False, "committed rule is no longer pending")
+check(rules_voice.pending_setup("spotify") is None, "pending state is cleared after commit")
+
+# 4) error paths
+check(rules_voice.handle_clarification("spotify", "x", "y", registry_path=voice_reg)["error"]
+      == "no rule setup in progress", "clarify without a setup is rejected")
+rules_voice.begin_rule_setup("spotify", "keep it quiet", registry_path=voice_reg)
+check(rules_voice.handle_clarification("spotify", "nope_rule", "x",
+                                       registry_path=voice_reg)["error"] == "unknown rule_id",
+      "clarify rejects an unknown rule_id")
+check(rules_voice.handle_clarification("spotify", "keep_it_quiet", "cancel",
+                                       registry_path=voice_reg)["status"] == "cancelled",
+      "a negative answer cancels the setup")
+check(rules_voice.begin_rule_setup("spotify", "", registry_path=voice_reg)["status"] == "error",
+      "begin_rule_setup rejects an empty phrase")
+
+# hard escalation survives the voice path
+rules_voice.begin_rule_setup("spotify", "never play explicit tracks even if I ask",
+                             registry_path=voice_reg)
+step = rules_voice.handle_clarification("spotify", "", "yes", registry_path=voice_reg)
+check(step["rules"][0]["enforcement"] == "hard",
+      "'never … even if I ask' is escalated to hard enforcement")
+
+# 5) list_rules
+out = rules_voice.list_rules("spotify", registry_path=voice_reg)
+check(out["status"] == "ok" and out["count"] == 1, "list_rules reports the committed rules")
+check("Rules for spotify" in out["summary"], "list_rules summary is human-readable")
+check("hard" in out["summary"], "list_rules summary shows enforcement")
+out = rules_voice.list_rules("chrome", registry_path=voice_reg)
+check(out["count"] == 0 and "No rules set" in out["summary"],
+      "list_rules handles an app with no rules")
+
+if live:
+    # the endpoints drive the same flow through the live registry
+    res = body_of(run(jarvis_web.post_apps_rules_begin(
+        FakeRequest({"app_key": "spotify", "phrase": "no explicit stuff and keep it quiet"}))))
+    check(res.get("status") == "clarify", "/apps/rules/begin returns a clarification")
+    rid = res.get("rule_id")
+    res = body_of(run(jarvis_web.post_apps_rules_clarify(
+        FakeRequest({"app_key": "spotify", "rule_id": rid,
+                     "answer": "under 25% volume all sessions"}))))
+    check(res.get("status") == "committed", "/apps/rules/clarify commits the rule set")
+    saved = json.load(open(reg_path, encoding="utf-8"))
+    check(any("25%" in (r.get("adapter_check") or "")
+              for r in saved["apps"]["spotify"]["compiled_rules"]),
+          "/apps/rules/clarify persists to the registry")
+
+    res = body_of(run(jarvis_web.get_apps_rules_list(key="spotify")))
+    check(res.get("ok") and res.get("count") == 2, "/apps/rules/list returns the rules")
+    check("Rules for spotify" in (res.get("summary") or ""),
+          "/apps/rules/list returns a readable summary")
+
+    res = body_of(run(jarvis_web.get_apps_rules_list(key="")))
+    check(res.get("error") == "missing key", "/apps/rules/list rejects a missing key")
+    res = body_of(run(jarvis_web.post_apps_rules_begin(
+        FakeRequest({"app_key": "nope", "phrase": "no explicit stuff"}))))
+    check(res.get("error") == "unknown app", "/apps/rules/begin rejects an unknown app")
+    res = body_of(run(jarvis_web.post_apps_rules_begin(
+        FakeRequest({"app_key": "spotify", "phrase": ""}))))
+    check(res.get("error") == "missing phrase", "/apps/rules/begin rejects an empty phrase")
 
 
 # ------------------------------------------------------------- panel HTML --
@@ -181,6 +294,16 @@ if os.path.exists(PANEL):
           "panel has a count badge on each tab")
     check('id="tab-curated" class="tab active"' in html, "curated tab is active by default")
     check(">Hide<" in html, "panel raw tab offers a Hide button")
+    # Phase 4 voice section
+    check("Voice Rule Setup" in html, "panel has the Voice Rule Setup section")
+    check("Current Rules" in html, "panel shows a Current Rules list")
+    check(">Propose Rules<" in html, "panel offers a Propose Rules button")
+    check("/apps/rules/begin" in html, "panel references /apps/rules/begin")
+    check("/apps/rules/clarify" in html, "panel references /apps/rules/clarify")
+    check("/apps/rules/list" in html, "panel references /apps/rules/list")
+    check('class="v-question question"' in html, "panel renders the clarification question")
+    check('class="v-answer"' in html, "panel has a clarification answer input")
+    check(">Confirm<" in html, "panel offers a Confirm button")
 
 
 if missing:
