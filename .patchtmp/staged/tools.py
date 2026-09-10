@@ -928,31 +928,14 @@ def web_browse(url: str, mode: str = "open", query: str = "") -> str:
 
 # ---- Web registry (Phase 8): named site resolution ------------------------
 
-def open_site(name: str, url: str = None, _rule_hops: int = 0) -> str:
+def open_site(name: str, url: str = None) -> str:
     """Resolve a spoken site name against web_registry.json and open it in
     the JARVIS debug-Chrome. Falls back to treating the input as a URL."""
     import web_registry as wr
     key = wr.resolve_site(name) if url is None else None
     if key:
         site = wr.get_site(key)
-        # Phase 3 runtime enforcement: a site's compiled_rules can deny the
-        # open outright or redirect it to another registered site.
-        try:
-            import rules_engine as _rules
-            gate = _rules.check(key, {"action": "open", "entry": site})
-        except Exception:
-            gate = {"action": "allow"}
-        if gate.get("action") == "deny":
-            return f"[Error] Launch blocked by rule: {gate.get('reason', '')}"
-        if gate.get("action") == "redirect" and gate.get("target"):
-            if _rule_hops >= 1:
-                return (f"[Error] Launch blocked by rule: redirect loop while "
-                        f"opening {key}.")
-            return open_site(gate["target"], _rule_hops=_rule_hops + 1)
-        opened = __import__("browser_agent").open_site(site["url"], name=key)
-        if gate.get("warning"):
-            opened = f"{opened}\n{gate['warning']}"
-        return opened
+        return __import__("browser_agent").open_site(site["url"], name=key)
     raw = (url or name or "").strip()
     if "://" not in raw and "." in raw:
         raw = "https://" + raw
@@ -3034,8 +3017,7 @@ def _clean_app_name(app: str) -> str:
     return s or str(app).strip()
 
 
-def open_application(app: str, action: str = None, query: str = None,
-                     _rule_hops: int = 0) -> str:
+def open_application(app: str, action: str = None, query: str = None) -> str:
     """Open an application by friendly name, resolving it via the capability manifest.
 
     Prefers machine_capabilities.resolve() (live scan of PATH / Program Files /
@@ -3087,8 +3069,7 @@ def open_application(app: str, action: str = None, query: str = None,
                 if _entry and _entry.get("bin"):
                     # Re-enter with the exact key so the rest of the function
                     # resolves the registered app normally (rules, launch, etc.)
-                    return open_application(_reg_key, action=action, query=query,
-                                           _rule_hops=_rule_hops)
+                    return open_application(_reg_key, action=action, query=query)
             except Exception:
                 pass
     except Exception:
@@ -3216,35 +3197,7 @@ def open_application(app: str, action: str = None, query: str = None,
                 from machine_capabilities import resolve as _resolve
             except Exception:
                 _resolve = None
-        # Resolve-before-act. resolve() returns the FIRST substring match and
-        # throws the rest away, so an underspecified name ("open ch" -> 46
-        # manifest keys) launched an arbitrary app with full confidence. Ask
-        # when the name is genuinely ambiguous; stay instant when it is not.
-        # Only this last-chance fuzzy step is gated — the registry paths above
-        # already match on word boundaries and longest-key-wins.
-        if _resolve:
-            try:
-                from machine_capabilities import resolve_candidates as _rc
-                _tier, _cands = _rc(requested)
-                _launchable_cands = []
-                try:
-                    from machine_capabilities import _is_launchable as _lc
-                    _launchable_cands = [(k, v) for k, v in _cands
-                                         if _lc(v.get("bin"))]
-                except Exception:
-                    _launchable_cands = list(_cands)
-                if _tier in ("prefix", "substring") and len(_launchable_cands) > 1:
-                    _names = ", ".join(k for k, _ in _launchable_cands[:5])
-                    _audit_log("open_application", requested, "AMBIGUOUS",
-                               result=f"{len(_launchable_cands)} candidates")
-                    return (f"[NEEDS_PICK] \"{requested}\" matches "
-                            f"{len(_launchable_cands)} applications: {_names}. "
-                            f"Which one should I open?")
-                entry = _launchable_cands[0][1] if _launchable_cands else _resolve(requested)
-            except Exception:
-                entry = _resolve(requested)
-        else:
-            entry = None
+        entry = _resolve(requested) if _resolve else None
     # Phase 14b: never launch a non-launchable bin. If the registry handed us a
     # directory / document / MSI icon string, drop the entry and keep searching
     # via aliases + raw name instead of startfile-ing junk.
@@ -3271,26 +3224,6 @@ def open_application(app: str, action: str = None, query: str = None,
     except Exception:
         # Enforcement must never break a launch; fail open.
         _notices = ""
-
-    # Phase 3 gate: rules_engine.check() adds deny + redirect on top of the
-    # hard/soft verdict above. A deny stops the launch; a redirect opens the
-    # rule's target app instead (one hop only — a rule chain must not loop).
-    try:
-        import rules_engine as _rules
-        _gate = _rules.check(requested,
-                             {"action": action, "entry": entry})
-    except Exception:
-        _gate = {"action": "allow"}
-    if _gate.get("action") == "deny":
-        return f"[Error] Launch blocked by rule: {_gate.get('reason', '')}"
-    if _gate.get("action") == "redirect" and _gate.get("target"):
-        if _rule_hops >= 1:
-            return (f"[Error] Launch blocked by rule: redirect loop while "
-                    f"opening {name}.")
-        return open_application(_gate["target"], action=action, query=query,
-                               _rule_hops=_rule_hops + 1)
-    if _gate.get("warning"):
-        _notices = f"{_notices}\n{_gate['warning']}".strip()
 
     # 2) Spotify (or other music) search: reliable URI opens the Search pane.
     if action == "search" and "spotify" in name.lower():
@@ -3664,16 +3597,7 @@ def play_spotify(query: str) -> str:
             pass
         import time as _t
         _t.sleep(3)
-    uri = None
-    try:
-        # Track resolution scrapes open.spotify.com in a headless browser —
-        # cold, that wedges past two minutes (live probe: total silence).
-        # Bound it: on expiry answer honestly instead of hanging the turn.
-        import concurrent.futures as _cf
-        with _cf.ThreadPoolExecutor(max_workers=1) as _ex:
-            uri = _ex.submit(_resolve_spotify_track, q).result(timeout=45)
-    except Exception:
-        uri = None
+    uri = _resolve_spotify_track(q)
     if not uri:
         return (f"I couldn't find a Spotify track for '{q}', sir. Try a more "
                 f"specific title or artist.")

@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "findings": [
+    {
+      "id": "3fe4fe720e38",
+      "path": "wake_engine.py",
+      "category": "concurrency",
+      "summary": "pause()/resume() is a boolean, not a counter: with two HUD tabs the first turn to finish resumes the wake loop while the second is still decoding",
+      "tier": "WARNING",
+      "first_seen": "2026-09-09",
+      "last_seen": "2026-09-09",
+      "runs": 1
+    },
+    {
+      "id": "28d9ff01a8a0",
+      "path": "_utts.json",
+      "category": "untracked-artifact",
+      "summary": "scratch artifact holding 470 real user utterances extracted from session logs; not gitignored, would be swept in by git add -A",
+      "tier": "WARNING",
+      "first_seen": "2026-09-09",
+      "last_seen": "2026-09-09",
+      "runs": 1
+    },
+    {
+      "id": "370bdfd76d7b",
+      "path": "jarvis_hud_v3.html",
+      "category": "ux-regression",
+      "summary": "a bare wake word now renders as a user line in the transcript, because commitInterim runs before the isBareWake branch",
+      "tier": "WATCH",
+      "first_seen": "2026-09-09",
+      "last_seen": "2026-09-09",
+      "runs": 1
+    },
+    {
+      "id": "f535ca0dcc56",
+      "path": "__main__.py",
+      "category": "broken-import",
+      "summary": "imports jarvis.main but no jarvis/ package exists; untracked and pre-existing",
+      "tier": "WATCH",
+      "first_seen": "2026-09-09",
+      "last_seen": "2026-09-09",
+      "runs": 1
+    },
+    {
+      "id": "eb77599a15ea",
+      "path": ".env.example",
+      "category": "stale-doc",
+      "summary": "ROUTER_API_KEY comment says 'proxy ignores value' but 9router rejects a dummy key with 401 invalid_api_key",
+      "tier": "WATCH",
+      "first_seen": "2026-09-09",
+      "last_seen": "2026-09-09",
+      "runs": 1
+    },
+    {
+      "id": "51beed57ccfd",
+      "path": "jarvis_web.py",
+      "category": "instrumentation-gap",
+      "summary": "_log_turn_timing is only reached on the full speaking path; scan, no-speech, clarify and hermes-ack turns emit no TIMING line",
+      "tier": "CLEAN CODE",
+      "first_seen": "2026-09-09",
+      "last_seen": "2026-09-09",
+      "runs": 1
+    },
+    {
+      "id": "46f1f7f8f5f8",
+      "path": "wake_engine.py",
+      "category": "edge-case",
+      "summary": "suspend(0) falls through to the default window because ms is tested for truthiness, not None",
+      "tier": "CLEAN CODE",
+      "first_seen": "2026-09-09",
+      "last_seen": "2026-09-09",
+      "runs": 1
+    }
+  ]
+}

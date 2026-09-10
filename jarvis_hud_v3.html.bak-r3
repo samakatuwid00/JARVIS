@@ -1,0 +1,2256 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JARVIS HUD — Voice</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&family=Rajdhani:wght@600;700&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --holo: #ffb454;          /* incumbent amber identity */
+    --holo-bright: #ffd9a0;
+    --ink: #070a0e;
+    --ok: #7ddba0;
+    --warn: #ffb454;
+    --bad: #ef7b64;
+    --info: #7cc4ff;
+    --hairline: color-mix(in srgb, var(--holo) 22%, transparent);
+    --hairline-soft: color-mix(in srgb, var(--holo) 14%, transparent);
+    --panel: rgba(10, 13, 18, .88);
+    /* Amplitude-driven levers. JS rewrites these on every animation frame while
+       the TTS clip plays, and resets them to exactly these idle values when it
+       ends, so the whole reactive layer collapses to "off" with no leftovers. */
+    --amp: 0; --hue: 0deg; --bright: 1; --sat: 1; --glow: 0; --glow-r: 48vmin; }
+  html, body { height: 100%; background: var(--ink); overflow: hidden;
+    font-family: Archivo, system-ui, sans-serif; color: #f2ead9; }
+
+  /* Typography voices: Rajdhani carries HUD lettering (status, labels, buttons);
+     Archivo carries reading text; monospace is reserved for data values. */
+  body { --font-display: 'Rajdhani', 'Archivo', system-ui, sans-serif;
+         --font-body: 'Archivo', system-ui, sans-serif;
+         --font-data: ui-monospace, 'Cascadia Mono', Consolas, monospace; }
+
+  /* Authored atmosphere: a faint scan texture + corner vignette over the orb.
+     Purely decorative, click-through, sits under every overlay. */
+  #jv-atmos { position: fixed; inset: 0; z-index: 30; pointer-events: none;
+    background:
+      radial-gradient(140% 110% at 50% 42%, transparent 55%, rgba(0, 0, 0, .5) 100%),
+      repeating-linear-gradient(0deg, rgba(255, 214, 150, .022) 0 1px, transparent 1px 5px); }
+
+  /* ---- background job cards (task tray, top-right) ---------------------- */
+  #job-tray {
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .job-card {
+      background: rgba(7, 10, 14, .92);
+      border: 1px solid var(--hairline);
+      border-radius: 10px;
+      padding: 9px 12px 10px;
+      font-family: var(--font-body);
+      color: #f2ead9;
+      animation: jobIn .22s ease-out;
+    }
+    @keyframes jobIn { from { opacity: 0; transform: translateX(16px); } }
+    /* Row layout matching System Status: title left, state right. */
+    .job-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+      font: 500 11.5px/1.5 var(--font-body); letter-spacing: .04em; }
+    /* Status glyph is drawn by CSS per state; the JS-set text glyph is muted so the
+       drawn icon is the only mark. Keeps the JS contract intact, upgrades the icon. */
+    .job-icon  { font-size: 0; width: 18px; height: 18px; flex: 0 0 auto; align-self: center;
+      display: inline-flex; align-items: center; justify-content: center;
+      border-radius: 6px; background: rgba(255, 180, 84, .12);
+      color: transparent; position: relative; }
+  .job-icon::before { content: ''; width: 12px; height: 12px; display: block;
+    background: currentColor; -webkit-mask: var(--glyph) center / contain no-repeat;
+            mask: var(--glyph) center / contain no-repeat; }
+  .job-card.is-running .job-icon { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffb454' stroke-width='2.6' stroke-linecap='round' stroke-dasharray='44 22'%3E%3Cpath d='M12 3a9 9 0 1 0 9 9'/%3E%3C/svg%3E"); color: #e8a74d; }
+  .job-card.is-running .job-icon::before { animation: jobSpin 1.1s linear infinite; }
+  .job-card.is-done    { border-color: rgba(125, 219, 160, .35); }
+  .job-card.is-done .job-icon { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%237ddba0' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4.5 12.5l5 5 10-11'/%3E%3C/svg%3E"); color: #7ddba0; background: rgba(125, 219, 160, .1); }
+  .job-card.is-error,
+  .job-card.is-timeout { border-color: rgba(239, 123, 100, .4); }
+  .job-card.is-error .job-icon,
+  .job-card.is-timeout .job-icon { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ef7b64' stroke-width='3' stroke-linecap='round'%3E%3Cpath d='M6 6l12 12M18 6L6 18'/%3E%3C/svg%3E"); color: #ef7b64; background: rgba(239, 123, 100, .1); }
+  .job-title { color: #d8b98a; text-transform: uppercase; white-space: nowrap;
+      overflow: hidden; text-overflow: ellipsis; font: 500 11.5px/1.5 var(--font-body);
+      letter-spacing: .04em; flex: 1; }
+    .job-state { font-family: var(--font-data); font-size: 11px;
+      color: #ffe1bb; text-align: right; white-space: nowrap; }
+    .job-note  { font-size: 11.5px; color: #ffe1bb; margin-top: 3px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right;
+      font-family: var(--font-data); font-size: 11px; }
+
+  /* Page = HUD only. The glow and the status strip float over it; the glow is
+     pointer-events:none, the strip is a thin non-blocking overlay. */
+  #stage { position: fixed; inset: 0; width: 100%; height: 100%; }
+  #hud { position: absolute; inset: 0; width: 100%; height: 100%;
+    border: 0; display: block; filter: brightness(.5) saturate(.55); transition: filter .12s linear; }
+  /* The artifact's canvas orb reacts to its own internal speaking state, which we
+     cannot reach. So the reconstruction is driven wrapper-side, from the live
+     amplitude of the TTS waveform, instead of a fixed breathing keyframe. */
+  #hud.speaking { filter: hue-rotate(var(--hue)) brightness(var(--bright)) saturate(var(--sat)); }
+  #hud.listening { filter: hue-rotate(-12deg) brightness(1.05); transition: filter .3s; }
+
+  /* Voice overlay — subtle full-screen tint only */
+  #jv-glow { position: fixed; inset: 0; z-index: 50; pointer-events: none; opacity: 0;
+    transition: opacity .25s; box-shadow: inset 0 0 160px color-mix(in srgb, var(--holo) 40%, transparent); }
+  /* Speaking: not a tint but a soft radial disc sitting behind the orb, whose
+     radius (--glow-r) and brightness (--glow) both track speech energy. */
+  #jv-glow.speak { opacity: 1; box-shadow: none; }
+  #jv-glow.speak::after { content: ''; position: absolute; left: 50%; top: 50%;
+    width: calc(var(--glow-r) * 2); height: calc(var(--glow-r) * 2);
+    margin: calc(var(--glow-r) * -1) 0 0 calc(var(--glow-r) * -1);
+    border-radius: 50%; opacity: var(--glow); mix-blend-mode: screen;
+    transition: opacity .08s linear;
+    background: radial-gradient(circle,
+      color-mix(in srgb, var(--holo) 34%, transparent) 0%,
+      color-mix(in srgb, var(--holo) 14%, transparent) 46%,
+      transparent 72%); }
+  #jv-glow.listen { opacity: 1; animation: jvBreathe 1.1s ease-in-out infinite;
+    box-shadow: inset 0 0 190px color-mix(in srgb, #9dff8a 45%, transparent); }
+  #jv-glow.think { opacity: .55;
+    box-shadow: inset 0 0 140px color-mix(in srgb, #6ec3ff 40%, transparent); }
+  @keyframes jvBreathe { 0%,100% { opacity: .45; } 50% { opacity: 1; } }
+
+  /* ------------------------------------------------------------ speaking rings */
+  /* Rings launched from the orb's edge while JARVIS talks. The orb sits at the
+     viewport centre, so the container does too; --r is the base radius. */
+  #jv-rings { position: fixed; inset: 0; z-index: 50; pointer-events: none;
+    display: none; --r: 24vmin; }
+  #jv-rings.speak { display: block; }
+  #jv-rings i { position: absolute; left: 50%; top: 50%; display: block;
+    width: calc(var(--r) * 2); height: calc(var(--r) * 2); margin: calc(var(--r) * -1) 0 0 calc(var(--r) * -1);
+    border-radius: 50%; opacity: 0;
+    border: 1px solid color-mix(in srgb, var(--holo) calc(45% + var(--amp) * 55%), transparent); }
+  /* Rings are no longer three looping elements on fixed delays: JS launches one
+     from the orb's edge on every fresh amplitude peak and drops it on animationend. */
+  #jv-rings i.jv-ring-spawn { animation: jvRingSpawn 2.2s ease-out 1 both; }
+  @keyframes jvRingSpawn {
+    0%   { transform: scale(.55); opacity: 0; }
+    14%  { opacity: calc(.28 + var(--amp) * .42); }
+    100% { transform: scale(1.45); opacity: 0; }
+  }
+
+  /* ------------------------------------------------------------ status strip */
+  /* Voice-only UI: a thin floating readout in the corner. No transcript, no
+     input. It never eats clicks except on its own two fallback buttons. */
+  #jv-head { position: fixed; z-index: 60; left: 18px; bottom: 18px;
+    display: flex; align-items: center; gap: 11px;
+    padding: 9px 14px; border-radius: 14px; pointer-events: none;
+    background: color-mix(in srgb, #070a0e 78%, transparent);
+    border: 1px solid var(--hairline);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, .4);
+    backdrop-filter: blur(8px); }
+  #jv-head .jv-btn { pointer-events: auto; }
+  #jv-dot { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto;
+    background: color-mix(in srgb, var(--holo) 70%, transparent);
+    box-shadow: 0 0 10px var(--holo); transition: background .2s, box-shadow .2s; }
+  #jv-dot.listen { background: #9dff8a; box-shadow: 0 0 16px #9dff8a; animation: jvPulse .9s infinite; }
+  #jv-dot.think  { background: #6ec3ff; box-shadow: 0 0 16px #6ec3ff; animation: jvPulse 1.4s infinite; }
+  #jv-dot.speak  { background: var(--holo); box-shadow: 0 0 20px var(--holo); animation: jvPulse .7s infinite; }
+  #jv-dot.dead   { background: #ec3013; box-shadow: 0 0 12px #ec3013; animation: none; }
+  @keyframes jvPulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.45); } }
+
+  #jv-status { font: 700 12px/1.4 var(--font-display); letter-spacing: .24em;
+    text-transform: uppercase; color: #ffd9a0; }
+  #jv-status.live { color: #9dff8a; }
+  #jv-level { width: 78px; height: 4px; border-radius: 3px; overflow: hidden; flex: 0 0 auto;
+    background: color-mix(in srgb, var(--holo) 18%, transparent); }
+  #jv-level i { display: block; height: 100%; width: 0%; background: var(--holo);
+    transition: width .08s linear; }
+  #jv-actions { display: flex; gap: 8px; }
+
+  .jv-btn { cursor: pointer; border-radius: 999px; padding: 7px 15px;
+    font: 700 10.5px/1 var(--font-display); letter-spacing: .18em; text-transform: uppercase;
+    color: #ffd9a0; background: transparent;
+    border: 1px solid color-mix(in srgb, var(--holo) 55%, transparent);
+    transition: background .12s, color .12s, border-color .12s; }
+  .jv-btn:hover { background: color-mix(in srgb, var(--holo) 18%, transparent);
+    border-color: var(--holo); color: #ffe7c4; }
+  .jv-btn:active { transform: translateY(1px); }
+  .jv-btn:focus-visible { outline: 2px solid var(--holo); outline-offset: 2px; }
+  /* Fallback controls — only shown when they are actually needed */
+  #jv-retry, #jv-unlock, #jv-end { display: none; }
+  #jv-retry.show, #jv-unlock.show, #jv-end.show { display: inline-block; }
+  /* A fallback control demanding action reads as primary. */
+  #jv-unlock.show, #jv-retry.show { background: var(--holo); color: #1a1005; border-color: var(--holo); }
+  #jv-unlock.show:hover, #jv-retry.show:hover { background: #ffc87a; color: #1a1005; }
+
+  /* ------------------------------------------------------------ transcript */
+  /* Wrapper-side (NOT iframe) typed path. It sits above #jv-head and never
+     covers the artifact's own footer controls. The container itself is
+     click-through; only the transcript and the input strip take pointer events,
+     so the mic path inside the iframe keeps working untouched. */
+  #jv-chat { position: fixed; z-index: 60; left: 0; right: 0; bottom: 108px;
+    width: min(720px, calc(100% - 32px)); margin: 0 auto;
+    display: flex; flex-direction: column; gap: 9px; pointer-events: none;
+    font-family: var(--font-body);
+    color: #ffe7c4; }
+
+  #jv-log { pointer-events: auto; overflow-y: auto; max-height: 34vh;
+    display: flex; flex-direction: column; gap: 6px; padding: 0 2px;
+    scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--holo) 35%, transparent) transparent; }
+  #jv-log::-webkit-scrollbar { width: 4px; }
+  #jv-log::-webkit-scrollbar-thumb { border-radius: 3px;
+    background: color-mix(in srgb, var(--holo) 35%, transparent); }
+
+  .jv-line { max-width: 86%; white-space: pre-wrap; word-break: break-word;
+    font: 500 13.5px/1.55 var(--font-body);
+    letter-spacing: .01em; text-shadow: 0 0 12px color-mix(in srgb, var(--holo) 18%, transparent); }
+  .jv-line::before { content: ''; display: none; }
+  .jv-line-user { align-self: flex-end; font-weight: 600;
+    background: #16283c; border: 1px solid rgba(255, 180, 84, .2);
+    border-radius: 14px; border-bottom-right-radius: 5px; padding: 8px 13px;
+    color: #ffe7c4; }
+  /* The HUD line shows the reply currently being spoken; this panel is the
+     scrollback. Hiding these outright (to kill the duplicate display) left the
+     transcript showing only the user's own prompts, so every past reply
+     vanished and the history looked frozen on one answer. Dimmed instead:
+     the live line reads from the HUD, the record stays here. */
+  .jv-line-jarvis { align-self: flex-start; display: flex; gap: 9px;
+    align-items: flex-start;
+    background: rgba(255, 255, 255, .035); border: 1px solid var(--hairline);
+    border-radius: 14px; border-bottom-left-radius: 5px; padding: 8px 13px;
+    color: #f4e3c8; }
+  .jv-line-jarvis::before { content: 'J'; flex: 0 0 auto; width: 20px; height: 20px;
+    border-radius: 50%; background: rgba(255, 180, 84, .14);
+    border: 1px solid rgba(255, 180, 84, .4); color: var(--holo);
+    font: 700 11px/20px 'Rajdhani', sans-serif; text-align: center; }
+  /* Block caret, alive only while the typewriter is still revealing the line. */
+  .jv-line-jarvis.jv-typing .jv-text::after { content: '▌'; margin-left: 1px;
+    animation: jvCaret .7s step-end infinite; }
+  @keyframes jvCaret { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+
+  /* JARVIS's real reply, drawn OVER the HUD's own scripted line. The HUD cycles
+     canned dialogue ("THE SCAN IS ARCHIVED TO THE MALIBU SERVER, SIR.") from
+     its own timers and re-renders that subtree constantly, so writing into it
+     is a fight we lose. This overlay lives in the wrapper document instead —
+     React cannot touch it — and is positioned over the HUD line each frame. */
+  #jv-hudline { position: absolute; display: none; z-index: 40;
+    align-items: center; justify-content: center; text-align: center;
+    font: 600 13px/20.15px var(--font-body); letter-spacing: 1.69px;
+    color: #ffe1bb; pointer-events: none; padding: 3px 12px;
+    background: rgba(7, 10, 14, .96); border-radius: 8px; }
+  /* The mask was positioned over the orb's scripted dialogue, but in the v3
+     shell it overlaps the real transcript feed. Keep it permanently hidden so
+     it never blocks the chat; the dimmed orb backdrop hides the fake text. */
+  #jv-hudline.show { display: none; }
+  #jv-hudline .jv-hl-label { color: #ffd9a0; opacity: .85; margin-right: 7px;
+    white-space: nowrap; }
+  #jv-hudline.jv-typing .jv-hl-text::after { content: '▌'; margin-left: 1px;
+    animation: jvCaret .7s step-end infinite; }
+
+  /* Left column: replaces ARCHIVE CRATE 07 / MASS / COMPOSITION / INTEGRITY,
+     which are pure set dressing, with the local model's real figures. */
+  #jv-left { display: flex; flex-direction: column; width: 100%;
+    gap: 6px; pointer-events: auto;
+    background: rgba(7, 10, 14, .96);
+    border: 1px solid var(--hairline-soft); border-radius: 12px;
+    padding: 12px 14px; font-family: var(--font-body);
+    box-shadow: 0 14px 36px rgba(0, 0, 0, .35); }
+  #jv-left.show { display: flex; }
+  #jv-left .jv-lf-label { font: 700 10.5px/1.3 var(--font-display); letter-spacing: .22em;
+    text-transform: uppercase; color: #d8b98a; }
+  #jv-left .jv-lf-model { font: 700 21px/1.15 var(--font-display); letter-spacing: .02em;
+    color: #ffe1bb; }
+  #jv-left .jv-lf-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 1px; }
+  #jv-left .jv-lf-chip { font: 700 9.5px/1 var(--font-display); letter-spacing: .14em;
+    text-transform: uppercase; padding: 4px 8px; border-radius: 4px;
+    border: 1px solid color-mix(in srgb, var(--holo) 34%, transparent);
+    color: #ffd9a0; }
+  #jv-left .jv-lf-chip.ok { border-color: rgba(125, 219, 160, .5); color: #9fe6ba; }
+  #jv-left .jv-lf-row { display: flex; justify-content: space-between; align-items: baseline;
+    gap: 8px; font: 500 11.5px/1.5 var(--font-body); letter-spacing: .04em; }
+  #jv-left .jv-lf-k { color: #d8b98a; text-transform: uppercase; white-space: nowrap; }
+  #jv-left .jv-lf-v { font-family: var(--font-data); font-size: 11px;
+    color: #ffe1bb; white-space: nowrap; }
+  #jv-left .jv-lf-sec { font: 700 10.5px/1.3 var(--font-display); letter-spacing: .2em;
+    text-transform: uppercase; color: #d8b98a;
+    margin-top: 8px;
+    border-top: 1px solid var(--hairline-soft); padding-top: 8px; }
+  /* Context budget: prompt / output / headroom as a share of the real window. */
+  #jv-left .jv-lf-bar { height: 5px; border-radius: 3px; overflow: hidden; display: flex;
+    background: color-mix(in srgb, var(--holo) 14%, transparent); margin-top: 3px; }
+  #jv-left .jv-lf-bar i { display: block; height: 100%; width: 0%; transition: width .3s; }
+  #jv-left .jv-lf-bar i.p { background: var(--holo); }
+  #jv-left .jv-lf-bar i.o { background: #9dff8a; }
+
+  /* Live telemetry, drawn over the HUD's fake THREAT ASSESSMENT block. Same
+     overlay approach as the transcript: the HUD re-renders that subtree from
+     React state, so anything written into it is wiped within the second. */
+  #jv-stats { position: absolute; display: none; z-index: 46; flex-direction: column;
+    gap: 5px; pointer-events: none;
+    background: rgba(7, 10, 14, .96);
+    border: 1px solid var(--hairline-soft); border-radius: 12px;
+    padding: 12px 14px; font-family: var(--font-body);
+    box-shadow: 0 14px 36px rgba(0, 0, 0, .35); }
+  #jv-stats.show { display: flex; }
+  /* ---- unified panel design (System Status chrome for ALL side panels) ---- */
+  .jv-sec .jv-st-title { font: 700 11px/1.4 var(--font-display); letter-spacing: .24em;
+    text-transform: uppercase; color: #ffd9a0; margin-bottom: 9px; }
+  .jv-sec .jv-st-row, .jv-cueline { display: flex; align-items: baseline; justify-content: space-between;
+    gap: 8px; font: 500 11.5px/1.5 var(--font-body); letter-spacing: .04em;
+    margin-top: 5px; padding: 1px 0; }
+  .jv-sec .jv-st-k { color: #d8b98a; text-transform: uppercase; white-space: nowrap; }
+  .jv-sec .jv-st-v { font-family: var(--font-data); font-size: 11px;
+    color: #ffe1bb;
+    text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .jv-sec .jv-st-v.ok   { color: #9fe6ba; }
+  .jv-sec .jv-st-v.warn { color: #ffc14d; }
+  .jv-sec .jv-st-v.bad  { color: #f08a72; }
+  #jv-stats .jv-st-meter { height: 4px; border-radius: 3px; overflow: hidden; margin-top: 2px;
+    background: color-mix(in srgb, var(--holo) 16%, transparent); }
+  #jv-stats .jv-st-meter i { display: block; height: 100%; width: 0%;
+    background: var(--holo); transition: width .08s linear; }
+
+  /* Conversation transcript, parked in the HUD's empty right column (verified
+     310x505 of nothing under the PROTOCOL row). Lives in the wrapper document
+     and is positioned over the iframe, so the HUD's own React re-renders cannot
+     disturb it. The typed input stays where it is at the bottom. */
+  #jv-side { position: absolute; display: none; z-index: 45; flex-direction: column;
+    pointer-events: none;
+    background: rgba(7, 10, 14, .82);
+    border: 1px solid var(--hairline-soft); border-radius: 12px;
+    padding: 12px 14px;
+    box-shadow: 0 14px 36px rgba(0, 0, 0, .35); }
+  #jv-side.show { display: flex; }
+  #jv-side-head { flex: 0 0 auto; font: 700 10px/1.4 var(--font-display);
+    letter-spacing: .24em; text-transform: uppercase;
+    color: #ffd9a0;
+    padding-bottom: 5px; margin-bottom: 6px;
+    border-bottom: 1px solid var(--hairline); }
+  #jv-feed { display: flex; flex-direction: column; min-height: 200px; flex: 0 1 auto;
+    max-height: 38vh; padding: 9px 11px; overflow: hidden; }
+  #jv-feed #jv-side-head { flex: 0 0 auto; }
+  #jv-feed #jv-side-log { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+  #jv-feed #jv-cues { flex: 0 0 auto; }
+  #jv-feed #jv-input-wrap { flex: 0 0 auto; }
+  #jv-side-log { flex: 1 1 auto; overflow-y: auto; pointer-events: auto;
+    display: flex; flex-direction: column; gap: 5px; padding-right: 4px;
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--holo) 35%, transparent) transparent; }
+  #jv-side-log::-webkit-scrollbar { width: 4px; }
+  #jv-side-log::-webkit-scrollbar-thumb { border-radius: 3px;
+    background: color-mix(in srgb, var(--holo) 35%, transparent); }
+  /* The old bottom transcript is superseded by the side panel; the input stays. */
+  #jv-log { display: none; }
+
+  #jv-input-wrap { pointer-events: auto; display: flex; align-items: center; gap: 10px;
+    padding: 8px 15px; border-radius: 999px;
+    background: color-mix(in srgb, #070a0e 80%, transparent);
+    border: 1px solid var(--hairline);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, .45);
+    backdrop-filter: blur(8px); transition: border-color .2s, box-shadow .2s; }
+  #jv-input-wrap::before { content: '>'; flex: 0 0 auto; opacity: .7;
+    font: 700 13px/1 var(--font-data); color: var(--holo); }
+  #jv-input-wrap:focus-within { border-color: color-mix(in srgb, var(--holo) 60%, transparent);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--holo) 35%, transparent),
+                0 12px 34px rgba(0, 0, 0, .5); }
+  #jv-input-wrap.jv-err { border-color: #ec3013; box-shadow: 0 0 20px color-mix(in srgb, #ec3013 40%, transparent); }
+
+  #jv-input { flex: 1 1 auto; min-width: 0; border: 0; outline: 0; background: transparent;
+    font-family: var(--font-body);
+    font-size: 13.5px; font-weight: 500; letter-spacing: .03em;
+    color: #ffe7c4; caret-color: var(--holo); }
+  #jv-input::placeholder { color: #8a7a5e;
+    letter-spacing: .14em; font-weight: 600; }
+
+  /* Layer 1 (Intake) "did you mean?" clarification chips */
+  #jv-clarify-root { position: fixed; inset: 0; pointer-events: none; z-index: 60; }
+  .jv-clarify {
+    position: fixed; left: 50%; bottom: 12%; transform: translateX(-50%);
+    pointer-events: auto; max-width: min(560px, 92vw);
+    display: flex; flex-direction: column; gap: 10px; padding: 16px 18px;
+    background: color-mix(in srgb, #070a0e 90%, var(--holo));
+    border: 1px solid color-mix(in srgb, var(--holo) 55%, transparent);
+    border-radius: 14px; backdrop-filter: blur(8px);
+    box-shadow: 0 18px 44px rgba(0, 0, 0, .55), 0 0 30px color-mix(in srgb, var(--holo) 22%, transparent);
+    font-family: var(--font-body); animation: jvClarifyIn .18s ease-out;
+  }
+  @keyframes jvClarifyIn { from { opacity: 0; transform: translate(-50%, 8px); } }
+  .jv-clarify-head { color: #ffd9a0;
+    font: 700 12px/1.3 var(--font-display); letter-spacing: .18em; text-transform: uppercase; }
+  .jv-clarify-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .jv-chip {
+    pointer-events: auto; cursor: pointer; padding: 9px 15px; border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--holo) 50%, transparent);
+    background: color-mix(in srgb, var(--holo) 12%, transparent);
+    color: #ffe7c4;
+    font: 600 13px/1 var(--font-body); letter-spacing: .02em;
+    transition: background .12s, transform .12s; }
+  .jv-chip:hover { background: color-mix(in srgb, var(--holo) 26%, transparent);
+    transform: translateY(-1px); }
+  .jv-chip:active { transform: translateY(0); }
+  .jv-chip:focus-visible { outline: 2px solid var(--holo); outline-offset: 2px; }
+
+  /* ---- Apps modal: same holo/dark language as the rest of the HUD. ---- */
+  #jv-apps-modal { position: fixed; inset: 0; display: none; z-index: 80;
+    background: rgba(4, 6, 10, .74); backdrop-filter: blur(6px); }
+  #jv-apps-modal.show { display: flex; align-items: center; justify-content: center; }
+  #jv-apps-card { width: min(960px, 96vw); height: min(780px, 94vh); display: flex;
+    flex-direction: column; border-radius: 14px;
+    background: linear-gradient(165deg, #0c1118, #080c12);
+    border: 1px solid color-mix(in srgb, var(--holo) 32%, transparent);
+    box-shadow: 0 32px 80px rgba(0, 0, 0, .6);
+    font-family: var(--font-body); }
+  #jv-apps-head { display: flex; align-items: center; gap: 10px;
+    padding: 10px 14px 6px; }
+  #jv-apps-title { font: 700 13px/1 var(--font-display); letter-spacing: .22em;
+    color: #ffd9a0; flex: 1; }
+  #jv-apps-count { font-family: var(--font-data); font-size: 11px; letter-spacing: .08em;
+    color: #d8b98a; }
+  #jv-apps-close { background: none; border: 1px solid transparent; border-radius: 8px;
+    cursor: pointer; font-size: 18px; line-height: 1; padding: 3px 9px;
+    color: #ffd9a0; transition: background .12s, border-color .12s; }
+  #jv-apps-close:hover { background: color-mix(in srgb, var(--holo) 16%, transparent);
+    border-color: var(--hairline); }
+  #jv-apps-frame { width: 100%; height: calc(100% - 54px); border: none;
+    border-radius: 0 0 14px 14px; background: #0e0e12; }
+
+
+  /* ---- v3 layout: three-column shell over the dimmed artifact ------------- */
+  #jv-backdim { position: fixed; inset: 0; z-index: 20; pointer-events: none;
+    background: rgba(4, 6, 10, .68); backdrop-filter: saturate(.5) brightness(.9); }
+  #jv-topfade, #jv-footfade { position: fixed; left: 0; right: 0; z-index: 22; pointer-events: none; }
+  #jv-topfade { top: 0; height: 96px; background: linear-gradient(#05080d 20%, rgba(5, 8, 13, 0)); }
+  #jv-footfade { bottom: 0; height: 110px; background: linear-gradient(rgba(5, 8, 13, 0), #05080d 32%); }
+
+  #jv-topbar { position: relative; z-index: 36; display: flex; align-items: center; gap: 12px;
+    padding: 10px 18px; border-radius: 14px;
+    background: rgba(7, 10, 14, .88); border: 1px solid var(--hairline);
+    box-shadow: 0 14px 36px rgba(0, 0, 0, .4); backdrop-filter: blur(10px); }
+  #jv-brand { font: 700 21px/1 var(--font-display); letter-spacing: .3em; color: var(--holo); }
+  .jv-pill { font: 700 10.5px/1 var(--font-display); letter-spacing: .16em; text-transform: uppercase;
+    padding: 6px 12px; border-radius: 999px; border: 1px solid var(--hairline); color: #ffd9a0;
+    display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .jv-pill.ok { border-color: rgba(125, 219, 160, .45); color: #9fe6ba; }
+  .jv-pill.online { border-color: rgba(125, 219, 160, .45); color: #9fe6ba; }
+  .jv-pill.offline { border-color: rgba(239, 123, 100, .45); color: #f08a72; }
+  .jv-pill.grow { margin-left: auto; }
+
+  #jv-shell { position: relative; z-index: 35; display: grid; gap: 16px;
+      grid-template-columns: 300px minmax(0, 1fr) 300px;
+      grid-template-rows: auto 1fr; min-height: calc(100vh - 16px); margin-top: 16px; }
+  @media (max-width: 1180px) { #jv-shell { grid-template-columns: 260px minmax(0, 1fr) 260px; } }
+  #jv-col-left, #jv-col-right { align-self: stretch; }
+  #jv-center { align-self: end; margin-bottom: 14px; }
+  #jv-col-left, #jv-col-right { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+  #jv-col-left > .jv-sec, #jv-col-right > .jv-sec, #jv-col-left > #jv-left { flex: 1 1 auto; }
+  #jv-center { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+  #jv-center .jv-spacer { flex: 0 0 auto; height: 15vh; min-height: 100px; max-height: 200px; }
+
+  /* Panels live inside columns now: static flow, always shown. */
+  #jv-col-left #jv-left, #jv-col-left #jv-stats, #jv-col-right #jv-stats { position: static; }
+  .jv-sec { background: rgba(7, 10, 14, .92); border: 1px solid var(--hairline);
+    border-radius: 12px; padding: 16px 17px; box-shadow: 0 14px 36px rgba(0, 0, 0, .38);
+    backdrop-filter: blur(8px); }
+
+  /* Lucide icon sizing */
+  svg.lucide { width: 14px; height: 14px; stroke-width: 2; vertical-align: -2px; }
+  .jv-qa svg.lucide { width: 15px; height: 15px; margin-right: 7px; }
+  .job-icon svg.lucide { width: 12px; height: 12px; }
+  .jv-gate-btn svg.lucide { width: 13px; height: 13px; margin-right: 6px; }
+  .jv-npbtn svg.lucide { width: 13px; height: 13px; margin-right: 6px; }
+
+  /* Voice feedback mode switch */
+  .vf-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; text-align: center; margin-top: 8px; margin-bottom: 6px; }
+  .vf-opt { cursor: pointer; padding: 7px 0; border-radius: 8px; border: 1px solid var(--hairline);
+    font: 700 10.5px/1 var(--font-display); letter-spacing: .12em; text-transform: uppercase;
+    color: #d8b98a; transition: background .12s, color .12s, border-color .12s; }
+  .vf-opt:hover { color: #ffe7c4; }
+  .vf-opt.active { border-color: var(--holo); color: var(--holo);
+    background: color-mix(in srgb, var(--holo) 14%, transparent); }
+  .vf-cue { display: flex; align-items: center; gap: 7px; font-size: 11px;
+    color: #e8d9bd; margin-top: 6px; }
+  .vf-cue i { width: 6px; height: 6px; border-radius: 50%; background: var(--holo); flex: 0 0 auto; }
+  .vf-cue .v { margin-left: auto; }
+
+  /* Now playing */
+  .jv-npbtn { cursor: pointer; flex: 1 1 auto; text-align: center; padding: 7px 0;
+    border-radius: 8px; border: 1px solid var(--hairline); background: transparent;
+    font: 700 10px/1 var(--font-display); letter-spacing: .12em; text-transform: uppercase;
+    color: #ffd9a0; transition: background .12s, border-color .12s; }
+  .jv-npbtn:hover { background: color-mix(in srgb, var(--holo) 16%, transparent); border-color: var(--holo); }
+
+  /* Quick actions — uniform row design matching System Status */
+    .jv-qa { cursor: pointer; padding: 7px 12px; border-radius: 8px; border: 1px solid var(--hairline);
+      font: 500 11.5px/1.5 var(--font-body); letter-spacing: .04em;
+      color: #d8b98a; transition: border-color .12s, color .12s, background .12s;
+      display: flex; align-items: center; justify-content: space-between; }
+    .jv-qa::after { content: '›'; color: #8a7a5e; font-size: 14px; line-height: 1; }
+    .jv-qa:hover { border-color: var(--holo); color: var(--holo);
+      background: color-mix(in srgb, var(--holo) 8%, transparent); }
+    .jv-qa svg.lucide { width: 14px; height: 14px; margin-right: 7px; }
+    .jv-qa-grid { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+
+  /* Confirm gate card */
+  .jv-gate { border: 1px solid color-mix(in srgb, #ffc14d 55%, transparent);
+    background: color-mix(in srgb, #ffc14d 6%, transparent);
+    border-radius: 12px; padding: 12px 14px; margin-bottom: 4px; }
+  .jv-gate-head { display: flex; align-items: flex-start; gap: 8px; font-size: 12.5px; line-height: 1.45; }
+  .jv-gate-head .t { font: 700 12.5px/1.45 var(--font-display); letter-spacing: .1em;
+    color: #ffc14d; white-space: nowrap; }
+  .jv-gate-task { color: #d8b98a; font-size: 11.5px; margin-top: 2px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .jv-gate-btns { display: flex; gap: 8px; margin-top: 9px; }
+  .jv-gate-btn { cursor: pointer; border-radius: 8px; padding: 7px 16px;
+    font: 700 10.5px/1 var(--font-display); letter-spacing: .16em; text-transform: uppercase;
+    border: 1px solid var(--hairline); background: transparent; color: #d8b98a;
+    transition: background .12s, color .12s, border-color .12s; }
+  .jv-gate-btn.confirm { border-color: rgba(125, 219, 160, .6);
+    background: rgba(125, 219, 160, .14); color: #9fe6ba; }
+  .jv-gate-btn.confirm:hover { background: rgba(125, 219, 160, .26); }
+  .jv-gate-btn.cancel:hover { color: #ffe7c4; border-color: var(--holo); }
+  .jv-gate-btn:focus-visible { outline: 2px solid var(--holo); outline-offset: 2px; }
+
+  /* Cue chips */
+  #jv-cues { display: flex; flex-wrap: wrap; gap: 6px; }
+  .jv-cuechip { font: 500 10.5px/1 var(--font-body); letter-spacing: .02em;
+    padding: 5px 10px; border-radius: 999px; border: 1px solid var(--hairline);
+    color: #ffe7c4; display: inline-flex; align-items: center; gap: 5px; }
+  .jv-cuechip svg.lucide { width: 11px; height: 11px; color: var(--holo); }
+
+  /* Job tray lives in the right column now. */
+  #job-tray { position: static; width: auto; pointer-events: auto; }
+</style>
+</head>
+<body>
+  <div id="jv-atmos"></div>
+  <div id="jv-clarify-root"></div>
+  <div id="jv-backdim"></div>
+  <div id="stage">
+    <iframe id="hud" src="/hud.html" allow="microphone"></iframe>
+  </div>
+  <div id="jv-glow"></div>
+  <div id="jv-rings"></div><!-- filled by spawnPeak() while speaking -->
+
+  <div id="jv-topfade"></div>
+  <div id="jv-footfade"></div>
+
+  <!-- Sits over the HUD's scripted J.A.R.V.I.S. line and masks it; the real
+       reply is drawn by hudSay() here. Position driven by positionHudLine(). -->
+  <div id="jv-hudline">
+    <span class="jv-hl-label"></span><span class="jv-hl-text"></span>
+  </div>
+
+  <div id="jv-shell">
+    <header id="jv-topbar" style="grid-column: 1 / -1">
+      <span id="jv-brand">J.A.R.V.I.S.</span>
+      <span id="jv-dot"></span>
+      <span id="jv-status">BOOTING…</span>
+      <span id="jv-level"><i></i></span>
+      <span class="jv-pill" id="jv-pill-net"><span>● …</span></span>
+      <span class="jv-pill grow" id="jv-pill-brain"><i data-lucide="cpu"></i><span>BRAIN: …</span></span>
+      <span class="jv-pill" id="jv-pill-voice"><i data-lucide="audio-lines"></i><span>VOICE: KOKORO</span></span>
+      <span class="jv-pill" id="jv-pill-fb"><i data-lucide="volume-2"></i><span>FB: ESSENTIAL</span></span>
+      <span id="jv-actions" style="display:flex; gap:8px">
+        <button id="jv-apps" class="jv-btn" title="Apps JARVIS can open">Apps</button>
+        <button id="jv-unlock" class="jv-btn">Activate audio</button>
+        <button id="jv-retry" class="jv-btn">Enable mic</button>
+      </span>
+    </header>
+
+    <!-- LEFT: system column -->
+    <aside id="jv-col-left">
+      <div id="jv-stats" class="jv-sec">
+        <div class="jv-st-title">System Status</div>
+        <div class="jv-st-row"><span class="jv-st-k">Brain</span><span class="jv-st-v" id="st-brain">—</span></div>
+        <div class="jv-st-row"><span class="jv-st-k">STT</span><span class="jv-st-v" id="st-stt">—</span></div>
+        <div class="jv-st-row"><span class="jv-st-k">Route</span><span class="jv-st-v" id="st-route">—</span></div>
+        <div class="jv-st-row"><span class="jv-st-k">Vault index</span><span class="jv-st-v" id="st-vault">—</span></div>
+        <div class="jv-st-row"><span class="jv-st-k">Voice in</span><span class="jv-st-v" id="st-mic">—</span></div>
+        <div class="jv-st-row"><span class="jv-st-k">Link</span><span class="jv-st-v" id="st-link">—</span></div>
+        <div class="jv-st-row"><span class="jv-st-k">State</span><span class="jv-st-v" id="st-state">—</span></div>
+        <div class="jv-st-row"><span class="jv-st-k">Wake</span><span class="jv-st-v" id="st-wake">—</span></div>
+        <div class="jv-st-row"><span class="jv-st-k">Speed</span><span class="jv-st-v" id="st-speed">—</span></div>
+        <div class="jv-st-meter"><i id="st-amp"></i></div>
+      </div>
+
+      <div id="jv-left" class="jv-sec">
+        <div class="jv-lf-label">Language Model</div>
+        <div class="jv-lf-model" id="lf-model">—</div>
+        <div class="jv-lf-chips">
+          <span class="jv-lf-chip ok" id="lf-mode">LOCAL</span>
+          <span class="jv-lf-chip" id="lf-quant">—</span>
+          <span class="jv-lf-chip" id="lf-size">—</span>
+        </div>
+        <div class="jv-lf-row"><span class="jv-lf-k">Parameters</span><span class="jv-lf-v" id="lf-params">—</span></div>
+        <div class="jv-lf-row"><span class="jv-lf-k">Context window</span><span class="jv-lf-v" id="lf-ctxwin">—</span></div>
+        <div class="jv-lf-row"><span class="jv-lf-k">Turns</span><span class="jv-lf-v" id="lf-turns">—</span></div>
+        <div class="jv-lf-row"><span class="jv-lf-k">History</span><span class="jv-lf-v" id="lf-hist">—</span></div>
+        <div class="jv-lf-sec">Context Budget</div>
+        <div class="jv-lf-bar"><i class="p" id="lf-bar-p"></i><i class="o" id="lf-bar-o"></i></div>
+        <div class="jv-lf-row"><span class="jv-lf-k">Prompt</span><span class="jv-lf-v" id="lf-prompt">—</span></div>
+        <div class="jv-lf-row"><span class="jv-lf-k">Output</span><span class="jv-lf-v" id="lf-output">—</span></div>
+        <div class="jv-lf-row"><span class="jv-lf-k">Headroom</span><span class="jv-lf-v" id="lf-head">—</span></div>
+      </div>
+    </aside>
+
+    <!-- CENTER: open for the live orb; conversation anchored to the foot -->
+    <main id="jv-center">
+      <div class="jv-spacer"></div>
+      <div id="jv-feed" class="jv-sec">
+        <div id="jv-gate"></div>
+        <div id="jv-side-head">Transcript</div>
+        <div id="jv-side-log"></div>
+        <div id="jv-cues" style="margin-top:8px"></div>
+        <div id="jv-input-wrap" style="margin-top:10px">
+          <input id="jv-input" type="text" autocomplete="off" spellcheck="false"
+                 placeholder="SPEAK TO J.A.R.V.I.S. - TYPE, THEN PRESS ENTER" />
+        </div>
+      </div>
+    </main>
+
+    <!-- RIGHT: tasks + actions -->
+    <aside id="jv-col-right">
+      <div class="jv-sec">
+        <div class="jv-st-title" style="display:flex; align-items:center; justify-content:space-between">
+          Active Tasks <span id="jv-taskcount" class="jv-pill">0</span>
+        </div>
+        <div id="job-tray"></div>
+      </div>
+
+      <div class="jv-sec" id="jv-np">
+        <div class="jv-st-title">Now Playing</div>
+        <div class="jv-st-row"><span class="jv-st-k">Source</span><span class="jv-st-v" id="np-source">—</span></div>
+        <div class="jv-st-row"><span class="jv-st-k">Track</span><span class="jv-st-v" id="np-title">—</span></div>
+        <div class="jv-gate-btns" style="margin-top:10px">
+          <button class="jv-npbtn" id="jv-music-stop"><i data-lucide="square"></i>STOP YT</button>
+          <button class="jv-npbtn" id="jv-music-spotify"><i data-lucide="play"></i>SPOTIFY</button>
+        </div>
+      </div>
+
+      <div class="jv-sec">
+        <div class="jv-st-title">Last Turn</div>
+        <div class="jv-st-row"><span class="jv-st-k">Backend</span><span class="jv-st-v" id="st-backend">—</span></div>
+        <div class="jv-st-row"><span class="jv-st-k">Tools</span><span class="jv-st-v" id="st-tool">—</span></div>
+        <div class="jv-st-row"><span class="jv-st-k">Grounded</span><span class="jv-st-v" id="st-grounded">—</span></div>
+        <div class="jv-st-row"><span class="jv-st-k">Spoken</span><span class="jv-st-v" id="st-spoken">—</span></div>
+        <div class="jv-st-row"><span class="jv-st-k">Turn</span><span class="jv-st-v" id="st-latency">—</span></div>
+        <div class="jv-st-row"><span class="jv-st-k">Context</span><span class="jv-st-v" id="st-ctx">—</span></div>
+      </div>
+
+      <div class="jv-sec" id="jv-vf">
+        <div class="jv-st-title">Voice Feedback</div>
+        <div class="jv-st-row"><span class="jv-st-k">Mode</span><span class="jv-st-v">Essential</span></div>
+        <div class="vf-row">
+          <div class="vf-opt" data-mode="off">Off</div>
+          <div class="vf-opt active" data-mode="essential">Essential</div>
+          <div class="vf-opt" data-mode="full">Full</div>
+        </div>
+        <div class="jv-st-row"><span class="jv-st-k">“Thinking, sir.”</span><span class="jv-st-v">4s</span></div>
+        <div class="jv-st-row"><span class="jv-st-k">“Still working on it.”</span><span class="jv-st-v">12s</span></div>
+        <div class="jv-st-row"><span class="jv-st-k">“Still on it, sir.”</span><span class="jv-st-v">45s</span></div>
+      </div>
+    </aside>
+  </div>
+
+  <div id="jv-apps-modal">
+    <div id="jv-apps-card">
+      <div id="jv-apps-head">
+        <span id="jv-apps-title">JARVIS APPS</span>
+        <span id="jv-apps-count"></span>
+        <button id="jv-apps-close" class="jv-btn">×</button>
+      </div>
+      <iframe id="jv-apps-frame" src="/apps.html" allowtransparency="false"></iframe>
+    </div>
+  </div>
+
+<script>
+(function () {
+  'use strict';
+
+  // Demo seed mode: ?demo=1 paints the mockup's sample conversation + panels for
+  // screenshots / the keynote. Non-destructive — live mode ignores it entirely.
+  var DEMO = /[?&]demo=1\b/.test(location.search);
+
+  // ---------------------------------------------------------------- config
+  var WAKE_WORDS = ['jarvis', 'jarviss', 'jarvus', 'jervis', 'javis', 'jarvez', 'charvis', 'jarv'];
+  var TARGET_RATE   = 16000;   // what we ship to Whisper
+  var PREROLL_MS    = 900;     // audio kept before speech onset so the wake word is never clipped
+  var CMD_HANG_MS   = 1000;    // silence that ends a command clip (sentences breathe; 800 clipped mid-thought)
+  var CMD_MAX_MS    = 12000;   // room for a long command rather than truncating it
+  var CMD_WAIT_MS   = 7000;    // no speech after wake word -> back to idle
+  // Server watchdog. 45s was shorter than a real local-model turn: a ChatGPT
+  // search measured 36.8s inside the tool alone, with jarvis-qwen3 generating
+  // on both sides of it — 55.7s end to end. The client gave up while the server
+  // was still working, so JARVIS looked like it had timed out and the answer
+  // landed late. Ceiling now sits above the backend's own limits
+  // (OLLAMA_TIMEOUT 180s, browser worker 150s) so the server always loses first
+  // and can report a real error.
+  var BUSY_TIMEOUT  = 190000;
+  var MIN_CLIP_MS   = 350;     // ignore coughs/clicks
+
+  // ---- VAD (AnalyserNode, adaptive noise floor) -------------------------
+  // The backend is only ever consulted for a clip that this VAD called speech,
+  // so room tone never reaches Whisper and JARVIS is not "constantly checking".
+  var VAD_FFT       = 1024;
+  var VAD_TICK_MS   = 50;      // analyser poll period
+  var SPEECH_MARGIN = 1.8;     // speech = rms > noiseFloor * margin
+  var SPEECH_MIN_MS = 150;     // ...sustained this long before it counts
+  var FLOOR_ALPHA   = 0.05;    // slow EMA of rms during silence
+  var WARM_ALPHA    = 0.30;    // faster convergence during the boot calibration
+  var FLOOR_MIN     = 0.0015;  // clamps: a dead-silent room must not make the
+  // FLOOR_MAX was 0.0600, which let a noisy room drive the speech threshold to
+  // 0.0600*1.8 = 0.108 RMS — louder than ordinary speaking, so JARVIS went deaf
+  // exactly when the room got busy. Capping the floor at 0.0300 holds the
+  // threshold at 0.054 and keeps normal speech above it.
+  var FLOOR_MAX     = 0.0300;  // threshold collapse, a loud one must not deafen us
+  var ABS_MIN_RMS   = 0.0060;  // absolute gate under the adaptive one
+  var CALIBRATE_MS  = 1800;
+
+  // ---------------------------------------------------------------- dom
+  var glow = document.getElementById('jv-glow');
+  var ringsEl = document.getElementById('jv-rings');
+  var dot = document.getElementById('jv-dot');
+  var statusEl = document.getElementById('jv-status');
+  var levelEl = document.querySelector('#jv-level i');
+  var retryBtn = document.getElementById('jv-retry');
+  var unlockBtn = document.getElementById('jv-unlock');
+  var endBtn = document.getElementById('jv-end');
+  var hud = document.getElementById('hud');
+  // Transcript now renders in the HUD's right column; #jv-log is kept in the
+  // DOM (hidden) so nothing that references it breaks.
+  var chatLog = document.getElementById('jv-side-log')
+               || document.getElementById('jv-log');
+  var chatInput = document.getElementById('jv-input');
+  var chatWrap = document.getElementById('jv-input-wrap');
+  var rootStyle = document.documentElement.style;
+  var PLACEHOLDER = 'SPEAK TO J.A.R.V.I.S. - TYPE, THEN PRESS ENTER';
+
+  // ---------------------------------------------------------------- hud link
+  // The HUD artifact re-sets `--spd` on ITS OWN documentElement on every render,
+  // so writing it once is not enough: we keep re-applying the target from here.
+  var HUD_SPD = { idle: 1, listening: 1.7, transcribing: 1.2, thinking: 1.2, speaking: 2.4 };
+  var hudSpd = 1;
+
+  function applyHudSpeed() {
+    try {
+      var d = hud.contentDocument || (hud.contentWindow && hud.contentWindow.document);
+      if (d && d.documentElement) d.documentElement.style.setProperty('--spd', String(hudSpd));
+    } catch (e) {}          // not loaded yet, or (never, here) cross-origin
+  }
+  function setHudSpeed(v) {
+    hudSpd = v;
+    rootStyle.setProperty('--spd', String(v));   // wrapper-level cues
+    applyHudSpeed();
+  }
+  setInterval(applyHudSpeed, 200);
+  hud.addEventListener('load', applyHudSpeed);
+
+  // ---------------------------------------------------------------- ui
+  // 'listening' = the command window is open and JARVIS is capturing the command.
+  var uiState = 'idle';
+
+  function setState(st, txt) {
+    uiState = st;
+    setHudSpeed(HUD_SPD[st] || 1);
+    hud.className = (st === 'speaking' || st === 'listening') ? st : '';
+    glow.className = st === 'speaking' ? 'speak'
+      : st === 'listening' ? 'listen'
+      : (st === 'thinking' || st === 'transcribing') ? 'think' : '';
+    ringsEl.className = st === 'speaking' ? 'speak' : '';   // orb rings, speech only
+    dot.className = st === 'speaking' ? 'speak'
+      : st === 'listening' ? 'listen'
+      : (st === 'thinking' || st === 'transcribing') ? 'think' : '';
+    if (txt) statusEl.textContent = txt;
+    statusEl.className = (st === 'listening' || st === 'speaking') ? 'live' : '';
+    // The HUD artifact is read-only; it ignores this, but forward anyway so a
+    // future HUD build can react without touching hud_artifact.html.
+    try { hud.contentWindow.postMessage({ source: 'jarvis', type: 'state', state: st }, '*'); } catch (e) {}
+  }
+  function setDead(txt) { dot.className = 'dead'; glow.className = ''; hud.className = '';
+    ringsEl.className = ''; statusEl.className = ''; statusEl.textContent = txt; setHudSpeed(1); }
+  // There is no transcript panel any more. Conversation text goes to the
+  // console; only one-off failures get a moment on the status strip.
+  function notice(txt) { console.warn('[jarvis] ' + txt); statusEl.textContent = txt; }
+
+  // Layer 1 (Intake) clarification: speaks candidates via voice instead of
+  // showing tappable chips. JARVIS asks "Did you mean X or Y?" and the mic
+  // stays open so the user can reply naturally.
+  var clarifyEl = null;
+  function showClarify(heard, echo, candidates) {
+    hideClarify();
+    if (!candidates.length) { notice(echo || 'Say that again?'); return; }
+    // Build a spoken clarification: "I heard X. Did you mean Y, Z, or W?"
+    var spoken = 'I heard ' + (echo || heard) + '. ';
+    if (candidates.length === 1) {
+      spoken += 'Did you mean ' + candidates[0] + '?';
+    } else {
+      spoken += 'Did you mean ' + candidates.slice(0, -1).join(', ') +
+                ', or ' + candidates[candidates.length - 1] + '?';
+    }
+    // Show text in chat for reference, then speak it and keep mic open.
+    logConv('jarvis', spoken, null);
+    cue(spoken);
+    // Mic stays open — user replies naturally ("yes" or names the right one).
+  }
+  function hideClarify() {
+    if (clarifyEl && clarifyEl.parentNode) clarifyEl.parentNode.removeChild(clarifyEl);
+    clarifyEl = null;
+  }
+
+  // ---------------------------------------------------------------- chat log
+  // Terminal transcript. User lines land instantly; JARVIS lines are revealed
+  // letter-by-letter and only THEN hand their TTS clip to speak(), so the typing
+  // and the voice land together. One reveal at a time: a new response cancels
+  // whatever is still typing (its queued audio dies with it — no overlap).
+  var TYPE_MS = 30;             // per tick
+  var TYPE_MAX_TICKS = 200;     // long replies reveal >1 char/tick so the wait
+                                // before speech stays ~6s instead of unbounded
+  var twTimer = 0, twSpan = null, twLine = null, twAudio = null;
+
+  // ---------------------------------------------------------------- hud line
+  // The HUD owns a scripted J.A.R.V.I.S. line that it retypes from its own
+  // timers ("THE SCAN IS ARCHIVED TO THE MALIBU SERVER, SIR."), re-rendering
+  // that subtree as it goes. Writing the real reply into it loses that race —
+  // and observing the node fails too, because React replaces the element and
+  // the observer is left watching a detached parent. So the reply is drawn in
+  // a wrapper-owned overlay parked on top of the HUD line instead.
+  var hudLineEl  = document.getElementById('jv-hudline');
+  var hudTextEl  = hudLineEl ? hudLineEl.querySelector('.jv-hl-text') : null;
+  var JARVIS_LABEL = /J\.A\.R\.V\.I\.S\.\s*\/\//;
+
+  // Of the eight span.sc-interp nodes the HUD renders (energy readout, scan
+  // percent, the VOICE toggle...), the speech line is the only one whose parent
+  // carries the "J.A.R.V.I.S. //" label. Position, not text, is what we want.
+  function hudLineBox() {
+    try {
+      var d = hud.contentDocument || (hud.contentWindow && hud.contentWindow.document);
+      if (!d) return null;
+      var all = d.querySelectorAll('span.sc-interp');
+      for (var i = 0; i < all.length; i++) {
+        var par = all[i].parentElement;
+        if (par && JARVIS_LABEL.test(par.textContent || '')) return par;
+      }
+      return null;
+    } catch (e) { return null; }   // iframe not ready
+  }
+
+  function positionHudLine() {
+    if (!hudLineEl || !hudLineEl.classList.contains('show')) return;
+    var box = hudLineBox();
+    if (!box) return;
+    var r = box.getBoundingClientRect();
+    var f = hud.getBoundingClientRect();
+    hudLineEl.style.left   = (f.left + r.left) + 'px';
+    hudLineEl.style.top    = (f.top + r.top) + 'px';
+    hudLineEl.style.width  = r.width + 'px';
+    hudLineEl.style.height = r.height + 'px';
+  }
+
+  // The reply no longer appears under the orb — it lives only in the transcript
+  // panel. This overlay stays, blank, purely as a mask: remove it and the HUD's
+  // own scripted dialogue ("GOOD EVENING, SIR. ARCHIVE CRATE 07 IS ON THE
+  // PLATFORM") shows through again, which is worse than nothing since it is
+  // fake text that looks like JARVIS speaking.
+  function hudSay(text, typing) {
+    if (!hudLineEl) return false;
+    if (hudTextEl) hudTextEl.textContent = '';
+    var lbl = hudLineEl.querySelector('.jv-hl-label');
+    if (lbl) lbl.textContent = '';
+    hudLineEl.classList.add('show');
+    hudLineEl.classList.remove('jv-typing');
+    positionHudLine();
+    return true;
+  }
+
+  // ------------------------------------------------------------- side panel
+  // The HUD's right column ends after the PROTOCOL row and leaves the rest of
+  // the aside empty (measured 310x505 with zero elements in it). Anchor to the
+  // bottom of that column's real content rather than to fixed pixels, so the
+  // panel keeps its place if the HUD reflows at another window size.
+  var sideEl = document.getElementById('jv-side');
+
+  // The HUD's right column. Found by the text it contains, not by index, so it
+  // survives the artifact reordering its own markup.
+  function hudAside() {
+    try {
+      var d = hud.contentDocument || (hud.contentWindow && hud.contentWindow.document);
+      if (!d) return null;
+      var asides = d.querySelectorAll('aside');
+      for (var i = 0; i < asides.length; i++) {
+        if (/THREAT ASSESSMENT/i.test(asides[i].textContent || '')) return asides[i];
+      }
+      return null;
+    } catch (e) { return null; }
+  }
+
+  function hudRightBand() {
+    try {
+      var aside = hudAside();
+      if (!aside) return null;
+      var ar = aside.getBoundingClientRect();
+      var bottom = ar.top, kids = aside.querySelectorAll('*');
+      for (var j = 0; j < kids.length; j++) {
+        if (kids[j].children.length) continue;
+        if (!(kids[j].textContent || '').trim()) continue;
+        var kr = kids[j].getBoundingClientRect();
+        if (kr.height > 0 && kr.bottom > bottom) bottom = kr.bottom;
+      }
+      var top = bottom + 16, height = ar.bottom - top - 12;
+      if (height < 90) return null;          // no usable room at this size
+      return { left: ar.left + 10, top: top, width: ar.width - 20, height: height };
+    } catch (e) { return null; }
+  }
+
+  function positionSidePanel() {
+    if (!sideEl) return;
+    var band = hudRightBand();
+    if (!band) { sideEl.classList.remove('show'); return; }
+    var f = hud.getBoundingClientRect();
+    // Start below the telemetry panel, whose height depends on how many rows
+    // have data. Clamping it the other way round is what caused the overlap.
+    var top = f.top + band.top;
+    var sb = statsBottom();
+    if (sb !== null && sb + 10 > top) top = sb + 10;
+    var bottom = f.top + band.top + band.height;
+    var height = bottom - top;
+    if (height < 80) { sideEl.classList.remove('show'); return; }
+    sideEl.style.left   = (f.left + band.left) + 'px';
+    sideEl.style.top    = top + 'px';
+    sideEl.style.width  = band.width + 'px';
+    sideEl.style.height = height + 'px';
+    sideEl.classList.add('show');
+  }
+
+  // ---------------------------------------------------------------- telemetry
+  // Phase 1: only signals that already exist client-side or on /status. Nothing
+  // here is invented — a panel that lies is worse than one that is obviously
+  // decorative, which is the whole point of replacing the fake THREAT
+  // ASSESSMENT block.
+  var statsEl = document.getElementById('jv-stats');
+  var stBrain = document.getElementById('st-brain');
+  var stBackend = document.getElementById('st-backend');
+  var stRoute = document.getElementById('st-route');
+  var stMic = document.getElementById('st-mic');
+  var stLink = document.getElementById('st-link');
+  var stState = document.getElementById('st-state');
+  var stWake = document.getElementById('st-wake');
+  var stAmp = document.getElementById('st-amp');
+
+  function setVal(el, text, cls) {
+    if (!el) return;
+    el.textContent = text;
+    el.className = 'jv-st-v' + (cls ? ' ' + cls : '');
+  }
+
+  // Mirror the System Status "Brain" row into the topbar pill (full text, no dots).
+  function syncBrainPill() {
+    var pill = document.getElementById('jv-pill-brain');
+    if (!pill) return;
+    var lbl = pill.querySelector('span');
+    if (stBrain && stBrain.textContent && stBrain.textContent.indexOf('—') !== 0) {
+      if (lbl) lbl.textContent = 'BRAIN: ' + stBrain.textContent;
+    }
+  }
+
+  // Covers the static rows only: from the THREAT ASSESSMENT label down to the
+  // bottom of the column's real content (the PROTOCOL row). The transcript
+  // panel already owns everything below that.
+  function positionStats() {
+    if (!statsEl) return;
+    var aside = hudAside();
+    if (!aside) { statsEl.classList.remove('show'); return; }
+    var label = null, kids = aside.querySelectorAll('*');
+    for (var i = 0; i < kids.length; i++) {
+      if (kids[i].children.length) continue;
+      if (/THREAT ASSESSMENT/i.test(kids[i].textContent || '')) { label = kids[i]; break; }
+    }
+    var band = hudRightBand();
+    if (!label || !band) { statsEl.classList.remove('show'); return; }
+    var lr = label.getBoundingClientRect(), ar = aside.getBoundingClientRect();
+    var f = hud.getBoundingClientRect();
+    // Height is NOT clamped to the gap above the transcript: the panel grew when
+    // the telemetry rows were added and simply overflowed, drawing on top of the
+    // transcript. It sizes to its own content instead, and the transcript starts
+    // below whatever height that turns out to be.
+    statsEl.style.left   = (f.left + ar.left + 10) + 'px';
+    statsEl.style.top    = (f.top + lr.top - 8) + 'px';
+    statsEl.style.width  = (ar.width - 20) + 'px';
+    statsEl.style.height = 'auto';
+    statsEl.classList.add('show');
+  }
+
+  function statsBottom() {
+    if (!statsEl || !statsEl.classList.contains('show')) return null;
+    var r = statsEl.getBoundingClientRect();
+    return r.height ? r.bottom : null;
+  }
+
+  var stSpeed = document.getElementById('st-speed');
+  var stLatency = document.getElementById('st-latency');
+  var stCtx = document.getElementById('st-ctx');
+  var stTool = document.getElementById('st-tool');
+
+  // Server telemetry, one message per turn. Absent fields stay blank on purpose:
+  // a HUD that pads with plausible numbers is the fake panel we just replaced.
+  function applyTelemetry(s) {
+    if (!s) return;
+    setVal(stSpeed, s.tok_per_sec ? s.tok_per_sec + ' tok/s' : '—');
+    if (s.latency_ms) {
+      var secs = (s.latency_ms / 1000).toFixed(1) + 's';
+      setVal(stLatency, s.p50_ms ? secs + '  (p50 ' + (s.p50_ms / 1000).toFixed(1) + 's)' : secs,
+             s.latency_ms > 20000 ? 'warn' : '');
+    }
+    if (s.prompt_tokens) {
+      var used = s.prompt_tokens + (s.eval_tokens || 0);
+      var pct = s.context_limit ? Math.round(used / s.context_limit * 100) : null;
+      setVal(stCtx, s.context_limit
+        ? used.toLocaleString() + ' / ' + s.context_limit.toLocaleString() + ' (' + pct + '%)'
+        : used.toLocaleString() + ' tok',
+        pct !== null && pct > 80 ? 'bad' : (pct !== null && pct > 60 ? 'warn' : ''));
+    }
+    var tools = s.tools || [];
+    setVal(stTool, tools.length
+      ? tools[tools.length - 1].name + ' (' + (tools[tools.length - 1].ms / 1000).toFixed(1) + 's)'
+      : 'none this turn');
+  }
+
+  // ------------------------------------------------------------- left column
+  // The HUD's left OBJECT ANALYSIS aside was deleted (2026-08-08), so the panel
+  // now anchors to the center <main> visualization instead. It sits in the
+  // top-left interior of <main> and sizes to its own content (height:auto).
+  var leftEl = document.getElementById('jv-left');
+
+  function hudLeftAside() {
+    try {
+      var d = hud.contentDocument || (hud.contentWindow && hud.contentWindow.document);
+      if (!d) return null;
+      var m = d.querySelector('main');
+      if (!m) return null;
+      var r = m.getBoundingClientRect();
+      if (r.width < 80 || r.height < 80) return null;
+      return m;
+    } catch (e) { return null; }
+  }
+
+  function positionLeft() {
+    if (!leftEl) return;
+    // LM panel now lives in-flow in the left column (uniform width). Just show it.
+    leftEl.classList.add('show');
+    leftEl.style.left = ''; leftEl.style.top = ''; leftEl.style.width = ''; leftEl.style.height = '';
+  }
+
+  function applyLeft(s) {
+    if (!s) return;
+    var meta = s.model_meta || {};
+    var set = function (id, v) { var e = document.getElementById(id); if (e) e.textContent = v; };
+    set('lf-model', (s.model || '—').toUpperCase());
+    set('lf-mode', s.local_only ? 'LOCAL ONLY' : 'LOCAL FIRST');
+    set('lf-quant', meta.quant || '—');
+    set('lf-size', meta.size_gb ? meta.size_gb + ' GB' : '—');
+    set('lf-params', meta.params || '—');
+    set('lf-ctxwin', s.context_limit ? s.context_limit.toLocaleString() + ' tok' : '—');
+    set('lf-turns', s.turns != null ? String(s.turns) : '—');
+    set('lf-hist', s.history_msgs != null ? s.history_msgs + ' msgs' : '—');
+
+    var lim = s.context_limit, pt = s.prompt_tokens || 0, ot = s.eval_tokens || 0;
+    if (lim) {
+      var pp = Math.min(100, pt / lim * 100), op = Math.min(100 - pp, ot / lim * 100);
+      var bp = document.getElementById('lf-bar-p'), bo = document.getElementById('lf-bar-o');
+      if (bp) bp.style.width = pp + '%';
+      if (bo) bo.style.width = op + '%';
+      set('lf-prompt', pt.toLocaleString() + ' (' + Math.round(pp) + '%)');
+      set('lf-output', ot.toLocaleString() + ' (' + Math.round(op) + '%)');
+      var head = Math.max(0, lim - pt - ot);
+      set('lf-head', head.toLocaleString() + ' (' + Math.round(head / lim * 100) + '%)');
+    }
+  }
+
+  var STATE_LABEL = { idle: 'Idle', scan: 'Wake word', command: 'Listening',
+                      busy: 'Working', speaking: 'Speaking', nomic: 'No mic', boot: 'Calibrating' };
+
+  function refreshLocalStats() {
+    if (DEMO) return;
+    setVal(stLink, ws && ws.readyState === 1 ? 'Stable' : 'Reconnecting',
+           ws && ws.readyState === 1 ? 'ok' : 'bad');
+    setVal(stMic, micOk ? 'Live' : 'Blocked', micOk ? 'ok' : 'bad');
+    setVal(stState, STATE_LABEL[mode] || mode || '—');
+    if (stAmp) stAmp.style.width = Math.min(100, lastLevel * 900) + '%';
+  }
+
+  function refreshServerStats() {
+    if (DEMO) return;
+    // Same endpoint the status bar already exposes; no new server work.
+    fetch('/status', { cache: 'no-store' }).then(function (r) { return r.json(); })
+      .then(function (s) {
+        setVal(stBrain, s.brain || '—');
+        syncBrainPill();
+        var b = s.last_backend;
+        setVal(stBackend, b ? b : 'awaiting first turn',
+               b === 'mock' ? 'bad' : (b === 'ollama' ? 'ok' : (b ? 'warn' : '')));
+        // Route comes from the server's live flags now. It was hardcoded, so it
+        // kept advertising groq/cerebras/gemini after local-only disabled them.
+        setVal(stRoute, s.route || '—', s.local_only ? 'ok' : '');
+        // Server-side wake fallback health: tells you at a glance whether the
+        // music-proof listener is alive (so deafness over music is diagnosable).
+        var wk = s.wake_server || {};
+        if (wk.healthy) setVal(stWake, 'Server live', 'ok');
+        else if (wk.error) setVal(stWake, 'Server off: ' + wk.error, 'warn');
+        else setVal(stWake, 'Server off', 'warn');
+      })
+      .catch(function () { setVal(stBrain, 'unreachable', 'bad'); syncBrainPill(); });
+  }
+
+  window.addEventListener('resize', function () {
+    positionHudLine(); positionLeft(); positionStats(); positionSidePanel();
+  });
+  // One pass for every overlay: separate timers would each cost a layout read
+  // against the iframe.
+  setInterval(function () {
+    positionHudLine(); positionLeft(); positionStats(); positionSidePanel(); refreshLocalStats();
+  }, 1000);
+  setInterval(refreshServerStats, 3000);
+  positionLeft(); positionStats(); positionSidePanel(); refreshLocalStats(); refreshServerStats();
+  // Mask the HUD's scripted line from the first frame, not only once a reply
+  // arrives — otherwise its canned dialogue is on screen until then.
+  hudSay('');
+  setTimeout(function () { hudSay(''); }, 2500);   // iframe may still be loading
+
+  function cancelTypewriter() {
+    if (twTimer) { clearTimeout(twTimer); twTimer = 0; }
+    if (twSpan && twLine) {                     // leave the text fully revealed
+      var whole = twSpan.getAttribute('data-full') || twSpan.textContent;
+      twSpan.textContent = whole;
+      hudSay(whole, false);                     // HUD must not keep a half line
+      twLine.classList.remove('jv-typing');
+    }
+    twSpan = null; twLine = null; twAudio = null;
+  }
+
+  // Spoken session cue. Asks the server to TTS a short line so JARVIS audibly
+  // signals a state change (e.g. "what is it, sir?" on wake, "standing by" on
+  // close). The server replies with {type:'cue', audio}; we play it immediately.
+  function cue(text) {
+    send({ type: 'cue', text: text });
+  }
+
+  function logConv(role, text, audio) {
+    if (!chatLog) return;
+    var line = document.createElement('div');
+    line.className = 'jv-line jv-line-' + role;
+    var span = document.createElement('span');
+    span.className = 'jv-text';
+    line.appendChild(span);
+    chatLog.appendChild(line);
+
+    var full = String(text == null ? '' : text);
+    if (role !== 'jarvis') {                    // user: immediate, right-aligned
+      span.textContent = full;
+      chatLog.scrollTop = chatLog.scrollHeight;
+      return;
+    }
+
+    // Reply lands whole, no character-by-character reveal. The typewriter used
+    // to gate playback — speech only started once the last character had been
+    // drawn, which cost up to 6s of silence on a long answer (TYPE_MAX_TICKS 200
+    // x TYPE_MS 30). Showing the text at once and speaking immediately removes
+    // that delay entirely; the audio release below is the same call the reveal
+    // used to make at its end.
+    cancelTypewriter();                         // clear any in-flight reveal
+    span.setAttribute('data-full', full);
+    span.textContent = full;
+    hudSay(full, false);
+    chatLog.scrollTop = chatLog.scrollHeight;
+    if (audio) speak(audio); else if (mode !== 'speaking') goIdle();
+  }
+
+  // ---------------------------------------------------------------- chat input
+  // Slash commands are handled here, never sent as a prompt: on the local model
+  // a turn costs seconds, and the model would try to *answer* "/clear" rather
+  // than clear anything.
+  function runCommand(name) {
+    if (!send({ type: 'command', name: name })) {
+      notice('NOT CONNECTED — COMMAND NOT SENT');
+      return true;
+    }
+    if (name === 'clear') {
+      cancelTypewriter();
+      if (chatLog) chatLog.innerHTML = '';        // wipe the visible transcript too
+      hudSay('');
+      setVal(stBackend, 'awaiting first turn');
+      ['st-speed', 'st-latency', 'st-ctx', 'st-tool'].forEach(function (id) {
+        var e = document.getElementById(id);
+        if (e) { e.textContent = '—'; e.className = 'jv-st-v'; }
+      });
+      ['lf-turns', 'lf-hist', 'lf-prompt', 'lf-output', 'lf-head'].forEach(function (id) {
+        var e = document.getElementById(id); if (e) e.textContent = '—';
+      });
+      var bp = document.getElementById('lf-bar-p'), bo = document.getElementById('lf-bar-o');
+      if (bp) bp.style.width = '0%';
+      if (bo) bo.style.width = '0%';
+    }
+    chatInput.value = '';
+    chatInput.focus();
+    return true;
+  }
+
+  function sendTyped() {
+    var value = chatInput.value.trim();
+    if (!value) return;
+    if (value.charAt(0) === '/') {
+      var cmd = value.slice(1).trim().toLowerCase();
+      if (cmd === 'clear' || cmd === 'reset') { runCommand('clear'); return; }
+      // Phase 4: mid-flight redirect — forward the rest of the line as an
+      // instruction to the warm Hermes session (not a new task).
+      if (cmd.startsWith('redirect')) {
+        var instr = value.slice(1).replace(/^redirect\s*/i, '').trim();
+        if (instr && send({ type: 'command', name: 'redirect', text: instr })) {
+          logConv('user', value);
+          chatInput.value = '';
+          pendingReply = true;
+          mode = 'busy'; busySince = Date.now();
+          setState('thinking', 'REDIRECTING…');
+        } else if (!instr) {
+          notice('USAGE: /redirect <instruction>');
+          chatInput.value = '';
+        }
+        return;
+      }
+      notice('UNKNOWN COMMAND: ' + value);
+      chatInput.value = '';
+      return;
+    }
+    if (!send({ type: 'text', text: value, speak: true })) {
+      // WS down: keep the typed text, say so, log nothing as a reply.
+      notice('NOT CONNECTED — MESSAGE NOT SENT');
+      chatWrap.classList.add('jv-err');
+      setTimeout(function () { chatWrap.classList.remove('jv-err'); }, 1200);
+      chatInput.focus();
+      return;
+    }
+    logConv('user', value);
+    chatInput.value = '';
+    chatInput.placeholder = '> ';
+    setTimeout(function () { chatInput.placeholder = PLACEHOLDER; }, 900);
+    chatInput.focus();                          // typing stays the active path
+    pendingReply = true;
+    mode = 'busy'; busySince = Date.now();      // mic stays deaf until the reply lands
+    setState('thinking', 'THINKING…');
+  }
+
+  var pendingReply = false;
+  chatInput.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' || e.keyCode === 13) { e.preventDefault(); sendTyped(); }
+  });
+
+  // ---------------------------------------------------------------- websocket
+  var ws = null, wsReady = false, reconnectDelay = 800;
+
+  var pingInterval = null;
+  function connect() {
+    var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws = new WebSocket(proto + '//' + location.host + '/ws');
+    ws.onopen = function () {
+      wsReady = true; reconnectDelay = 800;
+      var netPill = document.getElementById('jv-pill-net');
+      if (netPill) { netPill.classList.remove('offline'); netPill.classList.add('online');
+                     if (netPill.firstElementChild) netPill.firstElementChild.textContent = '\u25cf ONLINE'; }
+      if (pingInterval) clearInterval(pingInterval);
+      pingInterval = setInterval(function () {
+        if (ws && ws.readyState === 1) ws.send(JSON.stringify({type:'ping'}));
+      }, 15000);
+      if (mode === 'boot') return;
+      goIdle();
+    };
+    ws.onclose = function () {
+      wsReady = false;
+      var netPill = document.getElementById('jv-pill-net');
+      if (netPill) { netPill.classList.remove('online'); netPill.classList.add('offline');
+                     if (netPill.firstElementChild) netPill.firstElementChild.textContent = '\u25cf OFFLINE'; }
+      if (pingInterval) { clearInterval(pingInterval); pingInterval = null; }
+      setDead('DISCONNECTED — RETRYING…');
+      setTimeout(connect, reconnectDelay);
+      reconnectDelay = Math.min(reconnectDelay * 2, 8000);
+    };
+    ws.onerror = function () { try { ws.close(); } catch (e) {} };
+    ws.onmessage = onMessage;
+  }
+  function send(obj) {
+    if (ws && ws.readyState === 1) { ws.send(JSON.stringify(obj)); return true; }
+    return false;
+  }
+
+  function onMessage(ev) {
+    var m;
+    try { m = JSON.parse(ev.data); } catch (e) { return; }
+
+    // Any word from the server means the turn is alive, so the watchdog measures
+    // silence rather than total elapsed time. A slow-but-progressing turn
+    // (transcribing -> thinking -> speaking) no longer trips it.
+    if (mode === 'busy') busySince = Date.now();
+
+    if (m.type === 'telemetry') {
+      applyTelemetry(m.stats);
+      applyLeft(m.stats);
+      return;
+    }
+
+    // Server-side wake-word fallback fired (music-proof). Open the command window
+    // exactly as the browser WakeListener would, guarded by a short lock so the two
+    // engines can't both open a capture for one "jarvis".
+    if (m.type === 'wake') {
+      var src = (m.source === 'server') ? 'SERVER' : 'BROWSER';
+      console.log('[wake] ' + src + ' engine detected wake word');
+      var now = Date.now();
+      if (now - lastWakeAt < 2000) return;   // de-dupe against the browser listener
+      lastWakeAt = now;
+      // Phase C barge-in: the user just spoke — JARVIS stops talking immediately
+      // and any ducked music is restored.
+      if (current) { try { current.pause(); } catch (e) {} current = null; stopSpeakLoop(); }
+      send({ type: 'speech', state: 'end' });
+      // Open the voice session when resting (off after a reply, or idle from
+      // enable-mic). Must match mode==='off' because goIdle() parks there.
+      if (mode === 'off' || mode === 'idle') {
+        console.log('[session] wake — opening voice session');
+        beginCapture('command', false);
+        cue('What is it, sir?');
+      }
+      return;
+    }
+
+    if (m.type === 'cleared') {
+      pendingReply = false;
+      notice(m.text || 'CONTEXT CLEARED');
+      if (mode !== 'speaking') goIdle();
+      return;
+    }
+
+    // Server-synthesized session cue (wake / close). Play it, but preserve the
+    // active capture while the clip plays so an opening cue doesn't drop the
+    // just-opened listening window when it ends.
+    if (m.type === 'cue') {
+      if (m.audio) { speak(m.audio, mode === 'command'); }
+      else if (m.text) { notice(m.text); }
+      // Phase B chip: last few spoken cues stay visible in the feed
+      if (m.text) {
+        var cues = document.getElementById('jv-cues');
+        if (cues) {
+          var chip = document.createElement('span');
+          chip.className = 'jv-cuechip';
+          var ic = document.createElement('i');
+          ic.setAttribute('data-lucide', 'audio-lines');
+          var tx = document.createElement('span');
+          tx.textContent = m.text;
+          chip.appendChild(ic); chip.appendChild(tx);
+          cues.appendChild(chip);
+          while (cues.children.length > 6) cues.removeChild(cues.firstChild);
+          if (window.lucide) lucide.createIcons();
+        }
+      }
+      return;
+    }
+
+    // Layer 1 (Intake) confirmation gate: a low-confidence / mis-heard command
+    // becomes a set of tappable correction chips instead of a wrong action.
+    // Tapping a chip re-sends that candidate as a fresh (now clean) command.
+    if (m.type === 'clarify') {
+      console.log('[clarify] heard=' + m.heard + ' echo=' + m.echo +
+                  ' candidates=' + JSON.stringify(m.candidates));
+      showClarify(m.heard, m.echo, m.candidates || []);
+      return;
+    }
+
+    if (m.type === 'transcript') {
+      console.log('[you] ' + m.text);
+      // Session boundary rules (Phase 1 UX + spurious-close fix):
+      //   * Bare "jarvis" OPENS the mic when truly off (speaks a listening cue).
+      //   * Bare "jarvis" must NEVER CLOSE the session: Whisper routinely
+      //     appends "jarvis" to real commands, so a stray/trailing "jarvis"
+      //     would end the chat even when you never meant to. That was the
+      //     bug that killed the mic mid-conversation.
+      //   * CLOSE happens only on an EXPLICIT close phrase ("exit jarvis",
+      //     "stop jarvis", "bye jarvis", "that's all") — words Whisper does
+      //     not spontaneously emit for a normal command.
+      var youText = (m.text || '').trim();
+      var youLower = youText.toLowerCase().replace(/[.,!?;:]+$/g, '').trim();
+      // A bare wake word (and nothing else) — used ONLY to open.
+      var isBareWake = /^(hey\s+|ok\s+|okay\s+|hi\s+)?(jarvis\w*)(\s+(jarvis\w*))*$/i.test(youLower);
+      // Explicit close: a close verb LEADING, optionally followed by the wake
+      // word. The verb must lead so a command merely ending in "jarvis" is safe.
+      var isCloseIntent = /^(stop|end|close|exit|quit|that'?s all|that is all|done|finish|bye|goodbye)(\s+(jarvis\w*))?$/i.test(youLower);
+      if (mode === 'off' && isBareWake) {
+        // Open the voice session and audibly signal listening.
+        console.log('[session] wake — opening voice session');
+        beginCapture('command', false);
+        cue('What is it, sir?');
+        return;
+      }
+      if (isCloseIntent) {
+        // Deliberate end phrase: close the session with a standing-by cue.
+        sessionClosePending = true;
+        console.log('[session] close requested — mic will stop after reply');
+        if (mode !== 'busy' && mode !== 'speaking') {
+          stopMic();
+          mode = 'off';
+          cue('Standing by, sir.');
+          setState('idle', 'VOICE SESSION ENDED — SAY "JARVIS" TO RESUME');
+          dot.className = 'dead';
+          if (endBtn) endBtn.classList.remove('show');
+          return;
+        }
+      }
+      setState('thinking', 'THINKING…');
+    } else if (m.type === 'response') {
+      console.log('[jarvis] ' + m.text);
+      pendingReply = false;
+      if (m.text) {
+        // The typewriter owns the audio now: it calls speak() the moment the
+        // last character lands (or goIdle() when the reply carries no clip).
+        logConv('jarvis', m.text, m.audio);
+      } else if (m.audio) {
+        speak(m.audio);                         // audio with no text: just talk
+      } else {
+        goIdle();
+      }
+    } else if (m.type === 'progress') {
+      // Mid-task status update: show text in chat AND speak it.
+      if (m.text) {
+        logConv('jarvis', m.text, m.audio);
+        if (m.text.startsWith('Delegating to Hermes')) {
+          setState('thinking', 'DELEGATING…');
+        }
+      } else if (m.audio) {
+        speak(m.audio);
+      }
+    } else if (m.type === 'status') {
+      if (m.state === 'idle') {
+        // Never let the server yank us out of playback; goIdle() runs when TTS ends.
+        if (mode !== 'speaking') goIdle();
+      } else if (m.state === 'transcribing') {
+        earcon(880, 0.09);                       // Phase C: short high blip
+        if (mode === 'busy') setState('transcribing', 'TRANSCRIBING…');
+      } else if (m.state === 'thinking') {
+        earcon(560, 0.10); earcon(560, 0.06, 0.12);  // Phase C: soft double tone
+        if (mode === 'busy') setState('thinking', 'THINKING…');
+      }
+    } else if (m.type === 'error') {
+      goIdle();
+      notice('ERROR — ' + m.text);
+    } else if (m.type === 'job') {
+      // Background job card: created/updated by jobs.py via the WS bridge.
+      renderJobCard(m);
+    }
+  }
+
+  // ------------------------------------------------- background job cards
+  // One card per background task (specialist/Hermes). States: queued/running
+  // (spinner + last note), done (auto-dismiss), error/timeout (sticky red).
+  var jobCards = {};                      // id -> card element
+
+  function renderJobCard(ev) {
+    var card = jobCards[ev.id];
+    if (!card) {
+      card = document.createElement('div');
+      card.className = 'job-card';
+      card.innerHTML =
+        '<div class="job-head"><span class="job-icon"></span>' +
+        '<span class="job-title"></span><span class="job-state"></span></div>' +
+        '<div class="job-note"></div>';
+      var host = document.getElementById('job-tray');
+      if (!host) {                        // lazy-create the tray once
+        host = document.createElement('div');
+        host.id = 'job-tray';
+        document.body.appendChild(host);
+      }
+      host.appendChild(card);
+      jobCards[ev.id] = card;
+    }
+    var icon   = card.querySelector('.job-icon');
+    var state  = card.querySelector('.job-state');
+    var note   = card.querySelector('.job-note');
+    var title  = card.querySelector('.job-title');
+    title.textContent = ev.task || '(untitled task)';
+    note.textContent  = ev.note || ev.summary || ev.error || '';
+    card.classList.remove('is-running', 'is-done', 'is-error', 'is-timeout');
+    if (ev.state === 'done') {
+      card.classList.add('is-done');
+      icon.textContent  = '✓';
+      state.textContent = 'DONE' + (ev.elapsed ? ' · ' + Math.round(ev.elapsed) + 's' : '');
+      setTimeout(function () {          // auto-dismiss completed cards
+        card.remove(); delete jobCards[ev.id];
+      }, 8000);
+    } else if (ev.state === 'error') {
+      card.classList.add('is-error');
+      icon.textContent  = '✕';
+      state.textContent = 'ERROR';
+      note.textContent  = ev.error || ev.note || 'failed';
+    } else if (ev.state === 'timeout') {
+      card.classList.add('is-timeout');
+      icon.textContent  = 'â±';
+      state.textContent = 'TIMEOUT';
+      note.textContent  = ev.error || 'timed out';
+    } else {                            // queued / running
+      card.classList.add('is-running');
+      icon.textContent  = 'â—';          // spins via CSS animation
+      state.textContent = ev.state.toUpperCase();
+    }
+  }
+
+  // ------------------------------------------------- speech-reactive visuals
+  // A second, playback-only AudioContext taps the TTS <audio> element and turns
+  // its live waveform into the CSS levers declared in :root. It is completely
+  // separate from the mic graph below (that one gets closed on every teardown).
+  // Everything here is best-effort: if Web Audio is unavailable or the element
+  // cannot be tapped, we fall back to a timed oscillation and nothing throws.
+  var AMP_FFT      = 512;
+  var AMP_SMOOTH   = 0.6;
+  var AMP_GAIN     = 3.2;    // raw RMS of speech sits around .05–.30 -> normalise
+  var PEAK_DECAY   = 0.90;   // per-frame decay of the held peak
+  var PEAK_TRIGGER = 0.42;   // rms must cross this (from below) to launch a ring
+  var MAX_RINGS    = 12;
+
+  var ampCtx = null, ampSrc = null, ampAnalyser = null, ampGain = null;
+  var ampBuf = null, ampEl = null, ampDead = false;
+  var rafId = 0, fallbackTimer = 0, fallbackT0 = 0;
+  var lastRMS = 0, peakRMS = 0, wasOverPeak = false;
+
+  function ampVars(rms, peak) {
+    // rms/peak are already normalised to 0..1.
+    rootStyle.setProperty('--amp', rms.toFixed(3));
+    rootStyle.setProperty('--hue', (Math.sin(peakRMS * 6.0) * 12 * rms).toFixed(2) + 'deg');
+    rootStyle.setProperty('--bright', (1 + 0.25 * rms).toFixed(3));
+    rootStyle.setProperty('--sat', (1 + 0.40 * rms).toFixed(3));
+    rootStyle.setProperty('--glow', (0.40 + 0.60 * peak).toFixed(3));
+    rootStyle.setProperty('--glow-r', (48 + 40 * rms).toFixed(1) + 'vmin');
+    // The HUD's own React frame loop consumes --spd, so this really does speed
+    // up the inner blob's bands/chords/dust on loud phonemes.
+    setHudSpeed(2.4 + 1.6 * rms);
+  }
+
+  function resetAmpVars() {
+    rootStyle.setProperty('--amp', '0');
+    rootStyle.setProperty('--hue', '0deg');
+    rootStyle.setProperty('--bright', '1');
+    rootStyle.setProperty('--sat', '1');
+    rootStyle.setProperty('--glow', '0');
+    rootStyle.setProperty('--glow-r', '48vmin');
+    lastRMS = 0; peakRMS = 0; wasOverPeak = false;
+  }
+
+  function detachAnalyser() {
+    // A MediaElementSource is permanently bound to its element, so each clip
+    // gets its own node set and the previous one is unhooked here. Never leak.
+    try { if (ampSrc) ampSrc.disconnect(); } catch (e) {}
+    try { if (ampAnalyser) ampAnalyser.disconnect(); } catch (e) {}
+    try { if (ampGain) ampGain.disconnect(); } catch (e) {}
+    ampSrc = ampAnalyser = ampGain = null; ampBuf = null; ampEl = null;
+  }
+
+  function attachAnalyser(el) {
+    if (ampDead || !el) return false;
+    if (ampEl === el && ampAnalyser) return true;      // already analysing it
+    var AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) { ampDead = true; return false; }
+    detachAnalyser();
+    try {
+      if (!ampCtx) ampCtx = new AC();
+      ampSrc = ampCtx.createMediaElementSource(el);
+      ampAnalyser = ampCtx.createAnalyser();
+      ampAnalyser.fftSize = AMP_FFT;
+      ampAnalyser.smoothingTimeConstant = AMP_SMOOTH;
+      // Routing the element through the graph makes the graph its ONLY output,
+      // so this gain stays at unity — JARVIS must still be audible. (The muted
+      // sink pattern belongs to the mic path, where nothing may reach speakers.)
+      ampGain = ampCtx.createGain(); ampGain.gain.value = 1;
+      ampSrc.connect(ampAnalyser); ampAnalyser.connect(ampGain);
+      ampGain.connect(ampCtx.destination);
+      ampBuf = new Uint8Array(ampAnalyser.fftSize);
+      ampEl = el;
+    } catch (e) {
+      detachAnalyser();
+      ampDead = true;                                   // don't retry every clip
+      return false;
+    }
+    try { if (ampCtx.state === 'suspended') ampCtx.resume(); } catch (e) {}
+    return true;
+  }
+
+  function readAmp() {
+    if (!ampAnalyser) return 0;
+    ampAnalyser.getByteTimeDomainData(ampBuf);
+    var sum = 0, i, s;
+    for (i = 0; i < ampBuf.length; i++) { s = (ampBuf[i] - 128) / 128; sum += s * s; }
+    return Math.min(1, Math.sqrt(sum / ampBuf.length) * AMP_GAIN);
+  }
+
+  function spawnPeak(rms) {
+    if (!ringsEl || ringsEl.childElementCount >= MAX_RINGS) return;
+    var el = document.createElement('i');
+    el.style.animationDelay = (Math.random() * 0.5) + 's';
+    el.addEventListener('animationend', function () {
+      if (el.parentNode) el.parentNode.removeChild(el);
+    });
+    ringsEl.appendChild(el);
+    el.className = 'jv-ring-spawn';
+  }
+
+  function speakLoop() {
+    if (mode !== 'speaking') { stopSpeakLoop(); return; }
+    rafId = requestAnimationFrame(speakLoop);
+    var rms = readAmp();
+    peakRMS = Math.max(rms, peakRMS * PEAK_DECAY);
+    ampVars(rms, peakRMS);
+    if (rms >= PEAK_TRIGGER && !wasOverPeak) spawnPeak(rms);
+    wasOverPeak = rms >= PEAK_TRIGGER;
+    lastRMS = rms;
+  }
+
+  // No analyser (no Web Audio, tainted element, blocked context): keep the orb
+  // alive with a slow synthetic swell so the speaking state still reads as speech.
+  function fallbackLoop() {
+    if (mode !== 'speaking') { stopSpeakLoop(); return; }
+    var t = (Date.now() - fallbackT0) / 1000;
+    var rms = 0.25 + 0.25 * (0.5 + 0.5 * Math.sin(t * 3.4));
+    peakRMS = Math.max(rms, peakRMS * PEAK_DECAY);
+    ampVars(rms, peakRMS);
+    if (rms >= PEAK_TRIGGER && !wasOverPeak) spawnPeak(rms);
+    wasOverPeak = rms >= PEAK_TRIGGER;
+  }
+
+  function startSpeechVisuals(el) {
+    stopSpeakLoop();
+    if (attachAnalyser(el)) {
+      rafId = requestAnimationFrame(speakLoop);
+    } else {
+      fallbackT0 = Date.now();
+      fallbackTimer = setInterval(fallbackLoop, 60);
+    }
+  }
+
+  function stopSpeakLoop() {
+    if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+    if (fallbackTimer) { clearInterval(fallbackTimer); fallbackTimer = 0; }
+    detachAnalyser();
+    resetAmpVars();
+    setHudSpeed(HUD_SPD.idle);
+  }
+
+  // ---------------------------------------------------------------- audio out
+  var current = null, audioUnlocked = false;
+
+  // Phase C: tiny WebAudio blip for state feedback (no server round-trip).
+  // Safe no-op until the user unlocks audio; never plays during speech.
+  function earcon(freq, dur, delaySec) {
+    try {
+      if (mode === 'speaking') return;
+      var actx = ctx || ampCtx;
+      if (!actx) return;
+      var osc = actx.createOscillator();
+      var g = actx.createGain();
+      var t0 = actx.currentTime + (delaySec || 0);
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(0.12, t0 + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+      osc.connect(g); g.connect(actx.destination);
+      osc.start(t0); osc.stop(t0 + dur + 0.02);
+    } catch (e) {}
+  }
+
+  function speak(b64, preserveMode) {
+    var prevMode = mode;
+    mode = 'speaking';
+    if (current) { try { current.pause(); } catch (e) {} }
+    stopSpeakLoop();                       // never double-analyse two clips
+    setState('speaking', 'SPEAKING');
+    send({ type: 'speech', state: 'start' });   // Phase C: duck music while JARVIS talks
+    var a = new Audio('data:audio/mp3;base64,' + b64);
+    current = a;
+    a.onended = a.onerror = function () {
+      if (current === a) current = null;
+      send({ type: 'speech', state: 'end' });    // Phase C: restore music volume
+      stopSpeakLoop();
+      if (preserveMode) {
+        // Restore the mode that was active before this clip (e.g. 'command'
+        // during a cue so the mic stays open for the user's reply).
+        mode = prevMode;
+        if (mode === 'command') setState('listening', 'LISTENING…');
+        else goIdle();
+      } else {
+        goIdle();
+      }
+    };
+    a.play().then(function () {
+              audioUnlocked = true; unlockBtn.classList.remove('show');
+              startSpeechVisuals(a);       // playback has actually begun
+            })
+            .catch(function () {
+              // Chrome autoplay policy: play() is rejected until a user gesture
+              // or an active getUserMedia session resumes the audio contexts.
+              // The page holds a live mic stream, so resuming the contexts here
+              // is a legitimate unlock — then retry once before giving up.
+              var retry = function () {
+                a.play().then(function () {
+                      audioUnlocked = true; unlockBtn.classList.remove('show');
+                      startSpeechVisuals(a);
+                    })
+                    .catch(function () { unlockBtn.classList.add('show'); stopSpeakLoop(); goIdle(); });
+              };
+              if (ctx) { try { ctx.resume().then(retry, retry); } catch (e) { retry(); } }
+              else if (ampCtx) { try { ampCtx.resume().then(retry, retry); } catch (e) { retry(); } }
+              else { retry(); }
+            });
+  }
+
+  // ---------------------------------------------------------------- wav encode
+  function resample(input, from, to) {
+    if (from === to) return input;
+    var ratio = from / to, n = Math.max(1, Math.round(input.length / ratio));
+    var out = new Float32Array(n);
+    for (var i = 0; i < n; i++) {
+      var p = i * ratio, i0 = p | 0, i1 = Math.min(i0 + 1, input.length - 1), f = p - i0;
+      out[i] = input[i0] * (1 - f) + input[i1] * f;
+    }
+    return out;
+  }
+  function encodeWav(pcm) {
+    var buf = new ArrayBuffer(44 + pcm.length * 2), v = new DataView(buf), i;
+    function str(off, s) { for (var k = 0; k < s.length; k++) v.setUint8(off + k, s.charCodeAt(k)); }
+    str(0, 'RIFF'); v.setUint32(4, 36 + pcm.length * 2, true); str(8, 'WAVEfmt ');
+    v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+    v.setUint32(24, TARGET_RATE, true); v.setUint32(28, TARGET_RATE * 2, true);
+    v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+    str(36, 'data'); v.setUint32(40, pcm.length * 2, true);
+    for (i = 0; i < pcm.length; i++) {
+      var s = Math.max(-1, Math.min(1, pcm[i]));
+      v.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    }
+    return buf;
+  }
+  function b64(buf) {
+    var bytes = new Uint8Array(buf), bin = '', cs = 0x8000;
+    for (var i = 0; i < bytes.length; i += cs) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + cs));
+    return btoa(bin);
+  }
+
+  // ---------------------------------------------------------------- wake listener
+  // Always-on wake-word detection. Replaces the old VAD-triggered "scan": instead
+  // of opening a Whisper transcription on any loud sound, we run a continuous
+  // cloud-backed speech recognizer whose ONLY job is to detect the wake word.
+  // Ambient noise / chatter never reaches Whisper or the brain — only a recognized
+  // "jarvis" (or a fuzzy variant) opens the command window. The actual command is
+  // still captured and transcribed locally via Whisper, so only the cheap wake
+  // check uses the network. If Web Speech is unavailable, we fall back to the
+  // manual "Enable mic" path and surface a notice.
+  var wakeRec = null, wakeActive = false;
+
+  function wakeWordIn(text) {
+    if (!text) return false;
+    var t = (text || '').toLowerCase().replace(/[.,!?;:]+$/, '').trim();
+    if (t === 'jarvis') return true;
+    // Fuzzy: any wake-word token as a standalone or trailing word.
+    for (var i = 0; i < WAKE_WORDS.length; i++) {
+      if (t === WAKE_WORDS[i]) return true;
+      var re = new RegExp('(^|\\s)' + WAKE_WORDS[i] + '(\\s|$)', 'i');
+      if (re.test(t)) return true;
+    }
+    return false;
+  }
+
+  function startWakeListener() {
+    var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) {
+      notice('WAKE-WORD UNAVAILABLE — use Enable Mic + type, or Chrome');
+      return;
+    }
+    if (wakeRec) { try { wakeRec.stop(); } catch (e) {} }
+    wakeRec = new SR();
+    wakeRec.continuous = true;
+    wakeRec.interimResults = true;
+    wakeRec.lang = 'en-US';
+    wakeRec.onresult = function (ev) {
+      // Open when JARVIS is resting: 'off' (after a reply / session close) or
+      // 'idle' (freshly enabled mic, waiting for the first wake word). A bare
+      // "jarvis" mid-conversation must not reset capture — Whisper routinely
+      // appends the wake word to real commands, so block during active turns.
+      if (mode !== 'off' && mode !== 'idle') return;
+      for (var i = ev.resultIndex; i < ev.results.length; i++) {
+        var txt = ev.results[i][0].transcript;
+        if (wakeWordIn(txt)) {
+          console.log('[wake] detected: ' + txt);
+          beginCapture('command', false);
+          cue('What is it, sir?');
+          return;
+        }
+      }
+    };
+    wakeRec.onerror = function (e) {
+      // 'no-speech' / 'aborted' / 'network' are benign for a continuous listener;
+      // onend will re-arm us. Only a permission error is fatal.
+      if (e && e.error === 'not-allowed') {
+        notice('MIC BLOCKED — WAKE-WORD OFF');
+        wakeActive = false;
+        return;
+      }
+    };
+    wakeRec.onend = function () {
+      // Chrome auto-stops continuous recognition every ~60s. Restart it whenever
+      // it is still wanted — regardless of mode. Restarting mid-turn is harmless
+      // because onresult ignores results unless mode === 'idle'. The old guard
+      // (mode === 'idle') left the listener dead after the first auto-stop, which
+      // looked like JARVIS "disconnecting from the mic".
+      if (wakeActive) { try { wakeRec.start(); } catch (e) {} }
+    };
+    try { wakeRec.start(); wakeActive = true; } catch (e) {}
+  }
+
+  // Self-healing watchdog: if the recognizer ever dies without onend (tab blurred,
+  // GC, network drop), restart it as long as the mic session is live.
+  setInterval(function () {
+    if (wakeActive && (!wakeRec || wakeRec.state === 'inactive') && mode !== 'nomic' && mode !== 'off') {
+      try { wakeRec = null; startWakeListener(); } catch (e) {}
+    }
+  }, 3000);
+
+  function stopWakeListener() {
+    wakeActive = false;
+    if (wakeRec) { try { wakeRec.stop(); } catch (e) {} wakeRec = null; }
+  }
+
+  // ---------------------------------------------------------------- capture engine
+  // One permanent getUserMedia stream + one ScriptProcessor (PCM for the clip)
+  // + one AnalyserNode (RMS for the VAD). No MediaRecorder, no start/stop
+  // button, nothing that can be left in a stuck state.
+  var ctx = null, srcNode = null, proc = null, sink = null, stream = null;
+  var analyser = null, vadBuf = null, vadTimer = null;
+  var srcRate = 48000;
+
+  var mode = 'boot';            // boot | idle | scan | command | busy | speaking | nomic | off
+  var micOk = false;            // false -> nothing to listen with; park in 'nomic'
+  var ring = [], ringLen = 0, ringCap = 0;
+  var cap = null, capLen = 0, capHeard = false, capWaited = 0;
+  var noiseFloor = 0.004, speechMs = 0, silenceMs = 0;
+  var busySince = 0, lastLevel = 0;
+  // User may end the voice session by saying "...jarvis" at the end of a command.
+  // When a transcript ends with the wake word, we process the command normally,
+  // then close the mic instead of returning to the listening loop.
+  var sessionClosePending = false;
+  var lastWakeAt = 0;           // de-dupe server vs browser wake (ms epoch)
+
+  function goIdle() {
+    stopSpeakLoop();                   // idempotent: kills the RAF + resets levers
+    cap = null; capLen = 0; capHeard = false; capWaited = 0;
+    speechMs = 0; silenceMs = 0;
+    ring = []; ringLen = 0;
+
+    // Stop-word path: the user ended the session by saying "...jarvis". Tear the
+    // mic down completely and park in 'off' so the loop does not re-arm.
+    if (sessionClosePending) {
+      sessionClosePending = false;
+      stopMic();
+      mode = 'off';
+      cue('Standing by, sir.');
+      setState('idle', 'VOICE SESSION ENDED — SAY "JARVIS" TO RESUME');
+      dot.className = 'dead';
+      if (endBtn) endBtn.classList.remove('show');
+      return;
+    }
+
+    if (!micOk) {
+      // No mic: park. Voice is the only input, so there is nothing else to do.
+      mode = 'nomic';
+      setState('idle', 'NO MIC — CLICK ENABLE MIC');
+      dot.className = 'dead';
+      return;
+    }
+    mode = 'idle';
+    setState('idle', 'LISTENING FOR “JARVIS”');
+    // A live mic means a voice session is active — surface the End button so
+    // the user can always stop it without relying on a spoken close word.
+    if (endBtn) endBtn.classList.add('show');
+  }
+
+  // Fully stop and release the microphone (used by the "...jarvis" stop-word).
+  function stopMic() {
+    stopWakeListener();
+    teardownMic();
+    micOk = false;
+  }
+
+  function pushRing(block) {
+    ring.push(block); ringLen += block.length;
+    while (ringLen - ring[0].length > ringCap) { ringLen -= ring[0].length; ring.shift(); }
+  }
+
+  // ---------------------------------------------------------------- earcon
+  // A short blip the instant the command window opens, so "is it listening?"
+  // is never a guess. Played on the mic's own AudioContext, and deliberately
+  // BEFORE capture starts: the recorder must not swallow the tick and count it
+  // as speech. Returns how long to wait before opening the mic, 0 if silent.
+  var TICK_MS = 90;
+
+  function playTick(freq, ms, vol) {
+    if (!ctx || ctx.state !== 'running') return 0;
+    try {
+      var t0 = ctx.currentTime, dur = (ms || TICK_MS) / 1000;
+      var osc = ctx.createOscillator(), g = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq || 880, t0);
+      // Ramped envelope: gating a raw oscillator clicks audibly.
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(vol || 0.18, t0 + 0.012);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+      osc.connect(g); g.connect(ctx.destination);
+      osc.start(t0); osc.stop(t0 + dur + 0.02);
+      return (ms || TICK_MS);
+    } catch (e) { return 0; }
+  }
+
+  function beginCapture(kind, seed) {
+    mode = kind;                       // now always 'command' (wake handled by WakeListener)
+    cap = []; capLen = 0; capWaited = 0;
+    // The WakeListener already confirmed the wake word, so every capture here is a
+    // command. capHeard starts false; the VAD (below) flips it once real speech lands.
+    capHeard = false;
+    if (seed) { for (var i = 0; i < ring.length; i++) { cap.push(ring[i]); capLen += ring[i].length; } }
+    ring = []; ringLen = 0;
+    setState('listening', 'LISTENING…');
+  }
+
+  function endCapture() {
+    var kind = mode, blocks = cap, len = capLen;
+    cap = null;
+    var ms = (len / srcRate) * 1000;
+    if (!capHeard || ms < MIN_CLIP_MS) { goIdle(); return; }
+
+    var flat = new Float32Array(len), off = 0;
+    for (var i = 0; i < blocks.length; i++) { flat.set(blocks[i], off); off += blocks[i].length; }
+    var data = b64(encodeWav(resample(flat, srcRate, TARGET_RATE)));
+
+    mode = 'busy'; busySince = Date.now();
+    setState('transcribing', 'TRANSCRIBING…');
+    if (!send({ type: 'audio', data: data })) goIdle();
+  }
+
+  // The ScriptProcessor is now only a tape recorder: it buffers PCM. Every
+  // decision (is this speech? is the utterance over?) belongs to vadTick().
+  function onAudio(e) {
+    var input = e.inputBuffer.getChannelData(0);
+    if (mode === 'busy' || mode === 'speaking' || mode === 'nomic' || mode === 'boot') {
+      ring = []; ringLen = 0;            // never let JARVIS hear itself
+      return;
+    }
+    var block = new Float32Array(input); // copy, the buffer is reused
+    if (mode === 'idle') { pushRing(block); return; }
+    if (cap) { cap.push(block); capLen += block.length; }
+  }
+
+  // ---------------------------------------------------------------- VAD
+  // AnalyserNode -> getByteTimeDomainData -> RMS, every ~50ms. The noise floor
+  // is an exponential moving average of the RMS measured during silence only,
+  // so it tracks fans/AC/traffic without ever learning the user's voice.
+  function vadTick() {
+    if (!analyser) return;
+    analyser.getByteTimeDomainData(vadBuf);
+    var sum = 0, i, s;
+    for (i = 0; i < vadBuf.length; i++) { s = (vadBuf[i] - 128) / 128; sum += s * s; }
+    var rms = Math.sqrt(sum / vadBuf.length);
+
+    lastLevel = lastLevel * 0.7 + rms * 0.3;
+    levelEl.style.width = Math.min(100, lastLevel * 900) + '%';
+
+    if (mode === 'nomic') return;
+    if (mode === 'busy' || mode === 'speaking') { speechMs = 0; silenceMs = 0; return; }
+
+    var loud = rms > Math.max(noiseFloor * SPEECH_MARGIN, ABS_MIN_RMS);
+    if (loud) {
+      speechMs += VAD_TICK_MS; silenceMs = 0;
+    } else {
+      silenceMs += VAD_TICK_MS; speechMs = 0;
+      var a = (mode === 'boot') ? WARM_ALPHA : FLOOR_ALPHA;
+      noiseFloor += a * (rms - noiseFloor);
+      if (noiseFloor < FLOOR_MIN) noiseFloor = FLOOR_MIN;
+      if (noiseFloor > FLOOR_MAX) noiseFloor = FLOOR_MAX;
+    }
+    var voice = speechMs >= SPEECH_MIN_MS;
+
+    if (mode === 'boot') return;         // still calibrating the room
+
+    // NOTE: the idle -> scan trigger used to live here, driven by raw mic energy
+    // (VAD). That let any loud noise in a busy room open a Whisper "scan" and
+    // occasionally mis-fire the wake word. Wake detection is now owned by the
+    // continuous Web Speech listener (WakeListener), so ambient noise can never
+    // start a capture. The VAD below is only used to END a command clip.
+    if (mode === 'idle') { return; }
+
+    // command capture: VAD only decides when the utterance is over.
+    if (voice) { capHeard = true; capWaited = 0; }
+    else if (!capHeard) { capWaited += VAD_TICK_MS; }
+
+    var ms = (capLen / srcRate) * 1000;
+    var hang = CMD_HANG_MS;
+    var max = CMD_MAX_MS;
+    if ((capHeard && silenceMs >= hang) || ms >= max) { endCapture(); return; }
+    if (!capHeard && capWaited >= ((mode === 'command') ? CMD_WAIT_MS : 1200)) goIdle();
+  }
+
+  // ---------------------------------------------------------------- boot
+  function teardownMic() {
+    // "Enable mic" can be pressed repeatedly; never stack graphs or devices.
+    try { if (vadTimer) clearInterval(vadTimer); } catch (e) {}
+    try { if (proc) proc.onaudioprocess = null; } catch (e) {}
+    try { if (srcNode) srcNode.disconnect(); } catch (e) {}
+    try { if (analyser) analyser.disconnect(); } catch (e) {}
+    try { if (proc) proc.disconnect(); } catch (e) {}
+    try { if (sink) sink.disconnect(); } catch (e) {}
+    try { if (stream) stream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) {}
+    try { if (ctx) ctx.close(); } catch (e) {}
+    vadTimer = null; analyser = null; vadBuf = null;
+    ctx = srcNode = proc = sink = stream = null;
+    noiseFloor = 0.004; speechMs = 0; silenceMs = 0;
+    ring = []; ringLen = 0; cap = null; capLen = 0;
+  }
+
+  async function startMic() {
+    teardownMic();
+    micOk = false;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+      });
+    } catch (err) {
+      mode = 'nomic';
+      setDead('MIC BLOCKED — ' + (err && err.name ? err.name : 'error'));
+      retryBtn.classList.add('show');
+      return;
+    }
+    retryBtn.classList.remove('show');
+    micOk = true;
+
+    // Wake-word listener owns detection now (ambient noise must not trigger JARVIS).
+    startWakeListener();
+
+    var AC = window.AudioContext || window.webkitAudioContext;
+    ctx = new AC();
+    srcRate = ctx.sampleRate;
+    srcNode = ctx.createMediaStreamSource(stream);
+    proc = ctx.createScriptProcessor(4096, 1, 1);
+    ringCap = Math.ceil((PREROLL_MS / 1000) * srcRate);
+    proc.onaudioprocess = onAudio;
+    // ScriptProcessor only ticks when connected to the destination; a muted
+    // gain node keeps the mic out of the speakers.
+    sink = ctx.createGain(); sink.gain.value = 0;
+    srcNode.connect(proc); proc.connect(sink); sink.connect(ctx.destination);
+
+    // AnalyserNode drives the VAD. It is a passive tap — no output path needed.
+    analyser = ctx.createAnalyser();
+    analyser.fftSize = VAD_FFT;
+    analyser.smoothingTimeConstant = 0;
+    vadBuf = new Uint8Array(analyser.fftSize);
+    srcNode.connect(analyser);
+    vadTimer = setInterval(vadTick, VAD_TICK_MS);
+
+    try { await ctx.resume(); } catch (e) {}
+    if (ctx.state !== 'running') unlockBtn.classList.add('show');
+
+    // Losing the device (unplug, OS steal) must not wedge the state machine.
+    stream.getAudioTracks().forEach(function (t) {
+      t.onended = function () {
+        micOk = false; mode = 'nomic';
+        setDead('MIC LOST — CLICK ENABLE MIC'); retryBtn.classList.add('show');
+      };
+    });
+
+    mode = 'boot';
+    setState('idle', 'CALIBRATING…');
+    setTimeout(function () { if (mode === 'boot') goIdle(); }, CALIBRATE_MS);
+  }
+
+  unlockBtn.onclick = async function () {
+    if (ctx) { try { await ctx.resume(); } catch (e) {} }
+    // The playback analyser has its own context; it must be unlocked too or the
+    // TTS routed through it would play silent after a gesture-gated autoplay.
+    if (ampCtx) { try { await ampCtx.resume(); } catch (e) {} }
+    try { await new Audio('data:audio/mp3;base64,//uQx' + 'A'.repeat(20)).play(); } catch (e) {}
+    audioUnlocked = true;
+    unlockBtn.classList.remove('show');
+  };
+  // End session button — guaranteed teardown regardless of voice state. Lets
+  // the user stop JARVIS without depending on a spoken close word.
+  if (endBtn) {
+    endBtn.onclick = function () {
+      endBtn.classList.remove('show');
+      sessionClosePending = false;
+      stopMic();
+      mode = 'off';
+      setState('idle', 'VOICE SESSION ENDED — CLICK ENABLE MIC TO RESUME');
+      dot.className = 'dead';
+    };
+  }
+  retryBtn.onclick = function () { retryBtn.classList.remove('show'); mode = 'boot'; startMic(); };
+
+  // ---------------------------------------------------------------- apps modal
+  var appsData = null, appCat = 'all';
+  var appsModal = document.getElementById('jv-apps-modal');
+  var appsFrame = document.getElementById('jv-apps-frame');
+
+  function openApps() {
+    appsModal.classList.add('show');
+    // iframe auto-loads /apps.html on each open; no local data fetch needed.
+    if (appsFrame) { try { appsFrame.contentWindow.location.reload(); } catch (e) {} }
+  }
+
+  document.getElementById('jv-apps').onclick = openApps;
+  document.getElementById('jv-apps-close').onclick = function () {
+    appsModal.classList.remove('show');
+  };
+  appsModal.onclick = function (e) {
+    if (e.target === appsModal) appsModal.classList.remove('show');
+  };
+
+  // ---------------------------------------------------------------- voice feedback toggle
+  // The .vf-opt chips were decorative (cursor:pointer only). Wire them to the
+  // server's /voice_feedback endpoint so the mode actually changes at runtime.
+  var vfChips = document.querySelectorAll('#jv-vf .vf-opt');
+  function setVfMode(mode) {
+    fetch('/voice_feedback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: mode })
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      var m = (d && d.mode) || mode;
+      vfChips.forEach(function (c) {
+        c.classList.toggle('active', c.getAttribute('data-mode') === m);
+      });
+    }).catch(function () {});
+  }
+  vfChips.forEach(function (c) {
+    c.addEventListener('click', function () { setVfMode(c.getAttribute('data-mode')); });
+  });
+
+  // ---------------------------------------------------------------- now playing (live)
+  // HUD card was static in real mode (only painted in DEMO). Poll /music/now and
+  // wire the STOP YT / SPOTIFY buttons to the /music controls.
+  // NOTE: /music/now drives a Chromium worker (~2s each call), so it must NOT be
+  // polled aggressively — 30s, non-overlapping, and paused when the tab is
+  // hidden. A 5s poll was hammering the machine and made JARVIS feel laggy.
+  var npTitle = document.getElementById('np-title');
+  var npSource = document.getElementById('np-source');
+  var npBusy = false;
+  function refreshNowPlaying() {
+    if (npBusy) return;
+    if (document.hidden) return;
+    npBusy = true;
+    fetch('/music/now').then(function (r) { return r.json(); }).then(function (d) {
+      if (!d) return;
+      if (d.idle || (!d.title && !d.track)) {
+        setVal(npTitle, '—'); setVal(npSource, '—');
+      } else {
+        setVal(npTitle, d.title || d.track || '—', 'ok');
+        var src = [];
+        if (d.source) src.push(d.source);
+        if (d.artist) src.push(d.artist);
+        setVal(npSource, src.join(' · ') || '—', 'ok');
+      }
+    }).catch(function () {}).then(function () { npBusy = false; });
+  }
+  refreshNowPlaying();
+  setInterval(refreshNowPlaying, 30000);
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) refreshNowPlaying();
+  });
+
+  var npStop = document.getElementById('jv-music-stop');
+  var npSpotify = document.getElementById('jv-music-spotify');
+  if (npStop) npStop.addEventListener('click', function () {
+    fetch('/music', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'stop_yt' }) }).catch(function () {});
+  });
+  if (npSpotify) npSpotify.addEventListener('click', function () {
+    fetch('/music', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'spotify_toggle' }) }).catch(function () {});
+  });
+
+  // Watchdog: nothing may stay stuck, ever.
+  setInterval(function () {
+    if (mode === 'busy' && Date.now() - busySince > BUSY_TIMEOUT) {
+      goIdle();
+      notice('TIMED OUT — STANDBY');
+    }
+    if (ctx && ctx.state === 'suspended' && micOk) unlockBtn.classList.add('show');
+  }, 1000);
+
+  setHudSpeed(1);
+  connect();
+  if (DEMO) {
+    // Paint the mockup sample without touching the mic state machine.
+    // Now Playing
+    setVal(document.getElementById('np-source'), 'Spotify · ducked 15%', 'ok');
+    setVal(document.getElementById('np-title'), 'Midnight City');
+    // System status (mockup values)
+    setVal(stBrain, 'cx/gpt-5.5 · router');
+    syncBrainPill();
+    setVal(document.getElementById('st-stt'), 'RealtimeSTT');
+    setVal(stRoute, 'router');
+    setVal(document.getElementById('st-vault'), 'turbovec · 0.4s');
+    setVal(stMic, 'mic open', 'ok');
+    setVal(stLink, 'Stable', 'ok');
+    setVal(stState, 'Idle');
+    setVal(stWake, 'Server live', 'ok');
+    setVal(stSpeed, '—');
+    // Language model
+    (function () { var set = function (id, v) { var e = document.getElementById(id); if (e) e.textContent = v; };
+      set('lf-model', 'CX/GPT-5.5'); set('lf-mode', 'LOCAL FIRST'); set('lf-quant', 'Q4_K_M');
+      set('lf-size', '14 GB'); set('lf-params', '—'); set('lf-ctxwin', '128,000 tok');
+      set('lf-turns', '12'); set('lf-hist', '48 msgs');
+      set('lf-prompt', '9,120 (7%)'); set('lf-output', '1,840 (1%)'); set('lf-head', '117,040 (92%)');
+      var bp = document.getElementById('lf-bar-p'), bo = document.getElementById('lf-bar-o');
+      if (bp) bp.style.width = '7%'; if (bo) bo.style.width = '1%';
+    })();
+    // Conversation: user bubble + confirm gate + JARVIS reply + cue chips
+    logConv('user', 'create a folder called jarvis-latch-test in documents');
+    var gate = document.getElementById('jv-gate');
+    if (gate) gate.innerHTML =
+      '<div class="jv-gate-head"><span class="t">⚠ CONFIRM</span>'
+      + '<div>That goal could change state on this machine. Run it autonomously?'
+      + '<div class="jv-gate-task">“create a folder called jarvis-latch-test…” · job 46600fcc</div></div></div>'
+      + '<div class="jv-gate-btns"><button class="jv-gate-btn confirm">CONFIRM</button>'
+      + '<button class="jv-gate-btn cancel">CANCEL</button></div>';
+    logConv('jarvis', 'Done, sir — folder verified on disk. Anything else?');
+    var cues = document.getElementById('jv-cues');
+    if (cues) cues.innerHTML =
+      '<span class="jv-cuechip">🔈 “Thinking, sir.” 4.0s</span>'
+      + '<span class="jv-cuechip">🔈 “Still working on it.” 12.0s</span>'
+      + '<span class="jv-cuechip">🔈 “Step one done.”</span>';
+    // Last turn + active task
+    setVal(stBackend, 'ollama', 'ok');
+    setVal(document.getElementById('st-grounded'), 'MASUBAE cited', 'ok');
+    setVal(document.getElementById('st-spoken'), 'Kokoro · 2.7s');
+    setVal(stLatency, '7.9s');
+    setVal(stCtx, '11,120 / 128,000 (9%)');
+    setVal(stTool, 'search_vault_semantic (0.4s)');
+    var tray = document.getElementById('job-tray');
+    if (tray) tray.innerHTML =
+      '<div class="job-card is-running"><div class="job-head">'
+      + '<span class="job-icon"></span><span class="jv-st-k">Update CUA driver</span></div>'
+      + '<div class="job-note">STEP 2 ✓ driver downloaded · spoken ✓</div></div>';
+    var tc = document.getElementById('jv-taskcount'); if (tc) tc.textContent = '1';
+    // Assert top status LAST: logConv('jarvis') calls goIdle() which would
+    // otherwise clobber the ONLINE text written below.
+    var netPill = document.getElementById('jv-pill-net');
+    function paintOnline() {
+      statusEl.textContent = 'ONLINE'; statusEl.className = 'live';
+      if (netPill) netPill.innerHTML = '<span>● ONLINE</span>';
+      dot.className = '';
+    }
+    paintOnline();
+    // The live WS (connect() runs above) pushes real status that would clobber
+    // the seeded ONLINE for a screenshot. Re-assert a few times until it settles.
+    var _onlineTicks = 0, _onlineIv = setInterval(function () {
+      paintOnline();
+      if (++_onlineTicks >= 8) clearInterval(_onlineIv);
+    }, 500);
+  } else {
+    startMic();
+  }
+})();
+</script>
+</body>
+</html>

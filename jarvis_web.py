@@ -630,6 +630,88 @@ async def get_hud():
     return _no_cache(HTMLResponse(content=html, status_code=200))
 
 
+DELEGATE_REGISTRY_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "delegate_registry.json")
+
+
+def _website_items():
+    """Registered sites from web_registry.json as /apps items.
+
+    Returns (items, hidden_count). Sites carry kind="website" and a `url`, so
+    the panel can badge them and offer "Open Site" instead of a binary launch.
+    """
+    items, hidden = [], 0
+    try:
+        import web_registry as wr
+        sites = (wr.load_registry() or {}).get("sites", {})
+    except Exception:
+        return [], 0
+    for key, site in (sites or {}).items():
+        if not isinstance(site, dict):
+            continue
+        if site.get("hidden"):
+            hidden += 1
+            continue
+        items.append({
+            "name": site.get("name") or key,
+            "key": key,
+            "bin": "",
+            "url": site.get("url", ""),
+            "host": site.get("host", ""),
+            "visits": site.get("visits", 0),
+            "category": "website",
+            "kind": "website",
+            "broken": not bool(site.get("url")),
+            "enabled": site.get("enabled", True),
+            "adapter": "browser",
+            "registered": site.get("registered", True),
+            "hidden": False,
+            "rule_drafts": site.get("rule_drafts") or [],
+            "compiled_rules": site.get("compiled_rules") or [],
+        })
+    return items, hidden
+
+
+def _capability_items():
+    """Delegates from delegate_registry.json as /apps items (kind="capability").
+
+    These are not launchable — they are what JARVIS can hand a task to — so the
+    panel renders them read-only.
+    """
+    try:
+        with open(DELEGATE_REGISTRY_PATH, "r", encoding="utf-8") as f:
+            delegates = (json.load(f) or {}).get("delegates", [])
+    except Exception:
+        return []
+    items = []
+    for d in delegates or []:
+        if not isinstance(d, dict) or not d.get("id"):
+            continue
+        did = d["id"]
+        items.append({
+            "name": did,
+            # Namespaced so a delegate id can never collide with an app key.
+            "key": "capability:%s" % did,
+            "id": did,
+            "bin": "",
+            "category": "capability",
+            "kind": "capability",
+            "handles": d.get("handles") or [],
+            "description": d.get("description", ""),
+            "priority": d.get("priority", 0),
+            "tools": d.get("tools") or [],
+            "broken": False,
+            "enabled": d.get("enabled", True),
+            "adapter": d.get("kind", "local"),
+            "registered": True,
+            "hidden": False,
+            "rule_drafts": [],
+            "compiled_rules": [],
+        })
+    items.sort(key=lambda i: (-i["priority"], i["name"]))
+    return items
+
+
 @app.get("/apps")
 async def get_apps():
     """The app registry for the HUD's Apps modal.
@@ -639,6 +721,10 @@ async def get_apps():
     - `all`: every detected app that is not hidden — the raw scan, so the user
       can find something the curation missed (and hide the bloatware).
     `apps` stays as an alias of `curated` for older callers.
+
+    Both views also carry the registered websites (kind="website") and the
+    delegate capabilities (kind="capability"), so the panel is one surface for
+    everything JARVIS can act on.
     """
     import os as _os
     from machine_capabilities import load_registry
@@ -648,11 +734,21 @@ async def get_apps():
     except Exception:
         is_registered = lambda k: False
         is_hidden = lambda k: False
+    websites, site_hidden = _website_items()
+    capabilities = _capability_items()
+    extras = websites + capabilities
     reg = load_registry()
     if not reg:
-        return JSONResponse({"error": "no registry", "apps": [], "curated": [],
-                             "all": [], "count": 0, "curated_count": 0,
-                             "all_count": 0, "hidden_count": 0})
+        return JSONResponse({"error": "no registry",
+                             "apps": list(extras), "curated": list(extras),
+                             "all": list(extras), "count": len(extras),
+                             "curated_count": len(extras),
+                             "all_count": len(extras),
+                             "hidden_count": site_hidden,
+                             "website_count": len(websites),
+                             "capability_count": len(capabilities),
+                             "websites": websites,
+                             "capabilities": capabilities})
     curated = []
     all_apps = []
     hidden_count = 0
@@ -684,14 +780,23 @@ async def get_apps():
     sort_key = lambda a: (a["category"], a["name"])
     curated.sort(key=sort_key)
     all_apps.sort(key=sort_key)
+    # Websites and capabilities are curated by construction: they appear in
+    # both views, after the installed apps.
+    curated += extras
+    all_apps += extras
+    hidden_count += site_hidden
     return JSONResponse({
         "count": len(curated),
         "curated_count": len(curated),
         "all_count": len(all_apps),
         "hidden_count": hidden_count,
+        "website_count": len(websites),
+        "capability_count": len(capabilities),
         "generated": reg.get("generated"),
         "curated": curated,
         "all": all_apps,
+        "websites": websites,
+        "capabilities": capabilities,
         "apps": curated,
     })
 

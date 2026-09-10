@@ -109,7 +109,7 @@ if live:
     # 2) curation filtering: seeds curated, noise dropped from both lists
     curated_keys = {a["key"] for a in payload["curated"]}
     all_keys = {a["key"] for a in payload["all"]}
-    check(curated_keys == {"spotify", "chrome"}, "curated holds only registered apps")
+    check({"spotify", "chrome"} <= curated_keys, "curated holds the seeded apps")
     check("randomtool" in all_keys, "raw list keeps unregistered detected apps")
     check("randomtool" not in curated_keys, "unregistered app is not curated")
     for noisy in ("asusfeatureservice", "epsonscan2", "docker-ai"):
