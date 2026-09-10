@@ -11,6 +11,8 @@ The voice flow is a small state machine, one pending setup per app key:
         -> {"status": "cancelled"}       user backed out
     list_rules(app_key)
         -> {"status": "ok", "rules": [...], "summary": <human readable text>}
+    forget_rule(app_key, rule_id=None)
+        -> {"status": "removed" | "ok", "rules": [...remaining]}   one rule, or all
 
 `rule_id` is optional on handle_clarification: an empty/None id (or "confirm")
 means "accept what you proposed", which is how the explicit-phrase path commits.
@@ -232,6 +234,22 @@ def list_rules(app_key, registry_path=None):
     lines += [_rule_line(i, r) for i, r in enumerate(rules, 1)]
     return {"status": "ok", "key": app_key, "count": len(rules),
             "rules": rules, "summary": "\n".join(lines)}
+
+
+def forget_rule(app_key, rule_id=None, registry_path=None):
+    """Remove one committed rule, or every rule for the app when `rule_id` is empty."""
+    app_key = (app_key or "").strip()
+    rid = (rule_id or "").strip()
+    if not app_key:
+        return {"status": "error", "error": "missing app_key"}
+    try:
+        removed, remaining = rc.remove_rule(app_key, rid, _registry_path(registry_path))
+    except KeyError:
+        return {"status": "error", "error": "unknown app", "key": app_key}
+    if rid and not removed:
+        return {"status": "error", "error": "unknown rule_id", "key": app_key, "rule_id": rid}
+    return {"status": "removed" if removed else "ok", "key": app_key,
+            "count": len(remaining), "rules": remaining}
 
 
 if __name__ == "__main__":

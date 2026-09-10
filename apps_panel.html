@@ -317,6 +317,19 @@
     background: color-mix(in srgb, var(--danger) 10%, transparent);
     border-color: color-mix(in srgb, var(--danger) 25%, transparent);
   }
+  .rule-x {
+    margin-left: auto; width: 22px; height: 22px; display: grid; place-items: center; flex: none;
+    border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--text-3); cursor: pointer;
+    transition: background .12s, border-color .12s, color .12s;
+  }
+  .rule-x:hover { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-ring); }
+  .rule-x.is-busy { opacity: .5; cursor: progress; }
+  .link-btn {
+    border: 0; background: transparent; padding: 0; cursor: pointer;
+    font-size: 12px; font-weight: 500; color: var(--accent);
+  }
+  .link-btn:hover { color: color-mix(in srgb, var(--accent) 80%, #fff); text-decoration: underline; }
+  .link-btn[hidden] { display: none; }
   .rule-intent { margin-top: 5px; font-size: 12.5px; color: var(--text-2); }
   .rule-check { display: block; margin-top: 6px; font: 11.5px var(--mono); color: var(--ok); }
   .empty-mini { padding: 14px; text-align: center; font-size: 12.5px; color: var(--text-3); border: 1px dashed var(--border-strong); border-radius: 9px; }
@@ -469,7 +482,8 @@
       </section>
 
       <section class="sec" id="sec-rules">
-        <div class="sec-h"><h3>Current Rules</h3><span class="count" id="rules-count"></span></div>
+        <div class="sec-h"><h3>Current Rules</h3><span class="count" id="rules-count"></span>
+          <button class="link-btn" id="rules-clear" hidden>Clear all</button></div>
         <div class="v-current" id="v-current"></div>
       </section>
 
@@ -935,10 +949,11 @@ function renderInfo(a, k) {
     `<div class="note">${escapeHtml(note)}</div>`;
 }
 
-// Read-only mirror of the committed rules.
+// Mirror of the committed rules; each row can be removed, or all at once.
 function renderCurrentRules(rules) {
   const box = $("#v-current");
   $("#rules-count").textContent = rules.length || "";
+  $("#rules-clear").hidden = !rules.length;
   if (!rules.length) {
     box.innerHTML = '<div class="empty-mini">No rules set yet. Describe one above and JARVIS will set it up.</div>';
     return;
@@ -948,6 +963,7 @@ function renderCurrentRules(rules) {
       <span class="rid">${escapeHtml(r.rule_id || "rule")}</span>
       <span class="tag${r.enforcement === "hard" ? " tag-hard" : ""}">${escapeHtml(r.enforcement || "soft")}</span>
       <span class="tag">${escapeHtml((r.scope || "all_sessions").replace(/_/g, " "))}</span>
+      ${r.rule_id ? `<button class="rule-x" data-rid="${escapeHtml(r.rule_id)}" aria-label="Remove rule ${escapeHtml(r.rule_id)}" title="Remove rule">${svg("close", 13)}</button>` : ""}
     </div>
     ${r.intent ? `<div class="rule-intent">${escapeHtml(r.intent)}</div>` : ""}
     ${r.adapter_check ? `<code class="rule-check">${escapeHtml(r.adapter_check)}</code>` : ""}
@@ -1128,6 +1144,24 @@ async function refreshRules(key) {
   render();
 }
 
+// Empty `rid` clears every rule for the app.
+async function removeRule(key, rid, btn) {
+  const all = !rid;
+  if (!confirm(all ? "Remove every rule for this app?" : `Remove rule "${rid}"?`)) return;
+  setBusy(btn, true);
+  let res = null, d = {};
+  try {
+    res = await fetch("/apps/rules/clear", post(all ? { key } : { key, rule_id: rid }));
+    d = await res.json().catch(() => ({}));
+  } catch (e) {}
+  setBusy(btn, false);
+  if (!res || !res.ok) { toast(d.error || "Couldn't remove the rule", "err"); return; }
+  const a = findApp(key);
+  if (a) a.rule_drafts = (d.remaining || []).map(r => r.source_phrase).filter(Boolean);
+  await refreshRules(key);
+  toast(all ? "All rules cleared" : "Rule removed");
+}
+
 // ------------------------------------------------------------------ wiring --
 
 function trapFocus(e) {
@@ -1182,6 +1216,11 @@ function init() {
   $("#d-save").addEventListener("click", e => saveRules(DR.key, e.currentTarget));
   $("#d-compile").addEventListener("click", e => compileRules(DR.key, e.currentTarget));
   $("#d-accept").addEventListener("click", e => acceptProposal(DR.key, e.currentTarget));
+  $("#rules-clear").addEventListener("click", e => removeRule(DR.key, "", e.currentTarget));
+  $("#v-current").addEventListener("click", e => {
+    const x = e.target.closest("[data-rid]");
+    if (x && x.dataset.rid) removeRule(DR.key, x.dataset.rid, x);
+  });
   $(".v-phrase").addEventListener("keydown", e => { if (e.key === "Enter") $("#v-begin").click(); });
   $(".v-answer").addEventListener("keydown", e => { if (e.key === "Enter") $("#v-confirm").click(); });
 

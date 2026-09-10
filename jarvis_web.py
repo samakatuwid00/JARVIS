@@ -899,7 +899,9 @@ async def post_apps_rules(message: Request):
     if not key:
         return JSONResponse({"error": "missing key"}, status_code=400)
     drafts = body.get("rule_drafts") or []
-    compiled = body.get("compiled_rules") or []
+    # Key presence, not truthiness: an explicit `compiled_rules: []` commits an
+    # empty set (wipes the rules); omitting it only stores drafts.
+    compiled = body.get("compiled_rules")
     from machine_capabilities import REGISTRY_PATH
     reg_path = REGISTRY_PATH
     if not os.path.exists(reg_path):
@@ -909,7 +911,7 @@ async def post_apps_rules(message: Request):
     apps = data.setdefault("apps", {})
     if key not in apps:
         return JSONResponse({"error": "unknown app"}, status_code=400)
-    if compiled:
+    if isinstance(compiled, list):
         import rules_compiler
         rules_compiler.commit_rules(key, compiled, reg_path, accept=True)
     else:
@@ -919,6 +921,34 @@ async def post_apps_rules(message: Request):
             json.dump(data, f, indent=2, ensure_ascii=False)
         os.replace(tmp, reg_path)
     return JSONResponse({"ok": True, "key": key})
+
+
+@app.post("/apps/rules/clear")
+async def post_apps_rules_clear(message: Request):
+    """Remove one committed rule (`rule_id`) or, when it is absent, every rule.
+
+    Body: {"key": "spotify", "rule_id": "keep_it_quiet"}  — rule_id optional.
+    """
+    try:
+        body = await message.json()
+    except Exception:
+        return JSONResponse({"error": "bad json"}, status_code=400)
+    key = (body.get("key") or "").strip()
+    rule_id = (body.get("rule_id") or "").strip()
+    if not key:
+        return JSONResponse({"error": "missing key"}, status_code=400)
+    if not _known_app(key):
+        return JSONResponse({"error": "unknown app"}, status_code=400)
+    from machine_capabilities import REGISTRY_PATH
+    import rules_compiler
+    try:
+        removed, remaining = rules_compiler.remove_rule(key, rule_id, REGISTRY_PATH)
+    except KeyError:
+        return JSONResponse({"error": "unknown app"}, status_code=400)
+    if rule_id and not removed:
+        return JSONResponse({"error": "unknown rule_id", "key": key, "rule_id": rule_id},
+                            status_code=404)
+    return JSONResponse({"ok": True, "key": key, "removed": removed, "remaining": remaining})
 
 
 @app.post("/apps/register")

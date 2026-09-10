@@ -158,7 +158,9 @@ else:
         src = f.read()
     names = set(re.findall(
         r"async def (post_apps_toggle|post_apps_rules|post_apps_hide|get_apps"
-        r"|post_apps_rules_begin|post_apps_rules_clarify|get_apps_rules_list)\b", src))
+        r"|post_apps_rules_begin|post_apps_rules_clarify|get_apps_rules_list"
+        r"|post_apps_rules_clear)\b", src))
+    check("post_apps_rules_clear" in names, "post_apps_rules_clear defined in source")
     check("get_apps" in names, "get_apps defined in source")
     check("post_apps_toggle" in names, "post_apps_toggle defined in source")
     check("post_apps_rules" in names, "post_apps_rules defined in source")
@@ -248,6 +250,17 @@ out = rules_voice.list_rules("chrome", registry_path=voice_reg)
 check(out["count"] == 0 and "No rules set" in out["summary"],
       "list_rules handles an app with no rules")
 
+# 6) forget_rule (shares rules_compiler.remove_rule with /apps/rules/clear)
+hard_id = rules_voice.list_rules("spotify", registry_path=voice_reg)["rules"][0]["rule_id"]
+check(rules_voice.forget_rule("spotify", "nope_rule", registry_path=voice_reg)["error"]
+      == "unknown rule_id", "forget_rule rejects an unknown rule_id")
+check(rules_voice.forget_rule("chrome", registry_path=voice_reg)["error"] == "unknown app",
+      "forget_rule rejects an unknown app")
+out = rules_voice.forget_rule("spotify", hard_id, registry_path=voice_reg)
+check(out["status"] == "removed" and out["count"] == 0, "forget_rule removes the rule")
+check(rules_voice.list_rules("spotify", registry_path=voice_reg)["count"] == 0,
+      "forget_rule persists to the registry")
+
 if live:
     # the endpoints drive the same flow through the live registry
     res = body_of(run(jarvis_web.post_apps_rules_begin(
@@ -277,6 +290,54 @@ if live:
         FakeRequest({"app_key": "spotify", "phrase": ""}))))
     check(res.get("error") == "missing phrase", "/apps/rules/begin rejects an empty phrase")
 
+    # rule deletion: spotify now holds keep_it_quiet + no_explicit_stuff
+    def reg_rules():
+        entry = json.load(open(reg_path, encoding="utf-8"))["apps"]["spotify"]
+        return [r["rule_id"] for r in entry.get("compiled_rules") or []], entry.get("rule_drafts")
+
+    resp = run(jarvis_web.post_apps_rules_clear(
+        FakeRequest({"key": "spotify", "rule_id": "keep_it_quiet"})))
+    res = body_of(resp)
+    check(resp.status_code == 200 and res.get("ok") and res.get("removed") is True,
+          "/apps/rules/clear removes one rule")
+    check([r["rule_id"] for r in res.get("remaining") or []] == ["no_explicit_stuff"],
+          "/apps/rules/clear returns the remaining rules")
+    ids, drafts = reg_rules()
+    check(ids == ["no_explicit_stuff"], "/apps/rules/clear persists the single removal")
+    check(drafts == ["no explicit stuff"], "/apps/rules/clear resyncs rule_drafts")
+
+    resp = run(jarvis_web.post_apps_rules_clear(
+        FakeRequest({"key": "spotify", "rule_id": "nope_rule"})))
+    check(resp.status_code == 404 and body_of(resp).get("error") == "unknown rule_id",
+          "/apps/rules/clear 404s an unknown rule_id")
+    check(reg_rules()[0] == ["no_explicit_stuff"], "unknown rule_id leaves the registry alone")
+
+    resp = run(jarvis_web.post_apps_rules_clear(FakeRequest({"key": "nope"})))
+    check(resp.status_code == 400 and body_of(resp).get("error") == "unknown app",
+          "/apps/rules/clear rejects an unknown key")
+
+    resp = run(jarvis_web.post_apps_rules_clear(FakeRequest({"key": "spotify"})))
+    res = body_of(resp)
+    check(resp.status_code == 200 and res.get("removed") is True and res.get("remaining") == [],
+          "/apps/rules/clear without rule_id clears all")
+    check(reg_rules() == ([], []), "clear-all empties compiled_rules and rule_drafts")
+
+    # empty compiled_rules list must wipe; omitting the key must not
+    seed = [{"rule_id": "no_explicit_stuff", "intent": "avoid explicit content",
+             "enforcement": "soft", "adapter_check": "pre_play: skip if track.explicit",
+             "scope": "all_sessions", "source_phrase": "no explicit stuff",
+             "needs_clarification": False, "clarification_question": None}]
+    run(jarvis_web.post_apps_rules(FakeRequest(
+        {"key": "spotify", "rule_drafts": ["no explicit stuff"], "compiled_rules": seed})))
+    run(jarvis_web.post_apps_rules(FakeRequest(
+        {"key": "spotify", "rule_drafts": ["just a draft"]})))
+    check(reg_rules()[0] == ["no_explicit_stuff"],
+          "/apps/rules drafts-only post keeps the compiled rules")
+    res = body_of(run(jarvis_web.post_apps_rules(FakeRequest(
+        {"key": "spotify", "rule_drafts": [], "compiled_rules": []}))))
+    check(res.get("ok") and reg_rules()[0] == [],
+          "/apps/rules with compiled_rules: [] wipes the rule set")
+
 
 # ------------------------------------------------------------- panel HTML --
 check(os.path.exists(PANEL), "apps_panel.html exists")
@@ -301,6 +362,10 @@ if os.path.exists(PANEL):
     check("/apps/rules/begin" in html, "panel references /apps/rules/begin")
     check("/apps/rules/clarify" in html, "panel references /apps/rules/clarify")
     check("/apps/rules/list" in html, "panel references /apps/rules/list")
+    check("/apps/rules/clear" in html, "panel references /apps/rules/clear")
+    check("data-rid=" in html and 'id="rules-clear"' in html,
+          "panel offers per-rule remove and Clear all")
+    check("confirm(" in html, "rule removal is confirmed before posting")
     check('class="v-question question"' in html, "panel renders the clarification question")
     check('class="v-answer"' in html, "panel has a clarification answer input")
     check(">Confirm<" in html, "panel offers a Confirm button")

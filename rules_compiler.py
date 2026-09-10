@@ -178,24 +178,32 @@ def detect_hard_escalation(rule) -> bool:
     return bool(_HARD_RE.search(hay))
 
 
-def commit_rules(app_id, compiled_rules, registry_path, accept=False):
-    if accept != True:
-        return propose_ruleset(app_id, compiled_rules)
-
-    registry_path = Path(registry_path)
+def _load_registry(registry_path):
     data = {"apps": {}}
     if registry_path.exists():
         with open(registry_path, "r", encoding="utf-8") as f:
             data = json.load(f)
     data.setdefault("apps", {})
-    app_entry = data["apps"].setdefault(app_id, {})
-    app_entry["rule_drafts"] = [r["source_phrase"] for r in compiled_rules]
-    app_entry["compiled_rules"] = compiled_rules
+    return data
 
+
+def _write_registry(registry_path, data):
     tmp = registry_path.parent / (registry_path.name + ".tmp")
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
     os.replace(tmp, registry_path)
+
+
+def commit_rules(app_id, compiled_rules, registry_path, accept=False):
+    if accept != True:
+        return propose_ruleset(app_id, compiled_rules)
+
+    registry_path = Path(registry_path)
+    data = _load_registry(registry_path)
+    app_entry = data["apps"].setdefault(app_id, {})
+    app_entry["rule_drafts"] = [r["source_phrase"] for r in compiled_rules]
+    app_entry["compiled_rules"] = compiled_rules
+    _write_registry(registry_path, data)
 
     entry = {
         "ts": datetime.now().isoformat(timespec="milliseconds"),
@@ -217,6 +225,54 @@ def commit_rules(app_id, compiled_rules, registry_path, accept=False):
     except Exception:
         print(json.dumps(entry, ensure_ascii=False))
     return registry_path
+
+
+def remove_rule(app_id, rule_id, registry_path):
+    """Drop one committed rule — or every rule when `rule_id` is empty — from an app.
+
+    rule_drafts are resynced from the remaining rules' source phrases, same as
+    commit_rules. Returns (removed, remaining). Raises KeyError for an unknown app.
+    Nothing is written when nothing matched.
+    """
+    registry_path = Path(registry_path)
+    data = _load_registry(registry_path)
+    app_entry = data["apps"].get(app_id)
+    if not isinstance(app_entry, dict):
+        raise KeyError(app_id)
+
+    current = app_entry.get("compiled_rules") or []
+    if rule_id:
+        remaining = [r for r in current if r.get("rule_id") != rule_id]
+    else:
+        remaining = []
+    dropped = [r.get("rule_id") for r in current if r not in remaining]
+    if not dropped:
+        return False, current
+
+    app_entry["compiled_rules"] = remaining
+    app_entry["rule_drafts"] = [r["source_phrase"] for r in remaining if r.get("source_phrase")]
+    _write_registry(registry_path, data)
+
+    entry = {
+        "ts": datetime.now().isoformat(timespec="milliseconds"),
+        "event": "rule_removed",
+        "app": app_id,
+        "rules": dropped,
+    }
+    try:
+        import audit
+        audit.log_call(
+            tool="rules.remove",
+            args={"event": entry["event"], "app": app_id, "rules": entry["rules"]},
+            duration_s=0.0,
+            result="removed",
+            confirmed=True,
+            caller="rules_compiler",
+            decision="confirmed",
+        )
+    except Exception:
+        print(json.dumps(entry, ensure_ascii=False))
+    return True, remaining
 
 
 if __name__ == "__main__":
