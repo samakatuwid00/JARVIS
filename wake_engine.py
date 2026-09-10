@@ -85,6 +85,7 @@ class WakeEngine:
         self._on_error = None  # called on fatal error: on_error(msg)
         self.healthy = False
         self.last_err = ''
+        self._last_err_print = 0.0  # throttles transcribe-error prints to 1/min
 
     # -- external signals ---------------------------------------------------
     def set_callback(self, cb):
@@ -200,12 +201,20 @@ class WakeEngine:
                 text = self.ve.transcribe_wake(window)
             except Exception as e:
                 self.last_err = f'transcribe error: {e}'
+                if now - self._last_err_print >= 60.0:
+                    self._last_err_print = now
+                    print(f"[WakeEngine] transcribe error: {e!r}", flush=True)
                 continue
             if wake_word_in(text):
                 print(f"[WakeEngine] wake word detected: {text!r}", flush=True)
-                self._last_fire = now
+                delivered = True
                 if self._callback:
                     try:
-                        self._callback()
+                        # A callback returning False means nobody got the wake;
+                        # None (no return value) counts as delivered.
+                        delivered = self._callback() is not False
                     except Exception as e:
-                        print(f"[WakeEngine] callback error: {e}", flush=True)
+                        delivered = False
+                        print(f"[WakeEngine] callback error: {e!r}", flush=True)
+                if delivered:
+                    self._last_fire = now

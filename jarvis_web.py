@@ -50,21 +50,63 @@ import tools  # for the /apps/open endpoint (same dispatcher the brain uses)
 # wake word with Whisper (verified robust to music) and tells the HUD to open its
 # command window. Healthy=false just means "no server-side fallback"; the browser
 # listener still works on its own.
-wake_engine = WakeEngine(voice_engine)
+# Post-TTS suspend window, tunable without code edits (JARVIS_WAKE_SUSPEND_MS).
+try:
+    _WAKE_SUSPEND_MS = max(0, int(os.environ.get("JARVIS_WAKE_SUSPEND_MS", "1500")))
+except ValueError:
+    print("[WakeEngine] bad JARVIS_WAKE_SUSPEND_MS, using 1500", flush=True)
+    _WAKE_SUSPEND_MS = 1500
+wake_engine = WakeEngine(voice_engine, suspend_ms=_WAKE_SUSPEND_MS)
+
+# The server's event loop, captured by websocket_endpoint. broadcast_wake runs on
+# the WakeEngine worker thread, which has no loop of its own — asyncio.get_event_loop()
+# there never schedules the send, so every server wake reached nobody.
+_WS_LOOP = None
+_WS_LOOP_WARN_TS = 0.0
+
+
+def _wake_send_done(ws, fut):
+    """Runs on the server loop once a wake send finishes; drops only sockets that failed."""
+    if fut.cancelled():
+        exc = asyncio.CancelledError()
+    else:
+        exc = fut.exception()
+    if exc is not None:
+        print(f"[WakeEngine] wake send failed, dropping client: {exc!r}", flush=True)
+        WS_CLIENTS.discard(ws)
 
 
 def broadcast_wake():
-    """Called by the server wake engine when it hears 'jarvis'."""
-    print("[WakeEngine] broadcasting wake to HUD client(s)", flush=True)
-    dead = set()
-    for ws in list(WS_CLIENTS):
+    """Called by the server wake engine when it hears 'jarvis'.
+
+    Returns True when at least one send was scheduled, so the engine only starts
+    its cooldown on a wake that actually went somewhere.
+    """
+    global _WS_LOOP_WARN_TS
+    loop = _WS_LOOP
+    if loop is None or not loop.is_running():
+        now = time.time()
+        if now - _WS_LOOP_WARN_TS >= 60.0:
+            _WS_LOOP_WARN_TS = now
+            print("[WakeEngine] wake heard but no server loop yet (no HUD connected); "
+                  "clients kept", flush=True)
+        return False
+    clients = list(WS_CLIENTS)
+    print(f"[WakeEngine] broadcasting wake to {len(clients)} HUD client(s)", flush=True)
+    payload = json.dumps({"type": "wake", "source": "server"})
+    scheduled = 0
+    for ws in clients:
+        coro = ws.send_text(payload)
         try:
-            asyncio.run_coroutine_threadsafe(
-                ws.send_text(json.dumps({"type": "wake", "source": "server"})),
-                asyncio.get_event_loop())
-        except Exception:
-            dead.add(ws)
-    WS_CLIENTS.difference_update(dead)
+            fut = asyncio.run_coroutine_threadsafe(coro, loop)
+        except Exception as e:
+            coro.close()  # never scheduled — close it so it isn't reported unawaited
+            print(f"[WakeEngine] wake schedule failed, dropping client: {e!r}", flush=True)
+            WS_CLIENTS.discard(ws)
+            continue
+        fut.add_done_callback(lambda f, ws=ws: _wake_send_done(ws, f))
+        scheduled += 1
+    return scheduled > 0
 
 
 wake_engine.set_callback(broadcast_wake)
@@ -1129,7 +1171,9 @@ async def get_apps_panel():
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    global _WS_LOOP
     await websocket.accept()
+    _WS_LOOP = asyncio.get_running_loop()
     WS_CLIENTS.add(websocket)
     print("[WS] client connected", flush=True)
     # Per-connection feedback policy: each client decides (and hears) its own
