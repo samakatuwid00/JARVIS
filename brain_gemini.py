@@ -207,6 +207,34 @@ def default_report_path(topic: str) -> str:
     return f"JARVIS Report - {safe[:60]} {datetime.date.today().isoformat()}.docx"
 
 
+# open_site: "visit youtube.com" / "go to reddit" / "open github on chrome".
+# The target must be site-like — a URL, a www. host, a bare domain, or a
+# well-known site name — so app names ("open notepad", "open chrome") keep
+# app_reference. The whole utterance must be verb + target (+ browser), so
+# chained asks ("open youtube and play lofi") are not swallowed.
+_SITE_WORDS = (r"youtube|facebook|gmail|google|reddit|twitter|github|netflix|"
+               r"instagram|linkedin|chatgpt|amazon|wikipedia|tiktok|messenger|"
+               r"shopee|lazada|hackernews|stackoverflow")
+_OPEN_SITE_RE = re.compile(
+    r"^(?:please\s+|jarvis[,!]?\s+)*(?:visit|go\s+to|take\s+me\s+to|open|launch)\s+"
+    r"(?:the\s+|my\s+)?(?P<target>.+?)"
+    r"(?:\s+(?:on|in|with)\s+(?:the\s+)?(?:chrome|brave|edge|firefox|browser)"
+    r"(?:\s+browser)?)?\s*[.!?]*$", re.I)
+_SITE_LIKE_RE = re.compile(
+    r"^(?:https?://\S+|www\.\S+|"
+    r"[\w-]+(?:\.[\w-]+)*\.(?:com|org|net|io|dev|edu|gov|ph|co|tv|me|ai|app|gg|info)"
+    r"(?:/\S*)?|(?:" + _SITE_WORDS + r")(?:\s+(?:site|website))?)$", re.I)
+
+
+def parse_open_site(text: str):
+    """Site target of a visit/open request, or None when it is not site-like."""
+    m = _OPEN_SITE_RE.match((text or "").strip())
+    if not m:
+        return None
+    target = m.group("target").strip()
+    return target if _SITE_LIKE_RE.match(target) else None
+
+
 def classify_intent(text: str) -> str:
     """Return a coarse intent label for fast-path / tool-gating decisions."""
     t = (text or "").strip().lower()
@@ -245,15 +273,18 @@ def classify_intent(text: str) -> str:
     # "play") sat in the Brave driver for minutes, the search path fired an
     # empty query ("Opened search: "), and a bare "open" was handed to the
     # executor, which skipped the app-or-website question and went straight to
-    # picking between openssl and opencode. Ask instead. EXACT bare verb only,
+    # picking between openssl and opencode. Ask instead. EXACT bare verb only
+    # (a dangling article from a cut-off "visit the..." still counts as bare),
     # so the continuation routes below ("play it", "open notepad") are untouched.
     _bare_verb = re.fullmatch(
-        r"(?:please\s+|jarvis[,!]?\s+)*(play|search|google|look\s?up|open)\s*[.!?]*", t)
+        r"(?:please\s+|jarvis[,!]?\s+)*(play|search|google|look\s?up|open|visit|browse)"
+        r"(?:\s+(?:the|a|an))?\s*[.!?…]*", t)
     if _bare_verb:
         _verb = _bare_verb.group(1)
         if _verb == "play":
             return "clarify_play"
-        return "clarify_open" if _verb == "open" else "clarify_search"
+        return ("clarify_open" if _verb in ("open", "visit", "browse")
+                else "clarify_search")
     # list_sites: a question ABOUT the site registry, not a request to visit one.
     # These used to fall through to `general` and were answered by the cloud
     # brain from thin air ("I can browse the web...") while web_registry.json
@@ -379,11 +410,16 @@ def classify_intent(text: str) -> str:
     # Continuation: maximize/minimize/fullscreen/restore it → app window control.
     if re.fullmatch(r"\b(maximize|minimize|fullscreen|restore)\b\s+it\b", t):
         return "app_reference"
+    # open_site: ahead of app_reference, but only for a site-like target (see
+    # parse_open_site). Visits used to land in `general` and ride a 300s Hermes
+    # delegation for what open_site answers instantly.
+    if parse_open_site(t):
+        return "open_site"
     # app_reference: task names or implies a specific installed app/tool.
-    # Phrasing like "use X", "open X", "with X", "in X", "via X", or a known
-    # capability name. These route to the Hermes harness (which resolves the
-    # app from the capability manifest) instead of the cloud brain.
-    if re.search(r"\b(use|open|launch|run|with|via|in)\s+[\w .\-]+", t) and \
+    # Phrasing like "use X", "open X", "with X", "in X", "on X", "via X", or a
+    # known capability name. These route to the Hermes harness (which resolves
+    # the app from the capability manifest) instead of the cloud brain.
+    if re.search(r"\b(use|open|launch|run|with|via|in|on)\s+[\w .\-]+", t) and \
        re.search(r"\b(ffmpeg|blender|vlc|photoshop|premiere|obs|gimp|audacity|"
                  r"docker|node|python|git|npm|code|notepad|chrome|brave|edge|firefox|"
                  r"spotify|discord|telegram|libreoffice|excel|word|powerpoint|"
@@ -1557,6 +1593,21 @@ class JarvisBrain:
                 return res
             except Exception as e:
                 print(f"[JARVIS] list_sites failed ({e}); falling back to cloud brain...")
+
+        # OPEN_SITE: "visit youtube.com" — open it from the site registry (or as a
+        # raw URL) right here, never through the Hermes delegation.
+        if intent == "open_site":
+            try:
+                import tools as _tools_mod
+                _tools_mod.set_progress_cb(_progress_local.cb)
+                res = execute_tool("open_site", {"name": parse_open_site(user_input)},
+                                   user_input)
+                self.conversation.append({"role": "assistant", "content": res})
+                self.last_backend = "instant"
+                self.last_stats = {"backend": "instant", "intent": "open_site"}
+                return res
+            except Exception as e:
+                print(f"[JARVIS] open_site failed ({e}); falling back to cloud brain...")
 
         # WEB_BROWSE: instant local route — token-cheap page read via oc CLI.
         # Runs before the Hermes delegation so reading a URL costs only the

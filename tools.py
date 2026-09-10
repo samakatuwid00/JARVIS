@@ -2821,9 +2821,25 @@ def delegate(
             cw.append(task, "command", tool="execute_search", result=result)
             return result
 
+    # ---- No-target guard: an open/visit that names nothing -----------------
+    # "visit the..." went to Hermes as a 15-turn / 300s job with nothing to
+    # act on. Ask instead — a bare open-site request never leaves JARVIS.
+    _open_m = re.match(r"^\W*(?:(?:please|jarvis|hey)\b\W*)*"
+                       r"(open|launch|go\s+to|goto|visit|browse|take\s+me\s+to)\b(.*)$",
+                       task, flags=re.I | re.S)
+    if _open_m:
+        _rest = re.sub(r"\bfor\s+me\b", " ", _open_m.group(2).lower())
+        _words = re.findall(r"[a-z0-9]+(?:[.'][a-z0-9]+)*", _rest)
+        if all(w in ("please", "jarvis", "sir", "the", "a", "an", "to", "my",
+                     "me", "up", "now") for w in _words):
+            return "Which site or app should I open?"
+
     # ---- Phase 8 fast path: dual-registry "open X" -----------------------
-    if re.match(r"^(open|launch|go to|goto)\b", task.lower()):
-        stripped = re.sub(r"^(open|launch|go to|goto)\s+", "", task, flags=re.I)
+    if re.match(r"^(open|launch|go to|goto|visit)\b", task.lower()):
+        stripped = re.sub(r"^(open|launch|go to|goto|visit)\s+", "", task, flags=re.I)
+        # "visit X on Chrome": the browser is where to open it, not what.
+        stripped = re.sub(r"\s+(?:on|in)\s+(?:the\s+)?(?:chrome|brave|edge|firefox)"
+                          r"(?:\s+browser)?\s*[.!?]*$", "", stripped, flags=re.I)
         kind8, target8 = resolve_open_target(stripped)
         if kind8 == "site":
             result = open_site(target8)
@@ -2840,6 +2856,13 @@ def delegate(
             if cw is not None:
                 cw.append(task, "command", tool="open_application",
                           result=result)
+            return result
+        # A visit always means a website: an unresolved one gets open_site's
+        # registry-miss answer (or opens a raw URL), never a Hermes job.
+        if task.lower().startswith("visit"):
+            result = open_site(re.sub(r"^(?:the|my)\s+", "", stripped, flags=re.I))
+            if cw is not None:
+                cw.append(task, "command", tool="open_site", result=result)
             return result
         if cw is not None:
             cw.append(task, "command")
