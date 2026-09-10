@@ -3,573 +3,1194 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>JARVIS — Installed Apps</title>
+<title>JARVIS — Apps</title>
 <style>
   :root {
-    --bg: #0e0e12;
-    --card: #1a1a22;
-    --card2: #22222c;
-    --accent: #6ea8fe;
-    --accent-dim: #3a4a6a;
-    --text: #e6e8ef;
-    --muted: #8a8fa3;
-    --danger: #ff6b6b;
-    --ok: #57d18a;
+    --bg: #0d0d11;
+    --surface: #131318;
+    --surface-2: #18181f;
+    --surface-3: #1f1f28;
+    --hover: rgba(255, 255, 255, .035);
+    --border: rgba(255, 255, 255, .07);
+    --border-strong: rgba(255, 255, 255, .12);
+    --text: #ededf2;
+    --text-2: #a3a3b0;
+    --text-3: #6c6c7a;
+    --accent: #cfa236;                /* JARVIS gold (uniform) */
+    --accent-deep: #8f7020;           /* deeper gold for pressed/hover */
+    --accent-soft: rgba(207, 162, 54, .11);
+    --accent-ring: rgba(207, 162, 54, .30);
+    --ok:        #d4b85e;               /* gold-amber for OK */
+    --warn:      #cfa84c;               /* gold-amber for warn */
+    --danger:    #c26e4c;               /* muted amber-red (not neon red) */
+    --font: "Inter", "Inter var", -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+    --ease: cubic-bezier(.2, .8, .2, 1);
   }
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html { color-scheme: dark; }
   body {
     margin: 0;
     background: var(--bg);
     color: var(--text);
-    font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
-    padding: 24px;
+    font: 13px/1.5 var(--font);
+    font-feature-settings: "cv11", "ss01";
+    -webkit-font-smoothing: antialiased;
   }
-  h1 {
-    font-weight: 600;
-    letter-spacing: 0.5px;
-    margin: 0 0 4px;
+  body.has-drawer { overflow: hidden; }
+  button, input, textarea { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, .08); border-radius: 10px; border: 3px solid transparent; background-clip: padding-box; }
+  ::-webkit-scrollbar-thumb:hover { background-color: rgba(255, 255, 255, .14); }
+  svg { flex: none; display: block; }
+  .muted { color: var(--text-3); }
+
+  /* ------------------------------------------------------------- header -- */
+  .top {
+    position: sticky; top: 0; z-index: 10;
+    background: rgba(13, 13, 17, .86);
+    backdrop-filter: blur(14px) saturate(1.2);
+    border-bottom: 1px solid var(--border);
   }
-  .sub { color: var(--muted); margin-bottom: 20px; font-size: 13px; }
-  .grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
-    gap: 16px;
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+  .top-row { display: flex; align-items: center; gap: 16px; padding-top: 18px; }
+  .title h1 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -.012em; }
+  .title p { margin: 2px 0 0; font-size: 12.5px; color: var(--text-3); }
+  .spacer { flex: 1; }
+  .stats { display: flex; gap: 18px; font-size: 12px; color: var(--text-3); }
+  .stat b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; margin-right: 4px; }
+  .stat.warn b { color: var(--warn); }
+  .stat[hidden] { display: none; }
+
+  .controls { display: flex; align-items: center; gap: 10px; padding: 14px 0 12px; }
+  .search {
+    flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px;
+    height: 32px; padding: 0 8px 0 10px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    color: var(--text-3);
+    transition: border-color .15s, box-shadow .15s;
   }
-  .card {
-    background: var(--card);
-    border: 1px solid #2a2a36;
-    border-radius: 12px;
-    padding: 16px;
+  .search:focus-within { border-color: var(--accent-ring); box-shadow: 0 0 0 3px rgba(110, 168, 254, .1); }
+  .search input { flex: 1; min-width: 0; height: 100%; border: 0; outline: 0; background: transparent; font-size: 13px; color: var(--text); }
+  .search input::placeholder { color: var(--text-3); }
+  .search input::-webkit-search-cancel-button { display: none; }
+  kbd {
+    font: 500 10.5px/1 var(--mono); color: var(--text-3);
+    padding: 3px 5px; border: 1px solid var(--border-strong); border-radius: 4px; background: var(--surface-2);
   }
-  .card.open { border-color: var(--accent-dim); }
-  .row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
+
+  .seg { display: flex; gap: 2px; padding: 2px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
+  .seg-btn {
+    height: 26px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent;
+    font-size: 12.5px; font-weight: 500; color: var(--text-2); cursor: pointer;
+    display: inline-flex; align-items: center; gap: 6px;
+    transition: background .12s, color .12s;
   }
-  .title { font-size: 16px; font-weight: 600; }
-  .meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
-  .badge {
-    display: inline-block;
-    font-size: 11px;
-    padding: 2px 8px;
-    border-radius: 999px;
-    background: #2a2a36;
-    color: var(--muted);
-    text-transform: uppercase;
-    letter-spacing: 0.4px;
-  }
-  .badge.broken { background: rgba(255,107,107,0.15); color: var(--danger); }
-  .badge.on { background: rgba(87,209,138,0.15); color: var(--ok); }
-  .badge.off { background: #2a2a36; color: var(--muted); }
-  button {
-    background: var(--accent);
-    color: #0e0e12;
-    border: none;
-    border-radius: 8px;
-    padding: 6px 12px;
-    font-weight: 600;
-    cursor: pointer;
-    font-size: 13px;
-  }
-  button.ghost {
-    background: transparent;
-    color: var(--accent);
-    border: 1px solid var(--accent-dim);
-  }
-  button:disabled { opacity: 0.5; cursor: default; }
-  .toggle {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 13px;
-    color: var(--muted);
-    cursor: pointer;
-  }
-  .toggle input { accent-color: var(--accent); width: 16px; height: 16px; }
-  .details { margin-top: 14px; display: none; }
-  .details.show { display: block; }
-  .section-h { font-size: 12px; color: var(--muted); margin: 10px 0 6px; text-transform: uppercase; letter-spacing: 0.5px; }
-  textarea {
-    width: 100%;
-    min-height: 90px;
-    background: var(--card2);
-    color: var(--text);
-    border: 1px solid #2a2a36;
-    border-radius: 8px;
-    padding: 8px;
-    font-family: inherit;
-    font-size: 13px;
-    resize: vertical;
-  }
-  .rule {
-    background: var(--card2);
-    border: 1px solid #2a2a36;
-    border-radius: 8px;
-    padding: 8px 10px;
-    margin-bottom: 6px;
-    font-size: 12px;
-  }
-  .rule .rid { color: var(--accent); font-weight: 600; }
-  .rule .enf { color: var(--muted); }
-  .rule .chk { color: var(--ok); }
-  .msg { font-size: 12px; margin-top: 6px; min-height: 14px; color: var(--muted); }
-  .msg.ok { color: var(--ok); }
-  .msg.err { color: var(--danger); }
-  .tabs {
-    display: flex;
-    gap: 8px;
-    border-bottom: 1px solid #2a2a36;
-    margin-bottom: 16px;
-  }
+  .seg-btn:hover { color: var(--text); }
+  .seg-btn.active { background: var(--surface-3); color: var(--text); box-shadow: 0 1px 0 rgba(255, 255, 255, .04) inset, 0 1px 2px rgba(0, 0, 0, .4); }
+  .seg-btn .n { font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+
+  .tabs { display: flex; gap: 20px; margin-bottom: -1px; }
   .tab {
-    background: transparent;
-    color: var(--muted);
-    border: none;
-    border-bottom: 2px solid transparent;
-    border-radius: 0;
-    padding: 10px 14px;
-    font-size: 14px;
-    font-weight: 600;
+    position: relative; padding: 8px 0 11px; border: 0; background: transparent; cursor: pointer;
+    font-size: 13px; font-weight: 500; color: var(--text-3);
+    display: inline-flex; align-items: center; gap: 7px;
+    transition: color .12s;
   }
-  .tab.active { color: var(--text); border-bottom-color: var(--accent); }
-  .tab .count {
-    display: inline-block;
-    margin-left: 6px;
-    font-size: 11px;
-    padding: 1px 7px;
-    border-radius: 999px;
-    background: #2a2a36;
-    color: var(--muted);
+  .tab:hover { color: var(--text-2); }
+  .tab.active { color: var(--text); }
+  .tab::after {
+    content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 2px; border-radius: 2px;
+    background: var(--accent); transform: scaleX(0); transition: transform .2s var(--ease);
   }
-  .tab.active .count { background: rgba(110,168,254,0.18); color: var(--accent); }
-  .voice { margin-top: 14px; border-top: 1px solid #2a2a36; padding-top: 10px; }
-  .voice input {
-    width: 100%;
-    background: var(--card2);
-    border: 1px solid #2a2a36;
-    color: var(--text);
-    border-radius: 8px;
-    padding: 8px 10px;
-    font-family: inherit;
-    font-size: 13px;
+  .tab.active::after { transform: scaleX(1); }
+  .count {
+    font-size: 11px; font-weight: 500; font-variant-numeric: tabular-nums;
+    padding: 1px 6px; border-radius: 999px; background: var(--surface-3); color: var(--text-3);
   }
-  .voice .question { color: var(--accent); font-size: 12px; margin-bottom: 6px; }
-  .voice .proposal-text {
-    white-space: pre-wrap;
-    font-family: ui-monospace, Consolas, monospace;
-    font-size: 11px;
-    color: var(--muted);
-    background: var(--card2);
-    border: 1px solid #2a2a36;
-    border-radius: 8px;
-    padding: 8px;
-    margin-top: 8px;
-    max-height: 180px;
-    overflow: auto;
+  .tab.active .count { background: var(--accent-soft); color: var(--accent); }
+
+  .icon-btn {
+    width: 30px; height: 30px; display: grid; place-items: center; flex: none;
+    border: 1px solid var(--border); border-radius: 8px; background: var(--surface);
+    color: var(--text-2); cursor: pointer; transition: background .12s, color .12s, border-color .12s;
   }
-  .toolbar { margin-bottom: 16px; display: flex; gap: 10px; align-items: center; }
-  .toolbar input {
-    flex: 1;
-    background: var(--card);
-    border: 1px solid #2a2a36;
-    color: var(--text);
-    border-radius: 8px;
-    padding: 8px 10px;
-    font-size: 13px;
+  .icon-btn:hover { background: var(--surface-3); color: var(--text); border-color: var(--border-strong); }
+  .icon-btn.ghost { border-color: transparent; background: transparent; }
+  .icon-btn.ghost:hover { background: var(--hover); }
+  .icon-btn.spinning svg { animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* --------------------------------------------------------------- list -- */
+  .list { padding-top: 12px; padding-bottom: 48px; }
+  .group + .group { margin-top: 14px; }
+  .group-h {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 12px; font-size: 12px; font-weight: 500; color: var(--text-2);
+  }
+  .group-h .n { color: var(--text-3); font-variant-numeric: tabular-nums; }
+  .row {
+    display: grid; grid-template-columns: 32px minmax(0, 1fr) auto auto auto;
+    align-items: center; gap: 12px;
+    padding: 8px 12px; border-radius: 9px; border: 1px solid transparent;
+    cursor: pointer; transition: background .12s, border-color .12s, box-shadow .2s;
+  }
+  .row:hover { background: var(--hover); border-color: var(--border); }
+  .row.is-active {
+    background: rgba(110, 168, 254, .05); border-color: var(--accent-ring);
+    box-shadow: 0 0 0 1px rgba(110, 168, 254, .12), 0 0 22px -8px rgba(110, 168, 254, .55);
+  }
+  .row.is-off .name { color: var(--text-2); }
+  .row.is-off .ico { filter: saturate(.25); opacity: .7; }
+  .ico {
+    --tint: #8b8b99;
+    width: 32px; height: 32px; border-radius: 8px; display: grid; place-items: center;
+    color: var(--tint);
+    background: color-mix(in srgb, var(--tint) 13%, transparent);
+    border: 1px solid color-mix(in srgb, var(--tint) 20%, transparent);
+  }
+  .main {
+    min-width: 0; text-align: left; border: 0; background: transparent; padding: 0; cursor: pointer;
+    border-radius: 4px;
+  }
+  .name { font-size: 13.5px; font-weight: 500; color: var(--text); letter-spacing: -.004em; }
+  .meta { font-size: 12px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .name, .meta { display: block; }
+  .aux { display: flex; align-items: center; gap: 8px; }
+  .rules-chip { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--text-2); }
+  .ctl { width: 28px; display: flex; justify-content: center; }
+  .acts { display: flex; align-items: center; gap: 4px; min-width: 30px; justify-content: flex-end; }
+  .acts .btn { opacity: 0; transition: opacity .12s, background .12s, border-color .12s, color .12s; }
+  .row:hover .acts .btn, .row:focus-within .acts .btn, .row.is-active .acts .btn { opacity: 1; }
+  .chev { color: var(--text-3); padding: 0 2px; transition: transform .15s var(--ease), color .12s; }
+  .row:hover .chev { color: var(--text-2); transform: translateX(2px); }
+
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px;
+    border-radius: 999px; font-size: 11.5px; font-weight: 500; white-space: nowrap;
+    color: var(--text-3); background: var(--surface-2); border: 1px solid var(--border);
+  }
+  .pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .pill.on { color: var(--ok); background: rgba(212, 184, 94, .09); border-color: rgba(212, 184, 94, .22); }
+  .pill.on::before { box-shadow: 0 0 6px rgba(212, 184, 94, .7); }
+  .pill.broken { color: var(--danger); background: rgba(194, 110, 76, .08); border-color: rgba(194, 110, 76, .22); }
+
+  .switch { position: relative; display: inline-flex; cursor: pointer; }
+  .switch input { position: absolute; z-index: 1; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+  .switch .track {
+    width: 28px; height: 16px; border-radius: 999px; background: #2a2a34;
+    border: 1px solid var(--border-strong); position: relative;
+    transition: background .18s var(--ease), border-color .18s, box-shadow .2s;
+  }
+  .switch .track::after {
+    content: ""; position: absolute; top: 1px; left: 1px; width: 12px; height: 12px; border-radius: 50%;
+    background: #c7c7d1; transition: transform .18s var(--ease), background .18s;
+  }
+  .switch input:checked + .track { background: var(--accent); border-color: transparent; box-shadow: 0 0 10px -2px rgba(207, 162, 54, .7); }
+  .switch input:checked + .track::after { transform: translateX(12px); background: #fff; }
+  .switch input:focus-visible + .track { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
+  .switch input:disabled + .track { opacity: .5; }
+
+  .btn {
+    height: 30px; padding: 0 12px; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    border-radius: 7px; border: 1px solid var(--border-strong); background: var(--surface-3);
+    font-size: 12.5px; font-weight: 500; color: var(--text); white-space: nowrap; cursor: pointer;
+    transition: background .12s, border-color .12s, color .12s, opacity .12s;
+  }
+  .btn:hover { background: #262630; border-color: rgba(255, 255, 255, .17); }
+  .btn:disabled, .btn.is-busy { opacity: .5; cursor: default; }
+  .btn.is-busy { cursor: progress; }
+  .btn-sm { height: 26px; padding: 0 9px; font-size: 12px; }
+  .btn-primary { background: var(--accent); border-color: transparent; color: #0a1322; font-weight: 600; }
+  .btn-primary:hover { background: #88b8ff; border-color: transparent; }
+  .btn-quiet { background: transparent; border-color: transparent; color: var(--text-2); }
+  .btn-quiet:hover { background: var(--hover); border-color: transparent; color: var(--text); }
+  .btn-danger { color: #ff8c90; }
+  .btn-danger:hover { background: rgba(242, 85, 90, .1); border-color: rgba(242, 85, 90, .3); color: #ffa3a6; }
+
+  .empty { display: grid; place-items: center; text-align: center; padding: 72px 20px; }
+  .empty h3 { margin: 0 0 4px; font-size: 14px; font-weight: 600; }
+  .empty p { margin: 0 0 16px; font-size: 12.5px; color: var(--text-3); max-width: 340px; }
+  .skel { display: grid; grid-template-columns: 32px 1fr 70px; gap: 12px; align-items: center; padding: 10px 12px; }
+  .skel i {
+    display: block; height: 10px; border-radius: 5px;
+    background: linear-gradient(90deg, #17171d 0%, #202029 50%, #17171d 100%); background-size: 200% 100%;
+    animation: shimmer 1.3s linear infinite;
+  }
+  .skel i.sq { width: 32px; height: 32px; border-radius: 8px; }
+  @keyframes shimmer { to { background-position: -200% 0; } }
+
+  /* ------------------------------------------------------------- drawer -- */
+  .scrim {
+    position: fixed; inset: 0; z-index: 40; background: rgba(5, 5, 8, .55);
+    opacity: 0; transition: opacity .22s var(--ease);
+  }
+  .scrim.show { opacity: 1; }
+  .drawer {
+    position: fixed; top: 0; right: 0; bottom: 0; z-index: 50;
+    width: min(480px, 100vw); display: flex; flex-direction: column;
+    background: var(--surface); border-left: 1px solid var(--border-strong);
+    box-shadow: -28px 0 60px -24px rgba(0, 0, 0, .8);
+    transform: translateX(102%); transition: transform .26s var(--ease);
+  }
+  .drawer.open { transform: none; }
+  .dr-head { display: flex; align-items: center; gap: 12px; padding: 16px 16px 14px 20px; border-bottom: 1px solid var(--border); }
+  .dr-head .ico { width: 38px; height: 38px; border-radius: 10px; }
+  .dr-titles { flex: 1; min-width: 0; }
+  .dr-titles h2 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
+  .dr-status { display: flex; align-items: center; gap: 10px; padding: 12px 20px; border-bottom: 1px solid var(--border); background: var(--surface-2); }
+  .dr-status .sw-label { display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-2); cursor: pointer; }
+  .dr-status .sw-label[hidden] { display: none; }
+  .dr-body { flex: 1; overflow-y: auto; padding: 4px 20px 28px; }
+
+  .sec { padding: 18px 0; }
+  .sec + .sec { border-top: 1px solid var(--border); }
+  .sec[hidden] { display: none; }
+  .sec-h { display: flex; align-items: baseline; gap: 8px; margin-bottom: 12px; }
+  .sec-h h3 { margin: 0; font-size: 13px; font-weight: 600; }
+  .sec-h .sub { font-size: 12px; color: var(--text-3); }
+  .sec-h .count { margin-left: auto; }
+  .sec-h .count:empty { display: none; }
+
+  .thread { display: flex; flex-direction: column; gap: 8px; }
+  .thread:not(:empty) { margin-bottom: 12px; }
+  .bubble {
+    max-width: 88%; padding: 8px 11px; border-radius: 11px; font-size: 13px; line-height: 1.45;
+    animation: rise .22s var(--ease);
+  }
+  .bubble.user {
+    align-self: flex-end; color: #dce8ff;
+    background: var(--accent-soft); border: 1px solid rgba(110, 168, 254, .22); border-bottom-right-radius: 4px;
+  }
+  .bubble.jarvis { align-self: flex-start; background: var(--surface-2); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
+  .bubble.jarvis.ok { border-color: rgba(62, 207, 142, .25); }
+  .bubble.jarvis.err { border-color: rgba(242, 85, 90, .3); }
+  .who { display: block; font-size: 10.5px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--text-3); margin-bottom: 2px; }
+  @keyframes rise { from { opacity: 0; transform: translateY(4px); } }
+
+  .ask {
+    margin-bottom: 12px; padding: 12px; border-radius: 11px;
+    background: linear-gradient(180deg, rgba(110, 168, 254, .07), rgba(110, 168, 254, .02));
+    border: 1px solid var(--accent-ring);
+    box-shadow: 0 0 24px -12px rgba(110, 168, 254, .6);
+    animation: rise .22s var(--ease);
+  }
+  .ask[hidden] { display: none; }
+  .ask-top { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .ask-top .who { margin: 0; color: var(--accent); }
+  .ask-state { margin-left: auto; font-size: 11px; color: var(--text-3); }
+  .question { font-size: 13.5px; font-weight: 500; color: var(--text); margin-bottom: 10px; }
+  .proposal-text, .prop-body {
+    margin: 0 0 10px; padding: 10px 12px; max-height: 200px; overflow: auto;
+    font: 11.5px/1.55 var(--mono); color: var(--text-2); white-space: pre-wrap;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+  }
+  .proposal-text[hidden] { display: none; }
+  .composer {
+    display: flex; align-items: center; gap: 6px; padding: 3px 3px 3px 10px;
+    background: var(--bg); border: 1px solid var(--border-strong); border-radius: 9px;
+    color: var(--text-3); transition: border-color .15s, box-shadow .15s;
+  }
+  .composer:focus-within { border-color: var(--accent-ring); box-shadow: 0 0 0 3px rgba(110, 168, 254, .1); }
+  .composer[hidden] { display: none; }
+  .composer input { flex: 1; min-width: 0; height: 30px; border: 0; outline: 0; background: transparent; font-size: 13px; color: var(--text); }
+  .composer input::placeholder { color: var(--text-3); }
+
+  .rule {
+    padding: 10px 12px; border-radius: 9px; background: var(--surface-2); border: 1px solid var(--border);
+  }
+  .rule + .rule { margin-top: 6px; }
+  .rule-top { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .rid { font: 500 12px var(--mono); color: var(--text); margin-right: 2px; }
+  .tag {
+    font-size: 11px; font-weight: 500; padding: 1px 7px; border-radius: 5px;
+    color: var(--text-2); background: var(--surface-3); border: 1px solid var(--border);
+  }
+  .tag-hard { color: #ff9a9d; background: rgba(242, 85, 90, .1); border-color: rgba(242, 85, 90, .25); }
+  .rule-intent { margin-top: 5px; font-size: 12.5px; color: var(--text-2); }
+  .rule-check { display: block; margin-top: 6px; font: 11.5px var(--mono); color: var(--ok); }
+  .empty-mini { padding: 14px; text-align: center; font-size: 12.5px; color: var(--text-3); border: 1px dashed var(--border-strong); border-radius: 9px; }
+
+  details.sec > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 8px; }
+  details.sec > summary::-webkit-details-marker { display: none; }
+  details.sec > summary h3 { margin: 0; font-size: 13px; font-weight: 600; }
+  details.sec > summary .sub { font-size: 12px; color: var(--text-3); }
+  details.sec > summary svg { margin-left: auto; color: var(--text-3); transition: transform .18s var(--ease); }
+  details.sec[open] > summary svg { transform: rotate(90deg); }
+  details.sec[open] > summary { margin-bottom: 12px; }
+  textarea {
+    width: 100%; min-height: 96px; padding: 9px 11px; resize: vertical;
+    background: var(--bg); border: 1px solid var(--border-strong); border-radius: 9px;
+    font: 12.5px/1.55 var(--mono); color: var(--text); outline: 0;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  textarea:focus { border-color: var(--accent-ring); box-shadow: 0 0 0 3px rgba(110, 168, 254, .1); }
+  .btn-row { display: flex; gap: 8px; margin-top: 10px; }
+  .proposal { margin-top: 14px; }
+  .proposal[hidden] { display: none; }
+  .prop-q { font-size: 12px; color: var(--warn); margin-bottom: 10px; }
+  .prop-q:empty { display: none; }
+
+  .kv { display: grid; grid-template-columns: 96px 1fr; gap: 10px 12px; margin: 0; font-size: 12.5px; }
+  .kv dt { color: var(--text-3); }
+  .kv dd { margin: 0; color: var(--text); min-width: 0; overflow-wrap: anywhere; }
+  .kv code { font: 12px var(--mono); color: var(--text-2); }
+  .chips { display: flex; flex-wrap: wrap; gap: 4px; }
+  .note { margin-top: 16px; padding: 10px 12px; border-radius: 9px; font-size: 12px; color: var(--text-2); background: var(--surface-2); border: 1px solid var(--border); }
+
+  /* ------------------------------------------------------------- toasts -- */
+  .toasts { position: fixed; right: 16px; bottom: 16px; z-index: 60; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; pointer-events: none; }
+  .toast {
+    pointer-events: auto; display: flex; align-items: center; gap: 9px;
+    max-width: 360px; padding: 9px 10px 9px 12px; border-radius: 10px;
+    background: #1c1c24; border: 1px solid var(--border-strong);
+    box-shadow: 0 12px 32px -8px rgba(0, 0, 0, .7);
+    font-size: 12.5px; color: var(--text);
+    opacity: 0; transform: translateY(8px) scale(.98);
+    transition: opacity .2s var(--ease), transform .2s var(--ease);
+  }
+  .toast.show { opacity: 1; transform: none; }
+  .toast .t-ico { display: grid; place-items: center; color: var(--ok); }
+  .toast.err .t-ico { color: var(--danger); }
+  .toast .t-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .toast .t-act {
+    border: 0; background: transparent; cursor: pointer; font-weight: 600; font-size: 12px; color: var(--accent);
+    padding: 3px 6px; border-radius: 5px;
+  }
+  .toast .t-act:hover { background: var(--accent-soft); }
+
+  @media (max-width: 640px) {
+    .wrap { padding: 0 14px; }
+    .stats, .rules-chip { display: none; }
+    .controls { flex-wrap: wrap; }
+    .search { flex-basis: 100%; }
+    .acts .btn { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
   }
 </style>
 </head>
 <body>
-  <h1>Installed Apps</h1>
-  <div class="sub">Manage registered applications and their runtime rules</div>
-  <div class="tabs">
-    <button id="tab-curated" class="tab active" onclick="setTab('curated')">
-      Curated Apps &amp; Sites <span class="count" id="count-curated">0</span>
-    </button>
-    <button id="tab-all" class="tab" onclick="setTab('all')">
-      All Detected (Raw) <span class="count" id="count-all">0</span>
-    </button>
-  </div>
-  <div class="toolbar">
-    <input id="search" placeholder="Filter by name or category…" oninput="render()" />
-    <button class="ghost" onclick="loadApps()">↻ Refresh</button>
-  </div>
-  <div id="grid" class="grid"></div>
-
-<script>
-let CURATED = [];
-let ALL = [];
-let TAB = "curated";
-
-async function loadApps() {
-  const res = await fetch("/apps");
-  const data = await res.json();
-  ALL = (data.all || data.curated || data.apps || []).slice();
-  // Point the curated list at the same objects as ALL so an edit in one tab is
-  // visible in the other without a refetch.
-  const byKey = new Map(ALL.map(a => [a.key, a]));
-  CURATED = (data.curated || data.apps || []).map(a => byKey.get(a.key) || a);
-  document.getElementById("count-curated").textContent =
-    data.curated_count != null ? data.curated_count : CURATED.length;
-  document.getElementById("count-all").textContent =
-    data.all_count != null ? data.all_count : ALL.length;
-  render();
-}
-
-function setTab(tab) {
-  TAB = tab;
-  document.getElementById("tab-curated").classList.toggle("active", tab === "curated");
-  document.getElementById("tab-all").classList.toggle("active", tab === "all");
-  render();
-}
-
-function render() {
-  const q = (document.getElementById("search").value || "").toLowerCase().trim();
-  const grid = document.getElementById("grid");
-  grid.innerHTML = "";
-  const source = TAB === "all" ? ALL : CURATED;
-  const list = source.filter(a =>
-    !q || (a.name || "").toLowerCase().includes(q) || (a.category || "").toLowerCase().includes(q)
-  );
-  for (const a of list) {
-    grid.appendChild(card(a));
-  }
-  if (!list.length) {
-    grid.innerHTML = TAB === "curated"
-      ? '<div class="meta">No curated apps yet — open “All Detected (Raw)” and register one.</div>'
-      : '<div class="meta">No apps found.</div>';
-  }
-}
-
-function card(a) {
-  const el = document.createElement("div");
-  el.className = "card";
-  const broken = !!a.broken;
-  const enabled = a.enabled !== false;
-  const kind = a.adapter || a.kind || "gui";
-  el.innerHTML = `
-    <div class="row">
-      <div>
-        <div class="title">${escapeHtml(a.name)}</div>
-        <div class="meta">${escapeHtml(a.category || "other")} · ${escapeHtml(kind)}</div>
+  <header class="top">
+    <div class="wrap">
+      <div class="top-row">
+        <div class="title">
+          <h1>Apps</h1>
+          <p>Installed apps, websites and capabilities JARVIS can act on</p>
+        </div>
+        <div class="spacer"></div>
+        <div class="stats" aria-label="Summary">
+          <span class="stat"><b id="st-enabled">0</b>enabled</span>
+          <span class="stat"><b id="st-rules">0</b>rules</span>
+          <span class="stat warn" id="st-broken-wrap" hidden><b id="st-broken">0</b>broken</span>
+        </div>
+        <button class="icon-btn" id="refresh" title="Refresh" aria-label="Refresh"></button>
       </div>
-      <div style="display:flex;gap:8px;align-items:center;">
-        <span class="badge ${broken ? "broken" : (enabled ? "on" : "off")}">${broken ? "broken" : (enabled ? "enabled" : "disabled")}</span>
-        <button onclick="toggleDetails(this)">▾</button>
+      <div class="controls">
+        <label class="search">
+          <span id="search-ico"></span>
+          <input id="search" type="search" placeholder="Search apps, sites and capabilities" autocomplete="off" spellcheck="false" aria-label="Search" />
+          <kbd>/</kbd>
+        </label>
+        <div class="seg" role="group" aria-label="Filter by type">
+          <button class="seg-btn active" data-filter="all" aria-pressed="true">All <span class="n" id="f-all"></span></button>
+          <button class="seg-btn" data-filter="app" aria-pressed="false">Apps <span class="n" id="f-app"></span></button>
+          <button class="seg-btn" data-filter="website" aria-pressed="false">Websites <span class="n" id="f-website"></span></button>
+          <button class="seg-btn" data-filter="capability" aria-pressed="false">Capabilities <span class="n" id="f-capability"></span></button>
+        </div>
       </div>
+      <nav class="tabs" role="tablist" aria-label="View">
+        <button id="tab-curated" class="tab active" role="tab" aria-selected="true" data-tab="curated">
+          Curated Apps &amp; Sites <span class="count" id="count-curated">0</span>
+        </button>
+        <button id="tab-all" class="tab" role="tab" aria-selected="false" data-tab="all">
+          All Detected (Raw) <span class="count" id="count-all">0</span>
+        </button>
+      </nav>
     </div>
-    <div class="row" style="margin-top:10px;">
-      <label class="toggle">
-        <input type="checkbox" ${enabled ? "checked" : ""} onchange="toggleApp('${escapeAttr(a.key)}', this.checked, this)" />
-        ${enabled ? "Enabled" : "Disabled"}
+  </header>
+
+  <main class="wrap list" id="list" aria-live="polite"></main>
+
+  <div class="scrim" id="scrim" hidden></div>
+  <aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="dr-title" aria-hidden="true" inert>
+    <header class="dr-head">
+      <div class="ico" id="dr-ico"></div>
+      <div class="dr-titles">
+        <h2 id="dr-title"></h2>
+        <div class="meta" id="dr-meta"></div>
+      </div>
+      <button class="icon-btn ghost" id="dr-close" aria-label="Close"></button>
+    </header>
+    <div class="dr-status">
+      <span class="pill" id="dr-pill"></span>
+      <label class="sw-label" id="dr-sw">
+        <span class="switch"><input type="checkbox" role="switch" id="dr-toggle" /><span class="track"></span></span>
+        <span id="dr-sw-text">Enabled</span>
       </label>
-      <div style="display:flex;gap:8px;">
-        <button class="ghost" onclick="openApp('${escapeAttr(a.key)}', this)">Open</button>
-        ${TAB === "all" ? `<button class="ghost" onclick="hideApp('${escapeAttr(a.key)}', this)">Hide</button>` : ""}
-      </div>
+      <div class="spacer"></div>
+      <button class="btn btn-sm btn-danger" id="dr-hide">Hide</button>
+      <button class="btn btn-sm" id="dr-open">Open</button>
     </div>
-    <div class="details">
-      <div class="section-h">Compiled rules</div>
-      <div class="rules"></div>
-      <div class="section-h">Rule drafts (one phrase per line)</div>
-      <textarea class="drafts">${(a.rule_drafts || []).join("\n")}</textarea>
-      <div style="margin-top:8px;display:flex;gap:8px;">
-        <button onclick="saveRules('${escapeAttr(a.key)}', this)">Save rules</button>
-        <button class="ghost" onclick="compileRules('${escapeAttr(a.key)}', this)">Compile with JARVIS</button>
-        <span class="msg"></span>
-      </div>
-      <div class="proposal" style="display:none;margin-top:10px;">
-        <div class="section-h">JARVIS proposal</div>
-        <div class="prop-body meta"></div>
-        <div class="prop-q" style="color:var(--accent);font-size:12px;margin-top:6px;"></div>
-        <div style="margin-top:8px;display:flex;gap:8px;">
-          <button onclick="acceptProposal('${escapeAttr(a.key)}', this)">Accept proposal</button>
+    <div class="dr-body">
+      <div id="app-secs">
+      <section class="sec" id="sec-voice">
+        <div class="sec-h">
+          <h3>Voice Rule Setup</h3>
+          <span class="sub">Say it plainly. JARVIS asks when something is unclear.</span>
         </div>
-      </div>
-      <div class="voice">
-        <div class="section-h">Voice Rule Setup</div>
-        <input class="v-phrase" placeholder="Say it plainly — e.g. no explicit stuff and keep it quiet" />
-        <div style="margin-top:8px;display:flex;gap:8px;align-items:center;">
-          <button onclick="voiceBegin('${escapeAttr(a.key)}', this)">Propose Rules</button>
-          <span class="v-msg msg"></span>
-        </div>
-        <div class="v-proposal proposal-text" style="display:none;"></div>
-        <div class="v-clarify" style="display:none;margin-top:10px;">
+        <div class="thread" id="v-thread"></div>
+        <div class="ask" id="v-clarify" hidden>
+          <div class="ask-top"><span class="who">JARVIS</span><span class="ask-state" id="v-state"></span></div>
           <div class="v-question question"></div>
-          <input class="v-answer" placeholder="Your answer…" />
-          <div style="margin-top:8px;">
-            <button onclick="voiceClarify('${escapeAttr(a.key)}', this)">Confirm</button>
+          <pre class="v-proposal proposal-text" hidden></pre>
+          <div class="composer">
+            <input class="v-answer" placeholder="Your answer…" />
+            <button class="btn btn-sm btn-quiet" id="v-cancel">Cancel</button>
+            <button class="btn btn-sm btn-primary" id="v-confirm">Confirm</button>
           </div>
         </div>
-        <div class="section-h">Current Rules</div>
-        <div class="v-current"></div>
+        <div class="composer" id="v-compose">
+          <span id="mic-ico"></span>
+          <input class="v-phrase" placeholder="e.g. no explicit stuff and keep it quiet" />
+          <button class="btn btn-sm btn-primary" id="v-begin">Propose Rules</button>
+        </div>
+      </section>
+
+      <section class="sec" id="sec-rules">
+        <div class="sec-h"><h3>Current Rules</h3><span class="count" id="rules-count"></span></div>
+        <div class="v-current" id="v-current"></div>
+      </section>
+
+      <details class="sec" id="sec-drafts">
+        <summary><h3>Rule drafts</h3><span class="sub">One phrase per line</span><span id="drafts-chev"></span></summary>
+        <textarea class="drafts" id="drafts" spellcheck="false" placeholder="never play explicit tracks even if I ask"></textarea>
+        <div class="btn-row">
+          <button class="btn btn-sm" id="d-save">Save rules</button>
+          <button class="btn btn-sm btn-quiet" id="d-compile">Compile with JARVIS</button>
+        </div>
+        <div class="proposal" id="proposal" hidden>
+          <div class="sec-h"><h3>JARVIS proposal</h3></div>
+          <pre class="prop-body"></pre>
+          <div class="prop-q"></div>
+          <button class="btn btn-sm btn-primary" id="d-accept">Accept proposal</button>
+        </div>
+      </details>
       </div>
+
+      <section class="sec" id="sec-info" hidden></section>
     </div>
-  `;
-  const rulesBox = el.querySelector(".rules");
-  const cr = a.compiled_rules || [];
-  if (!cr.length) {
-    rulesBox.innerHTML = '<div class="meta">No compiled rules yet.</div>';
-  } else {
-    for (const r of cr) {
-      const rEl = document.createElement("div");
-      rEl.className = "rule";
-      rEl.innerHTML = `<span class="rid">${escapeHtml(r.rule_id || "rule")}</span>
-        <span class="enf">· ${escapeHtml(r.enforcement || "soft")}</span>
-        ${r.adapter_check ? `<span class="chk">· check: ${escapeHtml(r.adapter_check)}</span>` : ""}`;
-      rulesBox.appendChild(rEl);
-    }
-  }
-  renderCurrentRules(el, cr);
-  return el;
-}
+  </aside>
 
-// Read-only mirror of the committed rules, under the voice section.
-function renderCurrentRules(card, rules) {
-  const box = card.querySelector(".v-current");
-  if (!box) return;
-  box.innerHTML = "";
-  if (!rules || !rules.length) {
-    box.innerHTML = '<div class="meta">No rules set yet.</div>';
-    return;
-  }
-  for (const r of rules) {
-    const rEl = document.createElement("div");
-    rEl.className = "rule";
-    rEl.innerHTML = `<span class="rid">${escapeHtml(r.rule_id || "rule")}</span>
-      <span class="enf">· ${escapeHtml(r.enforcement || "soft")} · ${escapeHtml(r.scope || "all_sessions")}</span>
-      <div class="meta">${escapeHtml(r.intent || "")}</div>
-      ${r.adapter_check ? `<div class="chk">check: ${escapeHtml(r.adapter_check)}</div>` : ""}`;
-    box.appendChild(rEl);
-  }
-}
+  <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
 
-function toggleDetails(btn) {
-  const d = btn.closest(".card").querySelector(".details");
-  const show = d.classList.toggle("show");
-  btn.textContent = show ? "▴" : "▾";
-}
+<script>
+const ICONS = {
+  dev: '<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>',
+  edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
+  media: '<circle cx="12" cy="12" r="9"/><path d="m10 8.5 5.5 3.5-5.5 3.5Z"/>',
+  browser: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18"/>',
+  office: '<path d="M14 3H6.5A1.5 1.5 0 0 0 5 4.5v15A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5V8Z"/><path d="M14 3v5h5"/><path d="M8.5 13h7M8.5 17h4.5"/>',
+  comm: '<path d="M20.5 11.5a8 8 0 0 1-11.7 7.1L4 20l1.4-4.6A8 8 0 1 1 20.5 11.5Z"/>',
+  util: '<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>',
+  website: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
+  capability: '<path d="M13 3 5 13.5h6.5L10.5 21 19 10.5h-6.5Z"/>',
+  other: '<rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/>',
+  search: '<circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/>',
+  refresh: '<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/>',
+  close: '<path d="M6 6l12 12M18 6 6 18"/>',
+  chevron: '<path d="m9 6 6 6-6 6"/>',
+  shield: '<path d="M12 3 5 6v5.5c0 4.2 2.9 7.8 7 9.5 4.1-1.7 7-5.3 7-9.5V6Z"/>',
+  check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
+  alert: '<circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16.5v.01"/>',
+  mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/>'
+};
 
-async function toggleApp(key, enable, cb) {
-  cb.disabled = true;
-  const res = await fetch("/apps/toggle", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ key, enabled: enable })
-  });
-  cb.disabled = false;
-  const m = res.ok ? "Saved" : "Failed";
-  const card = cb.closest(".card");
-  const badge = card.querySelector(".badge");
-  if (res.ok) {
-    badge.className = "badge " + (enable ? "on" : "off");
-    badge.textContent = enable ? "enabled" : "disabled";
-    cb.closest(".toggle").childNodes[2].textContent = enable ? " Enabled" : " Disabled";
-  } else {
-    cb.checked = !enable;
-  }
-}
+const CATS = {
+  dev:        { label: "Developer",     tint: "#cfa236" },
+  edit:       { label: "Editors",       tint: "#bfa03a" },
+  media:      { label: "Media",         tint: "#cfa236" },
+  browser:    { label: "Browsers",      tint: "#cfa236" },
+  office:     { label: "Office",        tint: "#cfa236" },
+  comm:       { label: "Communication", tint: "#cfa236" },
+  util:       { label: "Utilities",     tint: "#cfa236" },
+  other:      { label: "Other",         tint: "#cfa236" },
+  website:    { label: "Websites",      tint: "#cfa236" },
+  capability: { label: "Capabilities",  tint: "#cfa236" }
+};
 
-async function openApp(key, btn) {
-  btn.disabled = true;
-  const old = btn.textContent;
-  btn.textContent = "…";
-  const res = await fetch("/apps/open", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ key })
-  });
-  btn.disabled = false;
-  btn.textContent = old;
-  let result = "";
-  try { const d = await res.json(); result = d.result || JSON.stringify(d); } catch (e) {}
-  alert("Open " + key + ":\n" + (result || (res.ok ? "ok" : "failed")));
-}
+// View state for the list, and the drawer's per-app working state.
+const S = { curated: [], all: [], tab: "curated", filter: "all", loading: false, error: "" };
+const DR = { key: null, filledKey: null, voiceRuleId: "", voiceStatus: "", proposed: [], thread: [], lastFocus: null };
 
-async function hideApp(key, btn) {
-  btn.disabled = true;
-  const res = await fetch("/apps/hide", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ key, hidden: true })
-  });
-  btn.disabled = false;
-  if (!res.ok) { btn.textContent = "Failed"; return; }
-  CURATED = CURATED.filter(a => a.key !== key);
-  ALL = ALL.filter(a => a.key !== key);
-  document.getElementById("count-curated").textContent = CURATED.length;
-  document.getElementById("count-all").textContent = ALL.length;
-  render();
-}
+const $ = sel => document.querySelector(sel);
 
-function findApp(key) {
-  return ALL.find(x => x.key === key) || CURATED.find(x => x.key === key);
-}
-
-async function saveRules(key, btn) {
-  const card = btn.closest(".card");
-  const ta = card.querySelector(".drafts");
-  const drafts = ta.value.split("\n").map(s => s.trim()).filter(Boolean);
-  const msg = card.querySelector(".msg");
-  msg.className = "msg";
-  btn.disabled = true;
-  const res = await fetch("/apps/rules", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ key, rule_drafts: drafts })
-  });
-  btn.disabled = false;
-  if (res.ok) {
-    msg.textContent = "Saved ✓";
-    msg.className = "msg ok";
-    const a = findApp(key);
-    if (a) a.rule_drafts = drafts;
-  } else {
-    msg.textContent = "Failed";
-    msg.className = "msg err";
-  }
-}
-
-async function compileRules(key, btn) {
-  const card = btn.closest(".card");
-  const ta = card.querySelector(".drafts");
-  const drafts = ta.value.split("\n").map(s => s.trim()).filter(Boolean);
-  const msg = card.querySelector(".msg");
-  const prop = card.querySelector(".proposal");
-  msg.className = "msg";
-  if (!drafts.length) { msg.textContent = "Enter drafts first"; msg.className = "msg err"; return; }
-  btn.disabled = true;
-  const res = await fetch("/apps/compile", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ key, rule_drafts: drafts })
-  });
-  btn.disabled = false;
-  if (!res.ok) { msg.textContent = "Compile failed"; msg.className = "msg err"; return; }
-  const d = await res.json();
-  card._proposed = d.proposed || [];
-  prop.querySelector(".prop-body").textContent = d.proposal_markdown || "(no proposal)";
-  const q = d.questions || [];
-  prop.querySelector(".prop-q").textContent = q.length
-    ? "JARVIS assumed: " + q.join("  •  ") + "  — correct the drafts if wrong."
-    : "";
-  prop.style.display = "block";
-  msg.textContent = "Compiled ✓"; msg.className = "msg ok";
-}
-
-async function acceptProposal(key, btn) {
-  const card = btn.closest(".card");
-  const proposed = card._proposed || [];
-  if (!proposed.length) return;
-  const msg = card.querySelector(".msg");
-  btn.disabled = true;
-  const res = await fetch("/apps/rules", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ key, rule_drafts: proposed.map(r => r.source_phrase), compiled_rules: proposed })
-  });
-  btn.disabled = false;
-  if (res.ok) {
-    msg.textContent = "Accepted ✓"; msg.className = "msg ok";
-    card.querySelector(".proposal").style.display = "none";
-    const a = findApp(key);
-    if (a) { a.compiled_rules = proposed; a.rule_drafts = proposed.map(r => r.source_phrase); }
-  } else {
-    msg.textContent = "Accept failed"; msg.className = "msg err";
-  }
-}
-
-// ------------------------------------------------ Phase 4: voice authoring --
-
-function voiceStep(card, step) {
-  const msg = card.querySelector(".v-msg");
-  const prop = card.querySelector(".v-proposal");
-  const clarify = card.querySelector(".v-clarify");
-  msg.className = "v-msg msg";
-  if (step.status === "clarify" || step.status === "proposal") {
-    card._vRuleId = step.rule_id || "";
-    card.querySelector(".v-question").textContent = step.question || "";
-    card.querySelector(".v-answer").value = "";
-    clarify.style.display = "block";
-    if (step.proposal) {
-      prop.textContent = step.proposal;
-      prop.style.display = "block";
-    }
-    msg.textContent = step.status === "clarify" ? "Needs clarification" : "Proposal ready";
-  } else if (step.status === "committed") {
-    clarify.style.display = "none";
-    prop.style.display = "none";
-    card._vRuleId = null;
-    msg.textContent = "Committed ✓ (" + step.count + " rules)";
-    msg.className = "v-msg msg ok";
-  } else if (step.status === "cancelled") {
-    clarify.style.display = "none";
-    prop.style.display = "none";
-    card._vRuleId = null;
-    msg.textContent = "Cancelled";
-  }
-}
-
-async function voiceBegin(key, btn) {
-  const card = btn.closest(".card");
-  const phrase = (card.querySelector(".v-phrase").value || "").trim();
-  const msg = card.querySelector(".v-msg");
-  msg.className = "v-msg msg";
-  if (!phrase) { msg.textContent = "Say a rule first"; msg.className = "v-msg msg err"; return; }
-  btn.disabled = true;
-  const res = await fetch("/apps/rules/begin", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ app_key: key, phrase })
-  });
-  btn.disabled = false;
-  const d = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    msg.textContent = d.error || "Failed"; msg.className = "v-msg msg err"; return;
-  }
-  voiceStep(card, d);
-}
-
-async function voiceClarify(key, btn) {
-  const card = btn.closest(".card");
-  const answer = (card.querySelector(".v-answer").value || "").trim();
-  const msg = card.querySelector(".v-msg");
-  msg.className = "v-msg msg";
-  if (!answer) { msg.textContent = "Answer first"; msg.className = "v-msg msg err"; return; }
-  btn.disabled = true;
-  const res = await fetch("/apps/rules/clarify", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ app_key: key, rule_id: card._vRuleId || "", answer })
-  });
-  btn.disabled = false;
-  const d = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    msg.textContent = d.error || "Failed"; msg.className = "v-msg msg err"; return;
-  }
-  voiceStep(card, d);
-  if (d.status === "committed") await refreshRules(key, card);
-}
-
-async function refreshRules(key, card) {
-  const res = await fetch("/apps/rules/list?key=" + encodeURIComponent(key));
-  if (!res.ok) return;
-  const d = await res.json().catch(() => ({}));
-  const rules = d.rules || [];
-  renderCurrentRules(card, rules);
-  const a = findApp(key);
-  if (a) a.compiled_rules = rules;
+function svg(name, size = 16) {
+  return `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" ` +
+    `stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ""}</svg>`;
 }
 
 function escapeHtml(s) {
   return String(s == null ? "" : s)
-    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
-function escapeAttr(s) { return String(s == null ? "" : s).replace(/"/g, "&quot;"); }
 
-loadApps();
+function post(body) {
+  return { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+}
+
+function kindOf(a) {
+  return a.kind === "website" ? "website" : a.kind === "capability" ? "capability" : "app";
+}
+function catOf(a) { return CATS[a.category] ? a.category : "other"; }
+function findApp(key) {
+  return S.all.find(x => x.key === key) || S.curated.find(x => x.key === key);
+}
+function status(a) {
+  if (a.broken) return { cls: "broken", label: "Broken" };
+  if (a.enabled === false) return { cls: "off", label: "Disabled" };
+  return { cls: "on", label: kindOf(a) === "capability" ? "Available" : "Enabled" };
+}
+function metaOf(a) {
+  const k = kindOf(a);
+  if (k === "website") return a.host || a.url || "website";
+  if (k === "capability") return a.description || a.adapter || "capability";
+  return a.key + " · " + (a.kind || a.adapter || "gui");
+}
+function icoHtml(cat, size = 16) {
+  return `<span class="ico" style="--tint:${CATS[cat].tint}">${svg(cat, size)}</span>`;
+}
+
+// ------------------------------------------------------------------ toasts --
+
+function toast(text, type = "ok", action) {
+  const box = $("#toasts");
+  const el = document.createElement("div");
+  el.className = "toast " + type;
+  el.innerHTML = `<span class="t-ico">${svg(type === "err" ? "alert" : "check", 15)}</span><span class="t-text"></span>`;
+  el.querySelector(".t-text").textContent = text;
+  const dismiss = () => { el.classList.remove("show"); setTimeout(() => el.remove(), 220); };
+  if (action) {
+    const b = document.createElement("button");
+    b.className = "t-act";
+    b.textContent = action.label;
+    b.addEventListener("click", () => { dismiss(); action.run(); });
+    el.appendChild(b);
+  }
+  box.appendChild(el);
+  while (box.children.length > 4) box.firstElementChild.remove();
+  requestAnimationFrame(() => el.classList.add("show"));
+  setTimeout(dismiss, action ? 6000 : 3200);
+}
+
+function setBusy(btn, busy) {
+  if (!btn) return;
+  btn.disabled = busy;
+  btn.classList.toggle("is-busy", busy);
+}
+
+// -------------------------------------------------------------------- data --
+
+async function loadApps() {
+  S.loading = true;
+  S.error = "";
+  $("#refresh").classList.add("spinning");
+  render();
+  try {
+    const res = await fetch("/apps");
+    const data = await res.json();
+    S.all = (data.all || data.curated || data.apps || []).slice();
+    // Point the curated list at the same objects as ALL so an edit in one tab is
+    // visible in the other without a refetch.
+    const byKey = new Map(S.all.map(a => [a.key, a]));
+    S.curated = (data.curated || data.apps || []).map(a => byKey.get(a.key) || a);
+  } catch (e) {
+    S.error = "JARVIS didn't answer. Check that the server is running, then retry.";
+  }
+  S.loading = false;
+  $("#refresh").classList.remove("spinning");
+  updateCounts();
+  render();
+  if (DR.key) {
+    const a = findApp(DR.key);
+    if (a) fillDrawer(a); else closeDrawer();
+  }
+}
+
+function updateCounts() {
+  $("#count-curated").textContent = S.curated.length;
+  $("#count-all").textContent = S.all.length;
+  const source = S.tab === "all" ? S.all : S.curated;
+  const enabled = source.filter(a => a.enabled !== false && !a.broken).length;
+  const rules = source.reduce((n, a) => n + (a.compiled_rules || []).length, 0);
+  const broken = source.filter(a => a.broken).length;
+  $("#st-enabled").textContent = enabled;
+  $("#st-rules").textContent = rules;
+  $("#st-broken").textContent = broken;
+  $("#st-broken-wrap").hidden = !broken;
+  const by = { all: source.length, app: 0, website: 0, capability: 0 };
+  for (const a of source) by[kindOf(a)]++;
+  for (const k in by) $("#f-" + k).textContent = by[k];
+}
+
+// -------------------------------------------------------------------- list --
+
+function setTab(tab) {
+  S.tab = tab;
+  for (const t of ["curated", "all"]) {
+    const el = $("#tab-" + t);
+    el.classList.toggle("active", t === tab);
+    el.setAttribute("aria-selected", String(t === tab));
+  }
+  updateCounts();
+  render();
+}
+
+function setFilter(filter) {
+  S.filter = filter;
+  document.querySelectorAll(".seg-btn").forEach(b => {
+    const on = b.dataset.filter === filter;
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-pressed", String(on));
+  });
+  render();
+}
+
+function matches(a, q) {
+  if (!q) return true;
+  return [a.name, a.category, a.key, a.host, a.description]
+    .some(v => (v || "").toLowerCase().includes(q));
+}
+
+function render() {
+  const list = $("#list");
+  if (S.loading && !S.all.length) {
+    list.innerHTML = Array.from({ length: 7 }, () =>
+      '<div class="skel"><i class="sq"></i><i style="width:' + (30 + Math.random() * 35) + '%"></i><i></i></div>').join("");
+    return;
+  }
+  if (S.error) {
+    list.innerHTML = emptyState("Couldn't load apps", S.error, "retry", "Retry");
+    return;
+  }
+  const q = ($("#search").value || "").toLowerCase().trim();
+  const source = S.tab === "all" ? S.all : S.curated;
+  const items = source.filter(a => (S.filter === "all" || kindOf(a) === S.filter) && matches(a, q));
+  if (!items.length) {
+    if (q || S.filter !== "all") {
+      list.innerHTML = emptyState("No matches", q ? `Nothing matches “${q}” in this view.` : "Nothing of this type in this view.", "clear", "Clear filters");
+    } else if (S.tab === "curated") {
+      list.innerHTML = emptyState("No curated apps yet", "Register apps from the full scan to pin them here.", "browse", "Browse all detected");
+    } else {
+      list.innerHTML = emptyState("No apps found", "The last scan came back empty.", "retry", "Refresh");
+    }
+    return;
+  }
+  const groups = new Map();
+  for (const a of items) {
+    const c = catOf(a);
+    if (!groups.has(c)) groups.set(c, []);
+    groups.get(c).push(a);
+  }
+  let html = "";
+  for (const [c, apps] of groups) {
+    html += `<section class="group"><div class="group-h">${escapeHtml(CATS[c].label)}<span class="n">${apps.length}</span></div>`;
+    html += apps.map(rowHtml).join("");
+    html += "</section>";
+  }
+  list.innerHTML = html;
+}
+
+function emptyState(title, body, act, label) {
+  return `<div class="empty"><div><h3>${escapeHtml(title)}</h3><p>${escapeHtml(body)}</p>` +
+    `<button class="btn btn-sm" data-act="${act}">${escapeHtml(label)}</button></div></div>`;
+}
+
+function switchHtml(on, label, id) {
+  return `<span class="switch"><input type="checkbox" role="switch" data-act="toggle" ${on ? "checked" : ""} ` +
+    `aria-label="${escapeHtml(label)}"${id ? ` id="${id}"` : ""} /><span class="track"></span></span>`;
+}
+
+function rowHtml(a) {
+  const k = kindOf(a);
+  const st = status(a);
+  const enabled = a.enabled !== false;
+  const rules = (a.compiled_rules || []).length;
+  const cls = ["row", DR.key === a.key ? "is-active" : "", enabled ? "" : "is-off"].filter(Boolean).join(" ");
+  const brokenWhy = a.broken ? (k === "website" ? "No URL registered" : "Binary not found: " + (a.bin || "")) : "";
+  return `<div class="${cls}" data-key="${escapeHtml(a.key)}">
+    ${icoHtml(catOf(a))}
+    <button class="main" data-act="configure" aria-label="Configure ${escapeHtml(a.name)}">
+      <span class="name">${escapeHtml(a.name)}</span>
+      <span class="meta">${escapeHtml(metaOf(a))}</span>
+    </button>
+    <div class="aux">
+      ${rules ? `<span class="rules-chip" title="Active rules">${svg("shield", 12)}${rules} rule${rules > 1 ? "s" : ""}</span>` : ""}
+      ${k !== "app" || a.broken ? `<span class="pill ${st.cls}"${brokenWhy ? ` title="${escapeHtml(brokenWhy)}"` : ""}>${st.label}</span>` : ""}
+    </div>
+    <div class="ctl">${k === "app" ? switchHtml(enabled, "Enable " + a.name) : ""}</div>
+    <div class="acts">
+      ${k !== "capability" ? '<button class="btn btn-sm" data-act="open">Open</button>' : ""}
+      ${S.tab === "all" && k === "app" ? '<button class="btn btn-sm btn-quiet" data-act="hide">Hide</button>' : ""}
+      <span class="chev">${svg("chevron", 14)}</span>
+    </div>
+  </div>`;
+}
+
+function markActive() {
+  document.querySelectorAll(".row").forEach(r => r.classList.toggle("is-active", r.dataset.key === DR.key));
+}
+
+// ----------------------------------------------------------------- actions --
+
+async function toggleApp(key, enable, cb) {
+  const a = findApp(key);
+  const name = a ? a.name : key;
+  cb.disabled = true;
+  let ok = false;
+  try {
+    const res = await fetch("/apps/toggle", post({ key, enabled: enable }));
+    ok = res.ok;
+  } catch (e) {}
+  cb.disabled = false;
+  if (!ok) {
+    cb.checked = !enable;
+    toast(`Couldn't update ${name}`, "err");
+    return;
+  }
+  if (a) a.enabled = enable;
+  updateCounts();
+  render();
+  if (DR.key === key && a) fillDrawer(a);
+  toast(`${name} ${enable ? "enabled" : "disabled"}`);
+}
+
+async function openApp(key, btn) {
+  const a = findApp(key);
+  const name = a ? a.name : key;
+  setBusy(btn, true);
+  let d = {}, ok = false;
+  try {
+    const res = await fetch("/apps/open", post({ key }));
+    d = await res.json().catch(() => ({}));
+    ok = res.ok && d.ok !== false;
+  } catch (e) {}
+  setBusy(btn, false);
+  toast(ok ? `Opening ${name}` : (d.result || d.error || `Couldn't open ${name}`), ok ? "ok" : "err");
+}
+
+async function setHidden(key, hidden) {
+  try {
+    const res = await fetch("/apps/hide", post({ key, hidden }));
+    return res.ok;
+  } catch (e) {
+    return false;
+  }
+}
+
+async function hideApp(key, btn) {
+  const a = findApp(key);
+  const name = a ? a.name : key;
+  const wasRegistered = !!(a && a.registered);
+  setBusy(btn, true);
+  const ok = await setHidden(key, true);
+  setBusy(btn, false);
+  if (!ok) { toast(`Couldn't hide ${name}`, "err"); return; }
+  S.curated = S.curated.filter(x => x.key !== key);
+  S.all = S.all.filter(x => x.key !== key);
+  if (DR.key === key) closeDrawer();
+  updateCounts();
+  render();
+  toast(`${name} hidden`, "ok", { label: "Undo", run: () => unhideApp(key, name, wasRegistered, a) });
+}
+
+async function unhideApp(key, name, wasRegistered, a) {
+  let ok = await setHidden(key, false);
+  // Hiding also unregisters, so a curated app needs re-registering to come back.
+  if (ok && wasRegistered) {
+    try {
+      const res = await fetch("/apps/register",
+        post({ key, registered: true, enabled: !a || a.enabled !== false }));
+      ok = res.ok;
+    } catch (e) { ok = false; }
+  }
+  toast(ok ? `${name} restored` : `Couldn't restore ${name}`, ok ? "ok" : "err");
+  loadApps();
+}
+
+// ------------------------------------------------------------------ drawer --
+
+function openDrawer(key) {
+  const a = findApp(key);
+  if (!a) return;
+  const drawer = $("#drawer");
+  const wasOpen = drawer.classList.contains("open");
+  if (!wasOpen) DR.lastFocus = document.activeElement;
+  DR.key = key;
+  fillDrawer(a);
+  const scrim = $("#scrim");
+  scrim.hidden = false;
+  drawer.inert = false;
+  drawer.setAttribute("aria-hidden", "false");
+  document.body.classList.add("has-drawer");
+  requestAnimationFrame(() => { scrim.classList.add("show"); drawer.classList.add("open"); });
+  markActive();
+  setTimeout(() => {
+    const target = kindOf(a) === "app" && !DR.voiceStatus ? $(".v-phrase") : $("#dr-close");
+    target.focus({ preventScroll: true });
+  }, 80);
+}
+
+function closeDrawer() {
+  const drawer = $("#drawer");
+  const scrim = $("#scrim");
+  drawer.classList.remove("open");
+  scrim.classList.remove("show");
+  drawer.setAttribute("aria-hidden", "true");
+  drawer.inert = true;
+  document.body.classList.remove("has-drawer");
+  setTimeout(() => { if (!drawer.classList.contains("open")) scrim.hidden = true; }, 260);
+  DR.key = null;
+  markActive();
+  if (DR.lastFocus && document.contains(DR.lastFocus)) DR.lastFocus.focus({ preventScroll: true });
+}
+
+// Refills the drawer from the app record. Editable state (drafts, the voice
+// conversation) is only reset when the drawer moves to a different app.
+function fillDrawer(a) {
+  const k = kindOf(a);
+  const cat = catOf(a);
+  const fresh = DR.filledKey !== a.key;
+  const ico = $("#dr-ico");
+  ico.style.setProperty("--tint", CATS[cat].tint);
+  ico.innerHTML = svg(cat, 18);
+  $("#dr-title").textContent = a.name;
+  $("#dr-meta").textContent = [CATS[cat].label, k === "app" ? a.key : metaOf(a)].join(" · ");
+
+  const st = status(a);
+  const pill = $("#dr-pill");
+  pill.className = "pill " + st.cls;
+  pill.textContent = st.label;
+  // The switch already says enabled/disabled; the pill only adds news.
+  pill.hidden = k === "app" && !a.broken;
+  const enabled = a.enabled !== false;
+  $("#dr-sw").hidden = k !== "app";
+  $("#dr-toggle").checked = enabled;
+  $("#dr-sw-text").textContent = enabled ? "Enabled" : "Disabled";
+  $("#dr-open").hidden = k === "capability";
+  $("#dr-hide").hidden = !(k === "app" && S.tab === "all");
+
+  const isApp = k === "app";
+  $("#app-secs").hidden = !isApp;
+  $("#sec-info").hidden = isApp;
+
+  if (fresh) {
+    resetVoice();
+    $("#drafts").value = (a.rule_drafts || []).join("\n");
+    $("#proposal").hidden = true;
+    $("#sec-drafts").open = false;
+    DR.proposed = [];
+    DR.filledKey = a.key;
+  }
+  if (isApp) renderCurrentRules(a.compiled_rules || []);
+  else renderInfo(a, k);
+}
+
+function renderInfo(a, k) {
+  const rows = [];
+  let note;
+  if (k === "website") {
+    rows.push(["URL", a.url ? `<code>${escapeHtml(a.url)}</code>` : '<span class="muted">Not set</span>']);
+    rows.push(["Host", escapeHtml(a.host || "—")]);
+    rows.push(["Visits", escapeHtml(a.visits || 0)]);
+    note = "Rule authoring is available for installed apps. Websites open through the browser adapter.";
+  } else {
+    const chips = xs => xs.length
+      ? `<div class="chips">${xs.map(x => `<span class="tag">${escapeHtml(x)}</span>`).join("")}</div>`
+      : '<span class="muted">—</span>';
+    rows.push(["Description", escapeHtml(a.description || "—")]);
+    rows.push(["Handles", chips(a.handles || [])]);
+    rows.push(["Tools", chips(a.tools || [])]);
+    rows.push(["Runtime", escapeHtml(a.adapter || "local")]);
+    rows.push(["Priority", escapeHtml(a.priority || 0)]);
+    note = "Capabilities are tasks JARVIS can delegate. They're listed for reference and can't be edited here.";
+  }
+  $("#sec-info").innerHTML =
+    `<div class="sec-h"><h3>Details</h3></div>` +
+    `<dl class="kv">${rows.map(([t, d]) => `<dt>${t}</dt><dd>${d}</dd>`).join("")}</dl>` +
+    `<div class="note">${escapeHtml(note)}</div>`;
+}
+
+// Read-only mirror of the committed rules.
+function renderCurrentRules(rules) {
+  const box = $("#v-current");
+  $("#rules-count").textContent = rules.length || "";
+  if (!rules.length) {
+    box.innerHTML = '<div class="empty-mini">No rules set yet. Describe one above and JARVIS will set it up.</div>';
+    return;
+  }
+  box.innerHTML = rules.map(r => `<div class="rule">
+    <div class="rule-top">
+      <span class="rid">${escapeHtml(r.rule_id || "rule")}</span>
+      <span class="tag${r.enforcement === "hard" ? " tag-hard" : ""}">${escapeHtml(r.enforcement || "soft")}</span>
+      <span class="tag">${escapeHtml((r.scope || "all_sessions").replace(/_/g, " "))}</span>
+    </div>
+    ${r.intent ? `<div class="rule-intent">${escapeHtml(r.intent)}</div>` : ""}
+    ${r.adapter_check ? `<code class="rule-check">${escapeHtml(r.adapter_check)}</code>` : ""}
+  </div>`).join("");
+}
+
+// -------------------------------------------------------- rule drafts (3.5) --
+
+function readDrafts() {
+  return $("#drafts").value.split("\n").map(s => s.trim()).filter(Boolean);
+}
+
+async function saveRules(key, btn) {
+  const drafts = readDrafts();
+  setBusy(btn, true);
+  let ok = false;
+  try {
+    const res = await fetch("/apps/rules", post({ key, rule_drafts: drafts }));
+    ok = res.ok;
+  } catch (e) {}
+  setBusy(btn, false);
+  if (!ok) { toast("Couldn't save drafts", "err"); return; }
+  const a = findApp(key);
+  if (a) a.rule_drafts = drafts;
+  toast("Drafts saved");
+}
+
+async function compileRules(key, btn) {
+  const drafts = readDrafts();
+  if (!drafts.length) { toast("Add at least one draft first", "err"); $("#drafts").focus(); return; }
+  setBusy(btn, true);
+  let d = null;
+  try {
+    const res = await fetch("/apps/compile", post({ key, rule_drafts: drafts }));
+    if (res.ok) d = await res.json();
+  } catch (e) {}
+  setBusy(btn, false);
+  if (!d) { toast("Compile failed", "err"); return; }
+  DR.proposed = d.proposed || [];
+  const prop = $("#proposal");
+  prop.querySelector(".prop-body").textContent = d.proposal_markdown || "(no proposal)";
+  const q = d.questions || [];
+  prop.querySelector(".prop-q").textContent = q.length
+    ? "JARVIS assumed: " + q.join(" · ") + " — edit the drafts if that's wrong."
+    : "";
+  prop.hidden = false;
+  toast("Proposal ready — review before accepting");
+}
+
+async function acceptProposal(key, btn) {
+  const proposed = DR.proposed || [];
+  if (!proposed.length) return;
+  setBusy(btn, true);
+  let ok = false;
+  try {
+    const res = await fetch("/apps/rules", post({
+      key, rule_drafts: proposed.map(r => r.source_phrase), compiled_rules: proposed
+    }));
+    ok = res.ok;
+  } catch (e) {}
+  setBusy(btn, false);
+  if (!ok) { toast("Couldn't accept the proposal", "err"); return; }
+  $("#proposal").hidden = true;
+  const a = findApp(key);
+  if (a) { a.compiled_rules = proposed; a.rule_drafts = proposed.map(r => r.source_phrase); }
+  renderCurrentRules(proposed);
+  updateCounts();
+  render();
+  toast(`${proposed.length} rule${proposed.length > 1 ? "s" : ""} saved`);
+}
+
+// ------------------------------------------------ Phase 4: voice authoring --
+
+function resetVoice() {
+  DR.thread = [];
+  DR.voiceRuleId = "";
+  DR.voiceStatus = "";
+  renderThread();
+  showAsk(false);
+  $(".v-phrase").value = "";
+}
+
+function say(who, text, tone) {
+  DR.thread.push({ who, text, tone: tone || "" });
+  renderThread();
+}
+
+function renderThread() {
+  $("#v-thread").innerHTML = DR.thread.map(m =>
+    `<div class="bubble ${m.who} ${m.tone}">${m.who === "jarvis" ? '<span class="who">JARVIS</span>' : ""}` +
+    `${escapeHtml(m.text)}</div>`).join("");
+}
+
+function showAsk(on) {
+  $("#v-clarify").hidden = !on;
+  $("#v-compose").hidden = on;
+}
+
+function voiceStep(step) {
+  if (step.status === "clarify" || step.status === "proposal") {
+    DR.voiceRuleId = step.rule_id || "";
+    DR.voiceStatus = step.status;
+    const clarify = step.status === "clarify";
+    $(".v-question").textContent = step.question || (clarify ? "Can you say more?" : "Save these rules?");
+    const prop = $(".v-proposal");
+    prop.textContent = step.proposal || "";
+    prop.hidden = !step.proposal;
+    $("#v-state").textContent = clarify
+      ? (step.remaining > 1 ? step.remaining + " questions left" : "Needs clarification")
+      : "Proposal ready";
+    const answer = $(".v-answer");
+    answer.value = "";
+    answer.placeholder = clarify ? "Your answer…" : "Optional — or just Confirm";
+    showAsk(true);
+    answer.focus({ preventScroll: true });
+  } else if (step.status === "committed") {
+    DR.voiceRuleId = "";
+    DR.voiceStatus = "";
+    showAsk(false);
+    say("jarvis", `Done — ${step.count} rule${step.count === 1 ? "" : "s"} now active.`, "ok");
+    toast("Rules saved");
+  } else if (step.status === "cancelled") {
+    DR.voiceRuleId = "";
+    DR.voiceStatus = "";
+    showAsk(false);
+    say("jarvis", "Cancelled. Nothing was changed.");
+  }
+}
+
+async function voiceBegin(key, btn) {
+  const input = $(".v-phrase");
+  const phrase = (input.value || "").trim();
+  if (!phrase) { toast("Describe a rule first", "err"); input.focus(); return; }
+  setBusy(btn, true);
+  let res = null, d = {};
+  try {
+    res = await fetch("/apps/rules/begin", post({ app_key: key, phrase }));
+    d = await res.json().catch(() => ({}));
+  } catch (e) {}
+  setBusy(btn, false);
+  if (!res || !res.ok) { toast(d.error || "JARVIS couldn't read that rule", "err"); return; }
+  input.value = "";
+  say("user", phrase);
+  voiceStep(d);
+}
+
+async function voiceClarify(key, btn, answerOverride) {
+  const input = $(".v-answer");
+  // A proposal only needs a yes; a clarification needs a real answer.
+  const answer = answerOverride || (input.value || "").trim() || (DR.voiceStatus === "proposal" ? "yes" : "");
+  if (!answer) { toast("Answer the question first", "err"); input.focus(); return; }
+  setBusy(btn, true);
+  let res = null, d = {};
+  try {
+    res = await fetch("/apps/rules/clarify", post({ app_key: key, rule_id: DR.voiceRuleId || "", answer }));
+    d = await res.json().catch(() => ({}));
+  } catch (e) {}
+  setBusy(btn, false);
+  if (!res || !res.ok) { toast(d.error || "Couldn't send the answer", "err"); return; }
+  if (DR.thread.length && $(".v-question").textContent) say("jarvis", $(".v-question").textContent);
+  say("user", answer);
+  voiceStep(d);
+  if (d.status === "committed") await refreshRules(key);
+}
+
+async function refreshRules(key) {
+  let d = null;
+  try {
+    const res = await fetch("/apps/rules/list?key=" + encodeURIComponent(key));
+    if (res.ok) d = await res.json();
+  } catch (e) {}
+  if (!d) return;
+  const rules = d.rules || [];
+  const a = findApp(key);
+  if (a) a.compiled_rules = rules;
+  if (DR.key === key) renderCurrentRules(rules);
+  updateCounts();
+  render();
+}
+
+// ------------------------------------------------------------------ wiring --
+
+function trapFocus(e) {
+  const nodes = [...$("#drawer").querySelectorAll("button, input, textarea, summary, [tabindex]")]
+    .filter(n => !n.disabled && n.offsetParent !== null);
+  if (!nodes.length) return;
+  const first = nodes[0], last = nodes[nodes.length - 1];
+  if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+}
+
+function init() {
+  $("#refresh").innerHTML = svg("refresh", 15);
+  $("#search-ico").innerHTML = svg("search", 15);
+  $("#dr-close").innerHTML = svg("close", 16);
+  $("#mic-ico").innerHTML = svg("mic", 15);
+  $("#drafts-chev").innerHTML = svg("chevron", 14);
+
+  $("#refresh").addEventListener("click", loadApps);
+  $("#search").addEventListener("input", render);
+  document.querySelectorAll(".tab").forEach(t => t.addEventListener("click", () => setTab(t.dataset.tab)));
+  document.querySelectorAll(".seg-btn").forEach(b => b.addEventListener("click", () => setFilter(b.dataset.filter)));
+
+  const list = $("#list");
+  list.addEventListener("click", e => {
+    const actEl = e.target.closest("[data-act]");
+    const act = actEl ? actEl.dataset.act : "";
+    if (act === "retry") return loadApps();
+    if (act === "browse") return setTab("all");
+    if (act === "clear") { $("#search").value = ""; return setFilter("all"); }
+    const row = e.target.closest(".row");
+    if (!row || e.target.closest(".switch")) return;
+    const key = row.dataset.key;
+    if (act === "open") return openApp(key, actEl);
+    if (act === "hide") return hideApp(key, actEl);
+    openDrawer(key);
+  });
+  list.addEventListener("change", e => {
+    if (e.target.matches('input[data-act="toggle"]')) {
+      toggleApp(e.target.closest(".row").dataset.key, e.target.checked, e.target);
+    }
+  });
+
+  $("#scrim").addEventListener("click", closeDrawer);
+  $("#dr-close").addEventListener("click", closeDrawer);
+  $("#dr-toggle").addEventListener("change", e => toggleApp(DR.key, e.target.checked, e.target));
+  $("#dr-open").addEventListener("click", e => openApp(DR.key, e.currentTarget));
+  $("#dr-hide").addEventListener("click", e => hideApp(DR.key, e.currentTarget));
+  $("#v-begin").addEventListener("click", e => voiceBegin(DR.key, e.currentTarget));
+  $("#v-confirm").addEventListener("click", e => voiceClarify(DR.key, e.currentTarget));
+  $("#v-cancel").addEventListener("click", e => voiceClarify(DR.key, e.currentTarget, "cancel"));
+  $("#d-save").addEventListener("click", e => saveRules(DR.key, e.currentTarget));
+  $("#d-compile").addEventListener("click", e => compileRules(DR.key, e.currentTarget));
+  $("#d-accept").addEventListener("click", e => acceptProposal(DR.key, e.currentTarget));
+  $(".v-phrase").addEventListener("keydown", e => { if (e.key === "Enter") $("#v-begin").click(); });
+  $(".v-answer").addEventListener("keydown", e => { if (e.key === "Enter") $("#v-confirm").click(); });
+
+  document.addEventListener("keydown", e => {
+    const open = $("#drawer").classList.contains("open");
+    if (e.key === "Escape") {
+      if (open) { closeDrawer(); return; }
+      if (document.activeElement === $("#search") && $("#search").value) { $("#search").value = ""; render(); }
+      return;
+    }
+    if (e.key === "Tab" && open) { trapFocus(e); return; }
+    const typing = /^(INPUT|TEXTAREA)$/.test((document.activeElement || {}).tagName || "");
+    if (e.key === "/" && !typing && !open) { e.preventDefault(); $("#search").focus(); }
+  });
+
+  loadApps();
+}
+
+init();
 </script>
 </body>
 </html>
