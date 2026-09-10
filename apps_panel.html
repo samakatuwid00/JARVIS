@@ -117,6 +117,33 @@
   .msg { font-size: 12px; margin-top: 6px; min-height: 14px; color: var(--muted); }
   .msg.ok { color: var(--ok); }
   .msg.err { color: var(--danger); }
+  .tabs {
+    display: flex;
+    gap: 8px;
+    border-bottom: 1px solid #2a2a36;
+    margin-bottom: 16px;
+  }
+  .tab {
+    background: transparent;
+    color: var(--muted);
+    border: none;
+    border-bottom: 2px solid transparent;
+    border-radius: 0;
+    padding: 10px 14px;
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .tab.active { color: var(--text); border-bottom-color: var(--accent); }
+  .tab .count {
+    display: inline-block;
+    margin-left: 6px;
+    font-size: 11px;
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: #2a2a36;
+    color: var(--muted);
+  }
+  .tab.active .count { background: rgba(110,168,254,0.18); color: var(--accent); }
   .toolbar { margin-bottom: 16px; display: flex; gap: 10px; align-items: center; }
   .toolbar input {
     flex: 1;
@@ -132,6 +159,14 @@
 <body>
   <h1>Installed Apps</h1>
   <div class="sub">Manage registered applications and their runtime rules</div>
+  <div class="tabs">
+    <button id="tab-curated" class="tab active" onclick="setTab('curated')">
+      Curated Apps &amp; Sites <span class="count" id="count-curated">0</span>
+    </button>
+    <button id="tab-all" class="tab" onclick="setTab('all')">
+      All Detected (Raw) <span class="count" id="count-all">0</span>
+    </button>
+  </div>
   <div class="toolbar">
     <input id="search" placeholder="Filter by name or category…" oninput="render()" />
     <button class="ghost" onclick="loadApps()">↻ Refresh</button>
@@ -139,12 +174,29 @@
   <div id="grid" class="grid"></div>
 
 <script>
-let APPS = [];
+let CURATED = [];
+let ALL = [];
+let TAB = "curated";
 
 async function loadApps() {
   const res = await fetch("/apps");
   const data = await res.json();
-  APPS = (data.apps || []).slice();
+  ALL = (data.all || data.curated || data.apps || []).slice();
+  // Point the curated list at the same objects as ALL so an edit in one tab is
+  // visible in the other without a refetch.
+  const byKey = new Map(ALL.map(a => [a.key, a]));
+  CURATED = (data.curated || data.apps || []).map(a => byKey.get(a.key) || a);
+  document.getElementById("count-curated").textContent =
+    data.curated_count != null ? data.curated_count : CURATED.length;
+  document.getElementById("count-all").textContent =
+    data.all_count != null ? data.all_count : ALL.length;
+  render();
+}
+
+function setTab(tab) {
+  TAB = tab;
+  document.getElementById("tab-curated").classList.toggle("active", tab === "curated");
+  document.getElementById("tab-all").classList.toggle("active", tab === "all");
   render();
 }
 
@@ -152,14 +204,17 @@ function render() {
   const q = (document.getElementById("search").value || "").toLowerCase().trim();
   const grid = document.getElementById("grid");
   grid.innerHTML = "";
-  const list = APPS.filter(a =>
+  const source = TAB === "all" ? ALL : CURATED;
+  const list = source.filter(a =>
     !q || (a.name || "").toLowerCase().includes(q) || (a.category || "").toLowerCase().includes(q)
   );
   for (const a of list) {
     grid.appendChild(card(a));
   }
   if (!list.length) {
-    grid.innerHTML = '<div class="meta">No apps found.</div>';
+    grid.innerHTML = TAB === "curated"
+      ? '<div class="meta">No curated apps yet — open “All Detected (Raw)” and register one.</div>'
+      : '<div class="meta">No apps found.</div>';
   }
 }
 
@@ -187,6 +242,7 @@ function card(a) {
       </label>
       <div style="display:flex;gap:8px;">
         <button class="ghost" onclick="openApp('${escapeAttr(a.key)}', this)">Open</button>
+        ${TAB === "all" ? `<button class="ghost" onclick="hideApp('${escapeAttr(a.key)}', this)">Hide</button>` : ""}
       </div>
     </div>
     <div class="details">
@@ -268,6 +324,26 @@ async function openApp(key, btn) {
   alert("Open " + key + ":\n" + (result || (res.ok ? "ok" : "failed")));
 }
 
+async function hideApp(key, btn) {
+  btn.disabled = true;
+  const res = await fetch("/apps/hide", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key, hidden: true })
+  });
+  btn.disabled = false;
+  if (!res.ok) { btn.textContent = "Failed"; return; }
+  CURATED = CURATED.filter(a => a.key !== key);
+  ALL = ALL.filter(a => a.key !== key);
+  document.getElementById("count-curated").textContent = CURATED.length;
+  document.getElementById("count-all").textContent = ALL.length;
+  render();
+}
+
+function findApp(key) {
+  return ALL.find(x => x.key === key) || CURATED.find(x => x.key === key);
+}
+
 async function saveRules(key, btn) {
   const card = btn.closest(".card");
   const ta = card.querySelector(".drafts");
@@ -284,7 +360,7 @@ async function saveRules(key, btn) {
   if (res.ok) {
     msg.textContent = "Saved ✓";
     msg.className = "msg ok";
-    const a = APPS.find(x => x.key === key);
+    const a = findApp(key);
     if (a) a.rule_drafts = drafts;
   } else {
     msg.textContent = "Failed";
@@ -334,7 +410,7 @@ async function acceptProposal(key, btn) {
   if (res.ok) {
     msg.textContent = "Accepted ✓"; msg.className = "msg ok";
     card.querySelector(".proposal").style.display = "none";
-    const a = APPS.find(x => x.key === key);
+    const a = findApp(key);
     if (a) { a.compiled_rules = proposed; a.rule_drafts = proposed.map(r => r.source_phrase); }
   } else {
     msg.textContent = "Accept failed"; msg.className = "msg err";

@@ -14,7 +14,10 @@ GEMINI_MODEL = "gemini-2.5-flash"
 JARVIS_USE_9ROUTER = os.getenv("JARVIS_USE_9ROUTER", "true").lower() == "true"
 ROUTER_BASE_URL = os.getenv("ROUTER_BASE_URL", "http://localhost:20128/v1")
 ROUTER_MODEL = os.getenv("ROUTER_MODEL", "oc/mimo-v2.5-free")
-ROUTER_API_KEY = os.getenv("ROUTER_API_KEY", "dummy")
+# `or` not a getenv default: ROUTER_API_KEY= (set but empty) in .env returns ""
+# and the OpenAI client then raises "Missing credentials", which reads like a
+# JARVIS bug rather than an unconfigured 9router.
+ROUTER_API_KEY = os.getenv("ROUTER_API_KEY") or "dummy"
 # Free-tier 9router models tried (in order) when the primary is rate-limited
 # (429). They carry separate quotas, so a throttled primary hops to a fresh
 # model instead of dropping to demo mode. Last real fallback is Ollama (step 3).
@@ -113,6 +116,23 @@ IDLE_RESET_MINUTES = int(os.getenv("JARVIS_IDLE_RESET_MINUTES", "10"))
 # in Modelfile.jarvis and a model rebuild.
 LOCAL_HISTORY_TOKEN_BUDGET = int(os.getenv("JARVIS_LOCAL_HISTORY_TOKENS", "3500"))
 
+# Same ceiling for the CLOUD paths. Until now only the Ollama path trimmed by
+# tokens; the router replayed self.conversation in full, bounded solely by
+# _cap_conversation's 60-MESSAGE count. Message count is not a proxy for size —
+# 60 turns of user text measured ~717 tokens, but 60 messages carrying web
+# search and page-read results are unbounded. A big context window is not the
+# same as a good one: quality degrades long before the window is full, which is
+# what "hallucinates after a long conversation" looks like from outside.
+# Generous because cloud windows are large; a ceiling nonetheless.
+ROUTER_HISTORY_TOKEN_BUDGET = int(os.getenv("JARVIS_ROUTER_HISTORY_TOKENS", "12000"))
+
+# Tool results are the actual bloat: a page read or search can be tens of
+# thousands of characters, and it stays in history for every later turn. The
+# CURRENT turn always sees the full result — only the copy kept for replay is
+# clipped, so answering quality this turn is unchanged while the tail stops
+# growing without bound.
+TOOL_RESULT_HISTORY_CHARS = int(os.getenv("JARVIS_TOOL_RESULT_HISTORY_CHARS", "2000"))
+
 # Audio
 SAMPLE_RATE = 16000
 CHANNELS = 1
@@ -122,6 +142,23 @@ WHISPER_COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "int8")
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "medium.en")
 # Half of the 16 available cores; leaves headroom for TTS/server work.
 WHISPER_CPU_THREADS = int(os.getenv("WHISPER_CPU_THREADS", "8"))
+# Beam width for command transcription. Measured 2026-09-09 on a 6.21s clip,
+# small.en int8 / 8 threads, idle CPU: beam 5 = 1.63s, beam 1 = 1.53s, and the
+# decoded text was identical. Beam 5 bought nothing but latency.
+WHISPER_BEAM_SIZE = int(os.getenv("WHISPER_BEAM_SIZE", "1"))
+
+# --- Server-side wake engine's own Whisper ---------------------------------
+# The wake engine re-decodes a rolling window roughly once a second, forever.
+# Sharing the command model (small.en, 8 threads) meant each pass cost ~1.7s
+# against a 1.0s step, so it could never keep up and pinned 8 of 16 cores
+# whenever the room was not silent — including while the user was speaking a
+# command. Measured effect on the same clip: 1.63s idle vs 23.20s with the wake
+# engine running, a 14x penalty on exactly the path the user waits for.
+# A separate tiny.en on 2 threads decodes a window in ~0.3s, which is plenty for
+# spotting one word, and leaves the command path its cores.
+WAKE_WHISPER_MODEL = os.getenv("WAKE_WHISPER_MODEL", "tiny.en")
+WAKE_WHISPER_CPU_THREADS = int(os.getenv("WAKE_WHISPER_CPU_THREADS", "2"))
+
 # Vocabulary bias so the wake word and domain terms decode cleanly.
 WHISPER_INITIAL_PROMPT = os.getenv(
     "WHISPER_INITIAL_PROMPT",

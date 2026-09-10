@@ -22,7 +22,9 @@ from machine_capabilities import REGISTRY_PATH, load_registry
 # user opts in via the panel or mark_registered().
 SEED_REGISTERED = {
     "spotify", "chrome", "msedge", "brave", "explorer",
-    "code", "winword", "excel", "powerpnt", "notepad",
+    "code", "opencode", "winword", "excel", "powerpnt", "notepad",
+    "omniroute", "obsidian", "snippingtool", "powershell", "cmd",
+    "terminal", "vlc", "laragon", "xampp", "dbeaver",
 }
 
 # Apps that must NEVER be auto-registered (junk / system / installer helpers).
@@ -31,6 +33,45 @@ NEVER_REGISTER = {
     "docker-agent", "docker-ai", "docker-debug", "officeclicktorun",
     "mavinject32", "appvcleaner", "appvshnotify", "integratedoffice",
 }
+
+# Prefix families that are pure background noise on this machine: OEM utilities,
+# printer/scanner helpers, container-internal plugins and installer stubs. A key
+# starting with any of these is rejected the same way NEVER_REGISTER keys are.
+# Kept as prefixes (not a flat set) because vendors ship dozens of variants and
+# the blind scan picks up new ones on every rescan.
+NOISE_PREFIXES = (
+    # ASUS background utilities
+    "asus", "glidex", "aslogdump", "armourycrate", "aura",
+    # Epson printer / scanner tools
+    "epson", "es2", "e_",
+    # Docker internal plugins
+    "docker-",
+    # Duplicate installer / ClickToRun stubs
+    "officeclicktorun", "appvcleaner", "appvshnotify", "integratedoffice",
+    "vcredist", "vc_redist", "setup_", "unins",
+)
+
+
+def is_noise(key):
+    """True when the key is bloatware we never surface as a curated app."""
+    k = (key or "").lower()
+    if not k:
+        return True
+    if k in NEVER_REGISTER:
+        return True
+    return k.startswith(NOISE_PREFIXES)
+
+
+def is_hidden(key):
+    """True when the user explicitly hid this app, or it matches a noise family.
+
+    Noise is hidden *by default*: an explicit `hidden: false` in the registry
+    un-hides it again, so a user can always rescue a false positive.
+    """
+    entry = _apps().get(key)
+    if isinstance(entry, dict) and "hidden" in entry:
+        return bool(entry.get("hidden"))
+    return is_noise(key)
 
 
 def _apps():
@@ -46,7 +87,7 @@ def is_registered(key):
     # Explicit flag wins. Absent flag -> fall back to seed set membership.
     if "registered" in entry:
         return bool(entry.get("registered"))
-    return key in SEED_REGISTERED and key not in NEVER_REGISTER
+    return key in SEED_REGISTERED and not is_noise(key)
 
 
 def is_enabled(key):
@@ -82,7 +123,7 @@ def registered_apps():
 
 def detected_but_unregistered():
     return [k for k in _apps()
-            if k not in NEVER_REGISTER and not is_registered(k)]
+            if not is_noise(k) and not is_registered(k)]
 
 
 def _norm(s):
@@ -139,7 +180,7 @@ def migrate_to_optin():
             else:
                 det_count += 1
             continue
-        if key in SEED_REGISTERED and key not in NEVER_REGISTER:
+        if key in SEED_REGISTERED and not is_noise(key):
             entry["registered"] = True
             entry.setdefault("enabled", True)
             reg_count += 1

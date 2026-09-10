@@ -432,6 +432,43 @@ def resolve(name: str) -> dict | None:
     return None
 
 
+def resolve_candidates(name: str, limit: int = 6):
+    """Like resolve(), but reports AMBIGUITY instead of hiding it.
+
+    resolve() returns the first match at each tier and discards the rest, so
+    "open ch" silently picks one of the 46 manifest keys containing "ch" — the
+    caller cannot tell a certain match from a coin flip. This returns the tier
+    that matched and every key at that tier, so the caller can act when the
+    match is unambiguous and ask when it is not.
+
+    Returns (tier, [(key, entry), ...]) with tier in
+    "exact" | "prefix" | "substring" | None.
+    """
+    if not os.path.exists(MANIFEST_PATH):
+        return (None, [])
+    try:
+        with open(MANIFEST_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+    except OSError:
+        return (None, [])
+    apps = data.get("apps", {})
+    n = (name or "").lower().strip()
+    if not n:
+        return (None, [])
+
+    exact = [(k, v) for k, v in apps.items() if k == n]
+    if exact:
+        return ("exact", exact[:limit])
+    prefix = [(k, v) for k, v in apps.items() if k.startswith(n)]
+    if prefix:
+        # A single prefix hit is as good as exact; several is a real choice.
+        return ("prefix", sorted(prefix, key=lambda kv: len(kv[0]))[:limit])
+    substr = [(k, v) for k, v in apps.items() if n in k]
+    if substr:
+        return ("substring", sorted(substr, key=lambda kv: len(kv[0]))[:limit])
+    return (None, [])
+
+
 if __name__ == "__main__":
     print(write_manifest())
     m = resolve("vlc")

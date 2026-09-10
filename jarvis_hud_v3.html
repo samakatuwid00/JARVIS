@@ -206,6 +206,12 @@
     background: #16283c; border: 1px solid rgba(255, 180, 84, .2);
     border-radius: 14px; border-bottom-right-radius: 5px; padding: 8px 13px;
     color: #ffe7c4; }
+  /* Live interim text from the Web Speech recognizer, shown WHILE the user is
+     still speaking. Deliberately dimmed and italic: this is a provisional guess
+     from a different engine than the one that produces the final transcript, so
+     it must not read as settled text. It is replaced by the Whisper result. */
+  .jv-line-user.jv-provisional { opacity: .55; font-style: italic; font-weight: 400;
+    border-style: dashed; }
   /* The HUD line shows the reply currently being spoken; this panel is the
      scrollback. Hiding these outright (to kill the duplicate display) left the
      transcript showing only the user's own prompts, so every past reply
@@ -673,6 +679,13 @@
   var TARGET_RATE   = 16000;   // what we ship to Whisper
   var PREROLL_MS    = 900;     // audio kept before speech onset so the wake word is never clipped
   var CMD_HANG_MS   = 1000;    // silence that ends a command clip (sentences breathe; 800 clipped mid-thought)
+  // R3b: when the Web Speech interim text has stopped changing, the sentence is
+  // finished and the rest of CMD_HANG_MS is dead air. Ending at CMD_HANG_MIN_MS
+  // in that case saves ~400ms per turn. Falls back to the full CMD_HANG_MS
+  // whenever there is no interim signal (no Web Speech, or nothing recognized),
+  // so behaviour is unchanged on browsers without the recognizer.
+  var CMD_HANG_MIN_MS = 600;   // earliest end, only with a stable interim
+  var STABLE_MS       = 300;   // interim text unchanged this long = settled
   var CMD_MAX_MS    = 12000;   // room for a long command rather than truncating it
   var CMD_WAIT_MS   = 7000;    // no speech after wake word -> back to idle
   // Server watchdog. 45s was shorter than a real local-model turn: a ChatGPT
@@ -1160,6 +1173,69 @@
     if (audio) speak(audio); else if (mode !== 'speaking') goIdle();
   }
 
+  // -------------------------------------------------------- live interim text
+  // R3a: the wake recognizer already runs continuously with interimResults, and
+  // until now every interim was discarded unless it contained "jarvis". They are
+  // free live text: showing them while the user speaks removes the dead stretch
+  // where the HUD looked frozen until Whisper answered. The Whisper transcript
+  // remains authoritative and replaces this line the moment it lands.
+  var interimEl = null, interimText = '', interimChangedAt = 0;
+  // Index of the first SpeechRecognition result belonging to the CURRENT
+  // utterance. The recognizer is continuous, so ev.results keeps every earlier
+  // final for the life of the session — concatenating all of them made each new
+  // command render appended to the previous one. null = not yet established.
+  var interimBase = null;
+  // One user line per turn. The server emits a transcript for typed input too,
+  // and that line was already logged locally when it was sent.
+  var userLoggedThisTurn = false;
+
+  function showInterim(text) {
+    if (!chatLog) return;
+    var t = String(text || '').trim();
+    if (!t) return;
+    if (t !== interimText) { interimText = t; interimChangedAt = Date.now(); }
+    if (!interimEl) {
+      interimEl = document.createElement('div');
+      interimEl.className = 'jv-line jv-line-user jv-provisional';
+      var sp = document.createElement('span');
+      sp.className = 'jv-text';
+      interimEl.appendChild(sp);
+      chatLog.appendChild(interimEl);
+    }
+    interimEl.firstChild.textContent = t;
+    chatLog.scrollTop = chatLog.scrollHeight;
+  }
+
+  function clearInterim() {
+    if (interimEl && interimEl.parentNode) interimEl.parentNode.removeChild(interimEl);
+    interimEl = null; interimText = ''; interimChangedAt = 0; interimBase = null;
+  }
+
+  // The authoritative Whisper transcript has arrived. Keep the user's words in
+  // the transcript instead of deleting them: reuse the provisional bubble, swap
+  // in the final text and drop the provisional styling. Deleting it lost the
+  // command entirely, because the 'transcript' handler never logged a user line
+  // of its own — the panel only ever showed typed input and JARVIS's replies.
+  function commitInterim(finalText) {
+    var t = String(finalText == null ? '' : finalText).trim();
+    if (userLoggedThisTurn) { clearInterim(); return; }
+    if (interimEl) {
+      interimEl.className = 'jv-line jv-line-user';   // no longer provisional
+      interimEl.firstChild.textContent = t;
+      interimEl = null; interimText = ''; interimChangedAt = 0; interimBase = null;
+      if (chatLog) chatLog.scrollTop = chatLog.scrollHeight;
+    } else if (t) {
+      logConv('user', t);            // no interim (typed, or no Web Speech)
+    }
+    userLoggedThisTurn = true;
+  }
+
+  // True once the interim text has stopped changing for STABLE_MS. Used to end
+  // a capture early instead of always waiting out the full silence timer.
+  function interimStable() {
+    return interimText !== '' && (Date.now() - interimChangedAt) >= STABLE_MS;
+  }
+
   // ---------------------------------------------------------------- chat input
   // Slash commands are handled here, never sent as a prompt: on the local model
   // a turn costs seconds, and the model would try to *answer* "/clear" rather
@@ -1225,6 +1301,9 @@
       return;
     }
     logConv('user', value);
+    // Typed input logs its own line here; the server still echoes a transcript
+    // for it, and without this the echo would render the same words twice.
+    userLoggedThisTurn = true;
     chatInput.value = '';
     chatInput.placeholder = '> ';
     setTimeout(function () { chatInput.placeholder = PLACEHOLDER; }, 900);
@@ -1358,6 +1437,7 @@
 
     if (m.type === 'transcript') {
       console.log('[you] ' + m.text);
+      commitInterim(m.text);           // keep the words; Whisper's text wins
       // Session boundary rules (Phase 1 UX + spurious-close fix):
       //   * Bare "jarvis" OPENS the mic when truly off (speaks a listening cue).
       //   * Bare "jarvis" must NEVER CLOSE the session: Whisper routinely
@@ -1654,6 +1734,18 @@
     } catch (e) {}
   }
 
+  // The server may return MP3 (edge-tts) or WAV (kokoro / piper, both local).
+  // The MIME was hardcoded to audio/mp3, which only worked because browsers
+  // sniff data: URIs — it is wrong the moment a local engine is enabled, and
+  // sniffing is not guaranteed. Base64 of "RIFF" is "UklGR"; ID3/MPEG frames
+  // start "SUQz" or "//". Cheap prefix check, no decoding.
+  function audioMime(b64) {
+    var head = String(b64 || '').slice(0, 5);
+    if (head.indexOf('UklGR') === 0) return 'audio/wav';
+    if (head.indexOf('T2dnU') === 0) return 'audio/ogg';
+    return 'audio/mp3';
+  }
+
   function speak(b64, preserveMode) {
     var prevMode = mode;
     mode = 'speaking';
@@ -1661,7 +1753,7 @@
     stopSpeakLoop();                       // never double-analyse two clips
     setState('speaking', 'SPEAKING');
     send({ type: 'speech', state: 'start' });   // Phase C: duck music while JARVIS talks
-    var a = new Audio('data:audio/mp3;base64,' + b64);
+    var a = new Audio('data:' + audioMime(b64) + ';base64,' + b64);
     current = a;
     a.onended = a.onerror = function () {
       if (current === a) current = null;
@@ -1770,6 +1862,23 @@
       // 'idle' (freshly enabled mic, waiting for the first wake word). A bare
       // "jarvis" mid-conversation must not reset capture — Whisper routinely
       // appends the wake word to real commands, so block during active turns.
+      // R3a: while a command capture is open, the interims are live user text.
+      // The wake-word branch below still only runs when JARVIS is resting.
+      if (mode === 'command') {
+        // Establish the start of this utterance on the first event of the turn.
+        // Also re-establish it if the recognizer restarted (Chrome auto-stops
+        // every ~60s), which resets ev.results and would leave the base past
+        // the end of the array — producing a permanently empty live line.
+        if (interimBase === null || interimBase > ev.results.length - 1) {
+          interimBase = ev.resultIndex;
+        }
+        var live = '';
+        for (var k = interimBase; k < ev.results.length; k++) {
+          live += ev.results[k][0].transcript;
+        }
+        showInterim(live);
+        return;
+      }
       if (mode !== 'off' && mode !== 'idle') return;
       for (var i = ev.resultIndex; i < ev.results.length; i++) {
         var txt = ev.results[i][0].transcript;
@@ -1836,6 +1945,7 @@
 
   function goIdle() {
     stopSpeakLoop();                   // idempotent: kills the RAF + resets levers
+    clearInterim();                    // drop any provisional live text
     cap = null; capLen = 0; capHeard = false; capWaited = 0;
     speechMs = 0; silenceMs = 0;
     ring = []; ringLen = 0;
@@ -1905,6 +2015,9 @@
 
   function beginCapture(kind, seed) {
     mode = kind;                       // now always 'command' (wake handled by WakeListener)
+    clearInterim();                    // stale text from the previous turn must not
+                                       // count as a settled interim for R3b
+    userLoggedThisTurn = false;        // this turn has not logged its user line yet
     cap = []; capLen = 0; capWaited = 0;
     // The WakeListener already confirmed the wake word, so every capture here is a
     // command. capHeard starts false; the VAD (below) flips it once real speech lands.
@@ -1985,7 +2098,9 @@
     else if (!capHeard) { capWaited += VAD_TICK_MS; }
 
     var ms = (capLen / srcRate) * 1000;
-    var hang = CMD_HANG_MS;
+    // R3b: a settled interim means the sentence is done — no need to sit out the
+    // remaining silence. Without that signal this is exactly the old behaviour.
+    var hang = interimStable() ? CMD_HANG_MIN_MS : CMD_HANG_MS;
     var max = CMD_MAX_MS;
     if ((capHeard && silenceMs >= hang) || ms >= max) { endCapture(); return; }
     if (!capHeard && capWaited >= ((mode === 'command') ? CMD_WAIT_MS : 1200)) goIdle();

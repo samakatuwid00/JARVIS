@@ -212,6 +212,10 @@ def _arm_phase_b(ws, vf, response_text) -> None:
             _start_task_milestones(ws, vf, m.group(1))
     elif response_text.startswith("[NEEDS_CONFIRM"):
         _start_confirm_reminder(ws, vf)
+    elif response_text.startswith("[NEEDS_PICK]"):
+        # An ambiguous app name was NOT launched; JARVIS asked which one. Same
+        # reminder treatment as a confirm — the turn is waiting on the user.
+        _start_confirm_reminder(ws, vf)
 
 
 def decode_audio_to_wav(audio_bytes: bytes) -> str:
@@ -365,6 +369,31 @@ def _get_kokoro():
             _np.load = lambda *a, **k: _np_load(*a, allow_pickle=True, **k)
             _KOKORO_TTS = Kokoro(model, voices)
             _np.load = _np_load
+
+            # kokoro-onnx 0.4.7 (latest) feeds `speed` as int32 while
+            # kokoro-v1.0.onnx declares it float, so every synth died with
+            #   INVALID_ARGUMENT ... Actual: (tensor(int32)), expected: (tensor(float))
+            # and JARVIS silently fell back to edge-tts — which is why
+            # JARVIS_TTS_ENGINE=kokoro never actually took effect. Coerce each
+            # feed to the dtype the graph declares. This is a no-op once the
+            # library is fixed upstream, and adapts to either export variant.
+            _sess = _KOKORO_TTS.sess
+            _raw_run = _sess.run
+            _want = {i.name: i.type for i in _sess.get_inputs()}
+
+            def _run_coerced(output_names, input_feed, *a, **kw):
+                fixed = {}
+                for _name, _val in input_feed.items():
+                    _t = _want.get(_name)
+                    if _t == "tensor(float)":
+                        fixed[_name] = _np.asarray(_val, dtype=_np.float32)
+                    elif _t == "tensor(int64)":
+                        fixed[_name] = _np.asarray(_val, dtype=_np.int64)
+                    else:
+                        fixed[_name] = _val
+                return _raw_run(output_names, fixed, *a, **kw)
+
+            _sess.run = _run_coerced
             print("[TTS] Kokoro (local, offline) ready — JARVIS_TTS_ENGINE=kokoro")
             return _KOKORO_TTS
         print(f"[TTS] kokoro model missing in {_KOKORO_DIR}; using edge-tts fallback.")
@@ -497,6 +526,26 @@ def _load_model_meta():
 _load_model_meta()
 
 
+def _log_turn_timing(t):
+    """One line per voice turn: where the wall clock actually went.
+
+    Stages are cumulative timestamps; we print the deltas so a slow turn names
+    its own culprit instead of needing a hand-run benchmark.
+    """
+    try:
+        order = [("decode", "start"), ("stt", "decode"),
+                 ("brain", "stt"), ("tts", "brain")]
+        parts = []
+        for name, prev in order:
+            if name in t and prev in t:
+                parts.append(f"{name} {t[name] - t[prev]:.2f}s")
+        last = t.get("tts") or t.get("brain") or t.get("stt")
+        total = f" | total {last - t['start']:.2f}s" if last else ""
+        print(f"[TIMING] {' | '.join(parts)}{total}", flush=True)
+    except Exception:
+        pass  # instrumentation must never break a turn
+
+
 async def send_telemetry(websocket: WebSocket):
     """Push the per-turn numbers the HUD panels read.
 
@@ -585,25 +634,37 @@ async def get_hud():
 async def get_apps():
     """The app registry for the HUD's Apps modal.
 
-    Returns launchable apps grouped for display: name, category, path,
-    broken flag. Sorted by category then name. No auth needed — local only,
-    and the registry is already gitignored.
+    Returns two views of the same scan:
+    - `curated`: registered + not hidden — the short list the panel opens on.
+    - `all`: every detected app that is not hidden — the raw scan, so the user
+      can find something the curation missed (and hide the bloatware).
+    `apps` stays as an alias of `curated` for older callers.
     """
     import os as _os
     from machine_capabilities import load_registry
     # Phase 8: opt-in flags (registered/enabled) come from curate.py
     try:
-        from curate import is_registered, is_enabled
+        from curate import is_registered, is_hidden
     except Exception:
         is_registered = lambda k: False
-        is_enabled = lambda k: False
+        is_hidden = lambda k: False
     reg = load_registry()
     if not reg:
-        return JSONResponse({"error": "no registry", "apps": [], "count": 0})
-    out = []
+        return JSONResponse({"error": "no registry", "apps": [], "curated": [],
+                             "all": [], "count": 0, "curated_count": 0,
+                             "all_count": 0, "hidden_count": 0})
+    curated = []
+    all_apps = []
+    hidden_count = 0
     for key, entry in reg.get("apps", {}).items():
+        if not isinstance(entry, dict):
+            continue
+        if is_hidden(key):
+            hidden_count += 1
+            continue
         binp = entry.get("bin") or ""
-        out.append({
+        registered = is_registered(key)
+        item = {
             "name": entry.get("name", key),
             "key": key,
             "bin": binp,
@@ -612,12 +673,27 @@ async def get_apps():
             "broken": bool(binp) and not _os.path.exists(binp),
             "enabled": entry.get("enabled", True),
             "adapter": entry.get("kind"),
-            "registered": is_registered(key),
+            "registered": registered,
+            "hidden": False,
             "rule_drafts": entry.get("rule_drafts") or [],
             "compiled_rules": entry.get("compiled_rules") or [],
-        })
-    out.sort(key=lambda a: (a["category"], a["name"]))
-    return JSONResponse({"count": len(out), "generated": reg.get("generated"), "apps": out})
+        }
+        all_apps.append(item)
+        if registered:
+            curated.append(item)
+    sort_key = lambda a: (a["category"], a["name"])
+    curated.sort(key=sort_key)
+    all_apps.sort(key=sort_key)
+    return JSONResponse({
+        "count": len(curated),
+        "curated_count": len(curated),
+        "all_count": len(all_apps),
+        "hidden_count": hidden_count,
+        "generated": reg.get("generated"),
+        "curated": curated,
+        "all": all_apps,
+        "apps": curated,
+    })
 
 
 @app.post("/apps/open")
@@ -838,7 +914,8 @@ async def post_apps_hide(message: Request):
     except Exception:
         return JSONResponse({"error": "bad json"}, status_code=400)
     key = (body.get("key") or "").strip()
-    hide = bool(body.get("hide", True))
+    # `hidden` is the documented field; `hide` stays accepted for older callers.
+    hide = bool(body.get("hidden", body.get("hide", True)))
     if not key:
         return JSONResponse({"error": "missing key"}, status_code=400)
     from machine_capabilities import REGISTRY_PATH
@@ -1020,12 +1097,26 @@ async def websocket_endpoint(websocket: WebSocket):
                 if not scan:
                     await websocket.send_text(json.dumps({"type": "status", "state": "transcribing"}))
 
+                # Stage timing. Without this the only way to find out where a
+                # turn goes is to stop the server and benchmark by hand.
+                _t = {"start": time.time()}
+
+                # The wake loop and this turn share 16 cores. Let the turn have
+                # them: the browser's own WakeListener still covers wake words,
+                # and a wake fired mid-turn is ignored by the HUD anyway.
+                try:
+                    wake_engine.pause()
+                except Exception:
+                    pass
+
                 try:
                     audio_bytes = base64.b64decode(audio_b64)
                     wav_path = decode_audio_to_wav(audio_bytes)
+                    _t["decode"] = time.time()
 
                     # Transcribe with Whisper
                     text = voice_engine._transcribe_from_file(wav_path)
+                    _t["stt"] = time.time()
                     os.unlink(wav_path)
 
                     if scan:
@@ -1086,10 +1177,15 @@ async def websocket_endpoint(websocket: WebSocket):
                     # a minute, and blocking here stalls the WebSocket for its duration.
                     response = await asyncio.to_thread(
                         brain.think, text.strip(), on_hermes_done, _push_progress)
+                    _t["brain"] = time.time()
                     _wd.stop()
                     _arm_phase_b(websocket, vf, response)
 
-                    await websocket.send_text(json.dumps({"type": "transcript", "text": text.strip()}))
+                    # The transcript already went out before think() started (that is
+                    # the point — the user sees their words while JARVIS works).
+                    # Re-sending it here made every voice turn emit two identical
+                    # transcript messages, which the HUD would render as a duplicate
+                    # user line now that it logs them.
                     sstore_log("user", text.strip())
 
                     # Signal the progress reader that think() is done.
@@ -1113,6 +1209,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     sstore_log("assistant", response)
                     await websocket.send_text(json.dumps({"type": "status", "state": "speaking"}))
                     tts_b64 = await tts_to_b64(response)
+                    _t["tts"] = time.time()
+                    _log_turn_timing(_t)
                     try:
                         wake_engine.suspend()
                     except Exception:
@@ -1130,6 +1228,11 @@ async def websocket_endpoint(websocket: WebSocket):
                     await websocket.send_text(json.dumps({
                         "type": "error", "text": str(e)
                     }))
+                finally:
+                    try:
+                        wake_engine.resume()
+                    except Exception:
+                        pass
 
             elif mtype == "command":
                 # Client-side slash commands. Kept off the "text" path on

@@ -16,7 +16,8 @@ import edge_tts
 
 from config import (
     WHISPER_MODEL, WHISPER_DEVICE, WHISPER_COMPUTE_TYPE,
-    WHISPER_CPU_THREADS, WHISPER_INITIAL_PROMPT,
+    WHISPER_CPU_THREADS, WHISPER_INITIAL_PROMPT, WHISPER_BEAM_SIZE,
+    WAKE_WHISPER_MODEL, WAKE_WHISPER_CPU_THREADS,
     WAKE_WORD, WAKE_WORD_TIMEOUT,
     TTS_VOICE, TTS_RATE, TTS_VOLUME
 )
@@ -45,6 +46,40 @@ class VoiceEngine:
         self.sample_rate = 16000
         self.is_listening = False
         self.audio_queue = queue.Queue()
+
+        # Built on first use by transcribe_wake(). Kept separate from the command
+        # model so the always-on wake loop cannot starve the path the user waits on.
+        self._wake_whisper = None
+        self._wake_lock = threading.Lock()
+
+    def transcribe_wake(self, audio_float):
+        """Transcribe a rolling window for wake-word spotting only.
+
+        Deliberately cheap: a tiny model on few threads, greedy decoding, no
+        initial_prompt. Spotting one known word does not need the accuracy the
+        command path needs, and this runs about once a second forever.
+        """
+        if self._wake_whisper is None:
+            with self._wake_lock:
+                if self._wake_whisper is None:
+                    print(f"[JARVIS] Loading wake Whisper ({WAKE_WHISPER_MODEL}, "
+                          f"{WAKE_WHISPER_CPU_THREADS} threads)...", flush=True)
+                    self._wake_whisper = WhisperModel(
+                        WAKE_WHISPER_MODEL,
+                        device=WHISPER_DEVICE,
+                        compute_type=WHISPER_COMPUTE_TYPE,
+                        cpu_threads=WAKE_WHISPER_CPU_THREADS
+                    )
+
+        segments, _ = self._wake_whisper.transcribe(
+            self._normalize(audio_float.astype(np.float32)),
+            language="en",
+            beam_size=1,
+            vad_filter=True,
+            vad_parameters=VAD_PARAMETERS,
+            condition_on_previous_text=False
+        )
+        return " ".join(segment.text for segment in segments).strip()
 
     def listen_for_wake_word(self, timeout=WAKE_WORD_TIMEOUT):
         """Record audio and check if it contains the wake word."""
@@ -137,7 +172,7 @@ class VoiceEngine:
         segments, info = self.whisper.transcribe(
             audio_float,
             language="en",
-            beam_size=5,
+            beam_size=WHISPER_BEAM_SIZE,
             vad_filter=True,
             vad_parameters=VAD_PARAMETERS,
             initial_prompt=WHISPER_INITIAL_PROMPT,
@@ -208,7 +243,7 @@ class VoiceEngine:
         segments, info = self.whisper.transcribe(
             audio_float,
             language="en",
-            beam_size=5,
+            beam_size=WHISPER_BEAM_SIZE,
             vad_filter=True,
             vad_parameters=VAD_PARAMETERS,
             initial_prompt=WHISPER_INITIAL_PROMPT,

@@ -26,8 +26,11 @@ Design notes / pitfalls
   server only acts when no browser-side wake has recently happened. The server
   tracks the last browser-wake time via `note_browser_wake()` (called from the WS
   handler when the browser's own listener fires).
-* Whisper is CPU-heavy; we only transcribe every WINDOW_S seconds and keep the
-  buffer small. On a quiet room this is a few Whisper calls/min.
+* Whisper is CPU-heavy. This loop re-decodes roughly once per STEP_S for as
+  long as the room is above the silence gate, so it is NOT 'a few calls/min'
+  in a normally noisy room — it is close to continuous. That is why it runs
+  its own tiny model on few threads (WAKE_WHISPER_MODEL) instead of sharing
+  the command model, and why it suspends while a command turn is in flight.
 """
 
 import time
@@ -73,6 +76,7 @@ class WakeEngine:
         self._last_fire = 0.0
         self._suspend_until = 0.0
         self._last_browser_wake = 0.0
+        self._paused = False
         self._last_audio_ts = 0.0
         self._running = False
         self._thread = None
@@ -91,8 +95,23 @@ class WakeEngine:
 
     def suspend(self, ms=None):
         """Mute the listener briefly (e.g. right after JARVIS speaks TTS)."""
-        s = (ms or self.suspend_ms * 1000) / 1000.0
+        # self.suspend_ms never existed — the ctor stores suspend_s — so every
+        # no-arg suspend() raised AttributeError. All three callers wrap this in
+        # a bare except, so the failure was silent and the engine kept decoding
+        # straight through JARVIS's own TTS.
+        s = (ms / 1000.0) if ms else self.suspend_s
         self._suspend_until = max(self._suspend_until, time.time() + s)
+
+    def pause(self):
+        """Hold the listener off until resume(): a command turn is in flight.
+
+        Unlike suspend(), this has no deadline — a turn can run for a minute and
+        we must not resume decoding halfway through it and steal its cores.
+        """
+        self._paused = True
+
+    def resume(self):
+        self._paused = False
 
     def note_browser_wake(self):
         """The browser's own Web Speech listener fired — don't double-trigger."""
@@ -162,6 +181,8 @@ class WakeEngine:
             now = time.time()
             if now - self._last_fire < self.cooldown:
                 continue
+            if self._paused:
+                continue                      # a command turn owns the CPU
             if now < self._suspend_until:
                 continue                      # JARVIS is (or just was) speaking
             if self._buf.shape[0] < window_samples:
@@ -174,7 +195,9 @@ class WakeEngine:
             if np.abs(window).mean() < 0.002:
                 continue
             try:
-                text = self.ve._transcribe(window)
+                # Cheap wake-only model, not the command model — see
+                # VoiceEngine.transcribe_wake() and WAKE_WHISPER_MODEL.
+                text = self.ve.transcribe_wake(window)
             except Exception as e:
                 self.last_err = f'transcribe error: {e}'
                 continue
