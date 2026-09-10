@@ -1380,8 +1380,21 @@
       if (now - lastWakeAt < 2000) return;   // de-dupe against the browser listener
       lastWakeAt = now;
       // Phase C barge-in: the user just spoke — JARVIS stops talking immediately
-      // and any ducked music is restored.
-      if (current) { try { current.pause(); } catch (e) {} current = null; stopSpeakLoop(); }
+      // and any ducked music is restored. pause() never fires onended, so run the
+      // clip's end handler by hand: it restores the pre-clip mode (or goIdle()).
+      // Without it mode stayed 'speaking' forever and nothing could reopen.
+      if (current) {
+        var cut = current, onCut = cut.onended;
+        current = null;
+        // Saying "jarvis" over the reply means carry on: drop a pending close,
+        // else goIdle() would tear the mic down right before the capture opens.
+        sessionClosePending = false;
+        cut.onended = cut.onerror = null;
+        try { cut.pause(); } catch (e) {}
+        if (onCut) { try { onCut(); } catch (e) {} }
+        stopSpeakLoop();
+      }
+      if (mode === 'speaking') goIdle();     // no clip left to end it: never strand
       send({ type: 'speech', state: 'end' });
       // Open the voice session when resting (off after a reply, or idle from
       // enable-mic). Must match mode==='off' because goIdle() parks there.
@@ -1779,6 +1792,7 @@
               // The page holds a live mic stream, so resuming the contexts here
               // is a legitimate unlock — then retry once before giving up.
               var retry = function () {
+                if (current !== a) return;   // barged in / replaced: don't resurrect it
                 a.play().then(function () {
                       audioUnlocked = true; unlockBtn.classList.remove('show');
                       startSpeechVisuals(a);
@@ -1832,6 +1846,12 @@
   // check uses the network. If Web Speech is unavailable, we fall back to the
   // manual "Enable mic" path and surface a notice.
   var wakeRec = null, wakeActive = false;
+  // Liveness for the watchdog. SpeechRecognition exposes no state property, so
+  // track it ourselves: wakeLive is true between onstart and onend, and
+  // wakeLastEvt is the last time the recognizer did anything at all.
+  var wakeLive = false, wakeLastEvt = 0;
+  var WAKE_DEAD_MS = 4000;      // ended and not restarted for this long -> restart
+  var WAKE_STALE_MS = 90000;    // running but silent this long -> assume wedged
 
   function wakeWordIn(text) {
     if (!text) return false;
@@ -1853,11 +1873,23 @@
       return;
     }
     if (wakeRec) { try { wakeRec.stop(); } catch (e) {} }
-    wakeRec = new SR();
-    wakeRec.continuous = true;
-    wakeRec.interimResults = true;
-    wakeRec.lang = 'en-US';
-    wakeRec.onresult = function (ev) {
+    // Handlers check rec === wakeRec: a replaced recognizer's late onend must
+    // not restart (or mark dead) the one that superseded it.
+    var rec = new SR();
+    wakeRec = rec;
+    wakeLive = false;
+    wakeLastEvt = Date.now();
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.lang = 'en-US';
+    rec.onstart = function () {
+      if (rec !== wakeRec) return;
+      wakeLive = true;
+      wakeLastEvt = Date.now();
+    };
+    rec.onresult = function (ev) {
+      if (rec !== wakeRec) return;
+      wakeLastEvt = Date.now();
       // Open when JARVIS is resting: 'off' (after a reply / session close) or
       // 'idle' (freshly enabled mic, waiting for the first wake word). A bare
       // "jarvis" mid-conversation must not reset capture — Whisper routinely
@@ -1890,7 +1922,9 @@
         }
       }
     };
-    wakeRec.onerror = function (e) {
+    rec.onerror = function (e) {
+      if (rec !== wakeRec) return;
+      wakeLastEvt = Date.now();
       // 'no-speech' / 'aborted' / 'network' are benign for a continuous listener;
       // onend will re-arm us. Only a permission error is fatal.
       if (e && e.error === 'not-allowed') {
@@ -1899,28 +1933,43 @@
         return;
       }
     };
-    wakeRec.onend = function () {
+    rec.onend = function () {
+      if (rec !== wakeRec) return;
+      wakeLive = false;
+      wakeLastEvt = Date.now();
       // Chrome auto-stops continuous recognition every ~60s. Restart it whenever
       // it is still wanted — regardless of mode. Restarting mid-turn is harmless
       // because onresult ignores results unless mode === 'idle'. The old guard
       // (mode === 'idle') left the listener dead after the first auto-stop, which
-      // looked like JARVIS "disconnecting from the mic".
-      if (wakeActive) { try { wakeRec.start(); } catch (e) {} }
+      // looked like JARVIS "disconnecting from the mic". If start() throws here,
+      // wakeLive stays false and the watchdog below restarts it.
+      if (wakeActive) { try { rec.start(); } catch (e) {} }
     };
-    try { wakeRec.start(); wakeActive = true; } catch (e) {}
+    // Wanted even if start() throws, so the watchdog keeps retrying.
+    wakeActive = true;
+    try { rec.start(); } catch (e) {}
   }
 
-  // Self-healing watchdog: if the recognizer ever dies without onend (tab blurred,
-  // GC, network drop), restart it as long as the mic session is live.
+  // Self-healing watchdog: restart the recognizer when it has ended and not come
+  // back (onend restart threw), or has gone silent far longer than Chrome's own
+  // auto-stop cycle (died without onend: tab blurred, GC, network drop).
   setInterval(function () {
-    if (wakeActive && (!wakeRec || wakeRec.state === 'inactive') && mode !== 'nomic' && mode !== 'off') {
-      try { wakeRec = null; startWakeListener(); } catch (e) {}
+    if (!wakeActive || mode === 'nomic' || mode === 'off') return;
+    var quiet = Date.now() - wakeLastEvt;
+    if ((!wakeLive && quiet > WAKE_DEAD_MS) || quiet > WAKE_STALE_MS) {
+      console.log('[wake] listener stalled (' + quiet + 'ms) — restarting');
+      try { startWakeListener(); } catch (e) {}
     }
   }, 3000);
 
+  // Leaves a clean, restartable state: startWakeListener() (via startMic) builds
+  // a fresh recognizer, and the old one's late onend is ignored by the rec guard.
   function stopWakeListener() {
     wakeActive = false;
-    if (wakeRec) { try { wakeRec.stop(); } catch (e) {} wakeRec = null; }
+    wakeLive = false;
+    var old = wakeRec;
+    wakeRec = null;
+    if (old) { try { old.stop(); } catch (e) {} }
   }
 
   // ---------------------------------------------------------------- capture engine

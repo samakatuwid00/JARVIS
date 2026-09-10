@@ -33,6 +33,7 @@ Design notes / pitfalls
   the command model, and why it suspends while a command turn is in flight.
 """
 
+import os
 import time
 import queue
 import threading
@@ -41,6 +42,14 @@ import numpy as np
 import sounddevice as sd
 
 WAKE_WORDS = ['jarvis', 'jarviss', 'jarvus', 'jervis', 'javis', 'jarvez', 'charvis', 'jarv']
+
+# Silence gate: mean |amplitude| of the loudest BURST_S slice of the window must
+# reach this floor or the window is skipped. Measured on the loudest slice, not
+# the whole window: in a quiet room a spoken "jarvis" fills ~0.5 s of the 2.5 s
+# window, so the whole-window mean diluted soft voices under the floor. Steady
+# room tone has no loud slice, so it is still skipped.
+SILENCE_FLOOR = float(os.environ.get("JARVIS_WAKE_SILENCE_FLOOR", "0.002"))
+BURST_S = 0.5
 
 
 def wake_word_in(text):
@@ -193,7 +202,12 @@ class WakeEngine:
 
             window = self._buf[-window_samples:].astype(np.float32)
             # Skip near-silent windows (room tone) — no point burning Whisper.
-            if np.abs(window).mean() < 0.002:
+            # 0.1 s block means, then a BURST_S moving average: the loudest slice.
+            blk = int(self.sr * 0.1)
+            n = window.shape[0] // blk
+            means = np.abs(window[:n * blk]).reshape(n, blk).mean(axis=1)
+            k = max(1, min(n, int(round(BURST_S / 0.1))))
+            if np.convolve(means, np.ones(k) / k, mode='valid').max() < SILENCE_FLOOR:
                 continue
             try:
                 # Cheap wake-only model, not the command model — see
