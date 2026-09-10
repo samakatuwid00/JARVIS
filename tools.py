@@ -953,26 +953,88 @@ def _norm_phrase(s: str) -> str:
     return _RULE_VERB_RE.sub("", s).strip()
 
 
+def _load_app_registry() -> dict:
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               "app_registry.json"), encoding="utf-8") as f:
+            return json.load(f).get("apps", {})
+    except Exception:
+        return {}
+
+
+# Spoken browser word -> (label, app_registry keys to try in order). Edge is
+# scanned as msedge; the display names are fallbacks for other scans.
+_BROWSERS = {"brave": ("Brave", ("brave",)),
+             "chrome": ("Chrome", ("chrome", "google chrome")),
+             "edge": ("Edge", ("msedge", "microsoft edge", "edge")),
+             "firefox": ("Firefox", ("firefox", "mozilla firefox"))}
+_CHROME_KEYS = {"chrome", "google chrome"}
+_BROWSER_SUFFIX_RE = re.compile(
+    r"\s+(?:on|in)\s+(?:the\s+)?(chrome|brave|edge|firefox)(?:\s+browser)?\s*[.!?]*$",
+    re.I)
+
+
+def _browser_key(word: str, apps: dict | None = None) -> str | None:
+    """app_registry key for a spoken browser word ('brave' -> 'brave',
+    'edge' -> 'msedge'). An uninstalled browser keeps its first candidate
+    key so the launcher can say it is missing instead of silently using
+    Chrome."""
+    spec = _BROWSERS.get((word or "").strip().lower())
+    if not spec:
+        return None
+    apps = _load_app_registry() if apps is None else apps
+    return next((k for k in spec[1] if k in apps), spec[1][0])
+
+
+def _browser_label(key: str) -> str:
+    for label, keys in _BROWSERS.values():
+        if key in keys:
+            return label
+    return key
+
+
+def _open_url_in_browser(url: str, name: str, browser: str | None = None) -> str:
+    """Open url in the requested browser (an app_registry key).
+
+    Chrome, or no browser, is the unchanged browser_agent debug-Chrome path.
+    Any other browser gets its registered bin launched with the URL; a
+    missing bin falls back to Chrome and says so.
+    """
+    ba = __import__("browser_agent")
+    if not browser or browser in _CHROME_KEYS:
+        return ba.open_site(url, name=name)
+    label = _browser_label(browser)
+    exe = (_load_app_registry().get(browser) or {}).get("bin") or ""
+    if not exe or not os.path.isfile(exe):
+        return (f"{ba.open_site(url, name=name)}\n{label} isn't installed where "
+                f"I expected it, so I used Chrome.")
+    try:
+        subprocess.Popen([exe, url], close_fds=True,
+                         creationflags=getattr(subprocess, "DETACHED_PROCESS", 0)
+                         | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+    except OSError as e:
+        return f"[Error] Could not launch {label} for {name or url}: {e}"
+    return f"Opened {name or url} in {label}."
+
+
 def _rule_site_url(target: str):
-    """URL a user rule aliases to a spoken site name, or None.
+    """(url, owner_key) a user rule aliases to a spoken site name, or None.
 
     A rule like source_phrase 'visit hd movies' / intent 'it will visit
     hollyhdmovies.cc site' lives on an APP entry, so rules_engine.check never
     sees it for an unresolved site. Phrase-substring match only: the spoken
     target equals or contains the rule's phrase, or names one of the domains
-    in its intent. No NLP; no URL in the rule text means no alias.
+    in its intent. No NLP; no URL in the rule text means no alias. owner_key
+    is the app entry holding the rule (e.g. 'brave').
     """
     t = _norm_phrase(target)
     if len(t) < 3:
         return None
-    try:
-        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                               "app_registry.json"), encoding="utf-8") as f:
-            apps = json.load(f).get("apps", {})
-    except Exception:
+    apps = _load_app_registry()
+    if not apps:
         return None
     squashed = t.replace(" ", "")
-    for entry in apps.values():
+    for owner, entry in apps.items():
         if not isinstance(entry, dict) or entry.get("enabled") is False:
             continue
         for rule in entry.get("compiled_rules") or []:
@@ -987,20 +1049,30 @@ def _rule_site_url(target: str):
                 hit = any(re.search(r"\b" + re.escape(squashed) + r"\b", u, re.I)
                           for u in urls)
             if hit:
-                return urls[0] if "://" in urls[0] else "https://" + urls[0]
+                return (urls[0] if "://" in urls[0] else "https://" + urls[0],
+                        owner)
     return None
 
 
-def open_site(name: str, url: str = None, _rule_hops: int = 0) -> str:
+def open_site(name: str, url: str = None, _rule_hops: int = 0,
+              browser: str | None = None) -> str:
     """Resolve a spoken site name against web_registry.json and open it in
-    the JARVIS debug-Chrome. Falls back to treating the input as a URL."""
+    the JARVIS debug-Chrome. Falls back to treating the input as a URL.
+
+    browser: app_registry key the user asked for ('visit X on Brave').
+    Precedence: that > the browser entry owning a matching site rule > Chrome.
+    """
     import web_registry as wr
     # A spoken sentence ends in a period; it is not part of the name.
     name = (name or "").strip().rstrip(".!?").strip()
     if url is None and not _exact_site_key(name):
         alias = _rule_site_url(name)
         if alias:
-            return __import__("browser_agent").open_site(alias, name=name)
+            alias_url, owner = alias
+            if not browser and ((_load_app_registry().get(owner) or {})
+                                .get("category") == "browser"):
+                browser = owner
+            return _open_url_in_browser(alias_url, name, browser)
     key = wr.resolve_site(name) if url is None else None
     if key:
         site = wr.get_site(key)
@@ -1017,8 +1089,9 @@ def open_site(name: str, url: str = None, _rule_hops: int = 0) -> str:
             if _rule_hops >= 1:
                 return (f"[Error] Launch blocked by rule: redirect loop while "
                         f"opening {key}.")
-            return open_site(gate["target"], _rule_hops=_rule_hops + 1)
-        opened = __import__("browser_agent").open_site(site["url"], name=key)
+            return open_site(gate["target"], _rule_hops=_rule_hops + 1,
+                             browser=browser)
+        opened = _open_url_in_browser(site["url"], key, browser)
         if gate.get("warning"):
             opened = f"{opened}\n{gate['warning']}"
         return opened
@@ -1026,7 +1099,7 @@ def open_site(name: str, url: str = None, _rule_hops: int = 0) -> str:
     if "://" not in raw and _BARE_HOST_RE.fullmatch(raw):
         raw = "https://" + raw
     if "://" in raw:
-        return __import__("browser_agent").open_site(raw, name=name)
+        return _open_url_in_browser(raw, name, browser)
     return (f"[Error] No registered site matches '{name}'. "
             "Say 'add site <name> <url>' to register it, or 'rescan my sites'.")
 
@@ -1214,13 +1287,15 @@ def execute_search(parsed: dict) -> str:
     return search_web(q)
 
 
-def resolve_open_target(text: str, force: str | None = None):
+def resolve_open_target(text: str, force: str | None = None,
+                        browser: str | None = None):
     """Dual-registry lookup for 'open X' style commands.
 
     Returns ('site', key) | ('app', name) | ('clarify', candidates) |
     (None, text) when nothing matches — caller falls back to existing behavior.
     force: 'app' | 'site' honours explicit 'open the spotify app' /
-    'facebook site' phrasing.
+    'facebook site' phrasing. browser: a spoken 'on Brave' makes X a site,
+    so an app hit never wins or asks.
     """
     t = text.strip().lower().rstrip(".!?")
     # strip filler words
@@ -1242,6 +1317,8 @@ def resolve_open_target(text: str, force: str | None = None):
 
     import web_registry as wr
     site_key = wr.resolve_site(t)
+    if browser and force != "app":
+        return ("site", site_key) if site_key else (None, text)
 
     app_hit = False
     try:
@@ -2931,12 +3008,14 @@ def delegate(
     # ---- Phase 8 fast path: dual-registry "open X" -----------------------
     if re.match(r"^(open|launch|go to|goto|visit)\b", _otask.lower()):
         stripped = re.sub(r"^(open|launch|go to|goto|visit)\s+", "", _otask, flags=re.I)
-        # "visit X on Chrome": the browser is where to open it, not what.
-        stripped = re.sub(r"\s+(?:on|in)\s+(?:the\s+)?(?:chrome|brave|edge|firefox)"
-                          r"(?:\s+browser)?\s*[.!?]*$", "", stripped, flags=re.I)
-        kind8, target8 = resolve_open_target(stripped)
+        # "visit X on Brave": the browser is where to open it, not what.
+        _bm = _BROWSER_SUFFIX_RE.search(stripped)
+        browser8 = _browser_key(_bm.group(1)) if _bm else None
+        if _bm:
+            stripped = stripped[:_bm.start()]
+        kind8, target8 = resolve_open_target(stripped, browser=browser8)
         if kind8 == "site":
-            result = open_site(target8)
+            result = open_site(target8, browser=browser8)
             if cw is not None:
                 cw.append(task, "command", tool="open_site", result=result)
             return result
@@ -2953,8 +3032,10 @@ def delegate(
             return result
         # A visit always means a website: an unresolved one gets open_site's
         # registry-miss answer (or opens a raw URL), never a Hermes job.
-        if _otask.lower().startswith("visit"):
-            result = open_site(re.sub(r"^(?:the|my)\s+", "", stripped, flags=re.I))
+        # So does anything spoken "on <browser>".
+        if _otask.lower().startswith("visit") or browser8:
+            result = open_site(re.sub(r"^(?:the|my)\s+", "", stripped, flags=re.I),
+                               browser=browser8)
             if cw is not None:
                 cw.append(task, "command", tool="open_site", result=result)
             return result
