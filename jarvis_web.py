@@ -1344,6 +1344,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     # Transcribe with Whisper
                     text = voice_engine._transcribe_from_file(wav_path)
                     _t["stt"] = time.time()
+                    print(f"[STT] raw{' (scan)' if scan else ''}: {text!r}", flush=True)
                     os.unlink(wav_path)
 
                     if scan:

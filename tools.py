@@ -3658,6 +3658,46 @@ def _resolve_spotify_track(query: str) -> str:
     return uri
 
 
+def _cap_spotify_session_volume(cap: float, wait_s: float = 8.0) -> bool:
+    """Lower Spotify's own Windows audio-session volume to at most `cap` (0..1).
+
+    Per-process mixer only (pycaw, same mechanism as voice_ducking) — never the
+    system master volume. Spotify's session only exists once audio starts, so
+    poll briefly after playback. Returns True if a Spotify session was capped."""
+    import time as _t
+    try:
+        import comtypes
+        comtypes.CoInitialize()
+    except Exception:
+        pass
+    try:
+        from pycaw.pycaw import AudioUtilities, ISimpleAudioVolume
+    except Exception:
+        return False
+    deadline = _t.monotonic() + wait_s
+    while True:
+        capped = False
+        try:
+            sessions = AudioUtilities.GetAllSessions()
+        except Exception:
+            sessions = []
+        for s in sessions:
+            try:
+                if not s.Process or s.Process.name().lower() != "spotify.exe":
+                    continue
+                vol = getattr(s, "SimpleAudioVolume", None)
+                if vol is None:
+                    vol = s._ctl.QueryInterface(ISimpleAudioVolume)
+                if vol.GetMasterVolume() > cap:
+                    vol.SetMasterVolume(cap, None)
+                capped = True
+            except Exception:
+                continue
+        if capped or _t.monotonic() >= deadline:
+            return capped
+        _t.sleep(0.5)
+
+
 def play_spotify(query: str) -> str:
     """Play a song/artist/album on the user's DESKTOP Spotify app (the spicetify-
     patched install), hands-free — no Premium, no credentials, no GUI clicks.
@@ -3667,6 +3707,18 @@ def play_spotify(query: str) -> str:
     track URI, which makes the desktop app start playback. Returns a short status
     string for speech. On any failure it says plainly what went wrong."""
     import os as _os
+    # Honour the Spotify volume-cap rule here too — music_agent enforces it on
+    # web playback; this is the desktop-app path.
+    try:
+        try:
+            import music_rules as _music_rules
+        except ImportError:
+            import sys as _sys
+            _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+            import music_rules as _music_rules
+        cap = _music_rules.resolve_music_rules(app_key="spotify").get("cap_volume")
+    except Exception:
+        cap = None
     q = (query or "").strip()
     if not q:
         return "Say what you'd like to play, sir."
@@ -3702,7 +3754,10 @@ def play_spotify(query: str) -> str:
                 f"specific title or artist.")
     try:
         _os.startfile(uri)
-        return f"Playing {q} on Spotify, sir."
+        msg = f"Playing {q} on Spotify, sir."
+        if cap is not None and _cap_spotify_session_volume(cap):
+            msg += f" (volume capped at {int(round(cap * 100))}%)"
+        return msg
     except Exception as e:
         return f"[Error] Could not start playback: {e}"
 

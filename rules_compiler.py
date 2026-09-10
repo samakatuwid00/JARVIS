@@ -90,6 +90,47 @@ def parse_scaffold(app_id: str, phrase: str) -> dict:
     return {"candidate_rules": candidate_rules, "needs_clarification": needs_clarification, "questions": questions}
 
 
+_NUM_UNITS = {
+    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+    "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12,
+    "thirteen": 13, "fourteen": 14, "fifteen": 15, "sixteen": 16,
+    "seventeen": 17, "eighteen": 18, "nineteen": 19,
+}
+_NUM_TENS = {
+    "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50,
+    "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90,
+}
+_PCT_SUFFIX = r"\s*(?:%|(?:percent|pct)\b)"
+_DIGIT_PCT_RE = re.compile(r"(\d+)" + _PCT_SUFFIX, re.IGNORECASE)
+# "one hundred" | "forty five" / "forty-five" | "forty" | "seventeen" — longest first.
+_WORD_PCT_RE = re.compile(
+    r"\b(one[\s-]+hundred"
+    r"|(?:" + "|".join(_NUM_TENS) + r")(?:[\s-]+(?:one|two|three|four|five|six|seven|eight|nine)\b)?"
+    r"|" + "|".join(sorted(_NUM_UNITS, key=len, reverse=True)) + r")" + _PCT_SUFFIX,
+    re.IGNORECASE,
+)
+
+
+def _parse_percent(text):
+    """Pull a percentage out of a spoken answer as a digit string, else None.
+
+    "40%" keeps the original digit+% match; then "40 percent" / "40 pct"; then
+    number-words zero..one hundred ("forty percent", "sixty-five pct")."""
+    m = re.search(r"(\d+)\s*%", text)
+    if m:
+        return m.group(1)
+    m = _DIGIT_PCT_RE.search(text)
+    if m:
+        return m.group(1)
+    m = _WORD_PCT_RE.search(text)
+    if m:
+        parts = re.split(r"[\s-]+", m.group(1).lower())
+        if parts[-1] == "hundred":
+            return "100"
+        return str(sum(_NUM_TENS.get(p, _NUM_UNITS.get(p, 0)) for p in parts))
+    return None
+
+
 def apply_clarifications(app_id, candidate_rules, answers: dict) -> list:
     finalized = []
     for rule in candidate_rules:
@@ -98,7 +139,7 @@ def apply_clarifications(app_id, candidate_rules, answers: dict) -> list:
         new_rule = dict(rule)
         if rule["needs_clarification"] and answer:
             low = answer.lower()
-            pct = re.search(r"(\d+)\s*%", low)
+            pct = _parse_percent(low)
             if "all session" in low:
                 scope = "all_sessions"
             elif "this session" in low or "just now" in low or "current" in low:
@@ -106,7 +147,7 @@ def apply_clarifications(app_id, candidate_rules, answers: dict) -> list:
             else:
                 scope = "all_sessions"
             if "volume" in low or "quiet" in low:
-                cap = pct.group(1) if pct else "60"
+                cap = pct or "60"
                 new_rule["intent"] = "cap playback volume"
                 new_rule["adapter_check"] = f"pre_play: cap {app_id} volume at {cap}%"
                 new_rule["scope"] = scope
