@@ -1301,6 +1301,26 @@ class JarvisBrain:
         self.conversation = trimmed
 
     def think(self, user_input: str, on_hermes_done=None, progress_cb=None) -> str:
+        """One turn, then its observers: the conversation state records it and
+        the understand-first router decides in shadow (in the background,
+        after the reply - never in its way)."""
+        started = None
+        try:
+            import intent_router
+            started = intent_router.turn_started(user_input)
+        except Exception:
+            pass
+        reply = self._think_turn(user_input, on_hermes_done=on_hermes_done,
+                                 progress_cb=progress_cb)
+        if started is not None:
+            try:
+                intent_router.turn_finished(started, reply, backend=self.last_backend,
+                                            stats=self.last_stats)
+            except Exception as e:
+                print(f"[shadow] observer failed: {type(e).__name__}", flush=True)
+        return reply
+
+    def _think_turn(self, user_input: str, on_hermes_done=None, progress_cb=None) -> str:
         """Route to Cerebras (primary); then 9router; then local Ollama; then mock.
 
         Each hop falls through on error or rate-limit (429/quota/rate) so a dead

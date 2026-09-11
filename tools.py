@@ -1456,7 +1456,10 @@ def run_rule_action(rule: dict, owner: str, action: dict, slot: str = "",
         _PENDING_RULE_SLOT.update(rule=rule, owner=owner, action=action, ts=_time.time())
         # slot "movie name" -> "Which movie, sir?"
         label = re.sub(r"\s+name$", "", action.get("slot") or "") or "one"
-        return f"Which {label}, sir?"
+        question = f"Which {label}, sir?"
+        import dialogue_state
+        dialogue_state.ask("slot", question, {"rule": rule.get("rule_id")}, owner="tools")
+        return question
     url = _rules.build_action_url(action, slot)
     if not url:
         return f"[Error] The rule '{rule.get('source_phrase', '')}' has no website to open."
@@ -1474,6 +1477,7 @@ def run_rule_action(rule: dict, owner: str, action: dict, slot: str = "",
             import rules_steps
             rules_steps.remember("results", {"rule": rule, "owner": owner, "action": action,
                                              "slot": slot, "entry": entry}, url=url)
+            msg += _learn_preference(action, site, browser)
         elif slot:
             msg = (f"Opened {site} in {used} — look for {slot} there; this rule "
                    f"has no search address yet.")
@@ -1490,6 +1494,55 @@ def run_rule_action(rule: dict, owner: str, action: dict, slot: str = "",
     return out
 
 
+def _learn_preference(action: dict, site: str, browser: str | None) -> str:
+    """Count this search toward a learned default; after a streak, ask once
+    ("Make that the default?") and hold the question for the next reply."""
+    try:
+        import dialogue_state
+        import preferences
+        topic = re.sub(r"\s+name$", "", action.get("slot") or "site") + " search"
+        question = preferences.observe(topic, {"site": site, "browser": browser})
+        if question:
+            dialogue_state.ask("preference", question, {"topic": topic}, owner="tools")
+            return " " + question
+    except Exception:
+        pass
+    return ""
+
+
+# A reply that is ONLY a yes or no answers "Make that the default?"; anything
+# longer ("yes, search movie Godzilla") is a new command and is routed as one.
+_PREF_YES_RE = re.compile(
+    r"^(?:yes|yeah|yep|yup|sure|ok(?:ay)?|do it|go ahead|please do|make it (?:the )?default)"
+    r"[\s.,!]*(?:please|sir|jarvis)?[\s.!]*$", re.I)
+_PREF_NO_RE = re.compile(
+    r"^(?:no|nope|nah|no thanks|don'?t|never ?mind|not now|skip it|leave it)"
+    r"[\s.,!]*(?:thanks|sir|jarvis)?[\s.!]*$", re.I)
+
+
+_LEAD_ACK_RE = re.compile(r"^(?:yes|yeah|yep|ok(?:ay)?|sure)[,.!]?\s+(?=\S)", re.I)
+
+
+def _answer_preference(text: str):
+    """Yes/no to our "Make that the default?" question, else None."""
+    import dialogue_state
+    import preferences
+    asked = dialogue_state.pending("preference")
+    if not asked:
+        return None
+    topic = asked["payload"].get("topic")
+    if _PREF_YES_RE.match(text):
+        saved = preferences.confirm(topic)
+        dialogue_state.answered()
+        return f"Saved. {topic.capitalize()} now defaults to {preferences._describe(saved)}." \
+            if saved else None
+    if _PREF_NO_RE.match(text):
+        preferences.decline(topic)
+        dialogue_state.answered()
+        return "Okay, I won't ask about that again."
+    return None
+
+
 def try_rule_action(text: str):
     """Answer a spoken command from the Apps-panel action rules, else None.
 
@@ -1502,6 +1555,14 @@ def try_rule_action(text: str):
     t = _TRAILING_VOCATIVE_RE.sub("", t).strip()
     if not t:
         return None
+    try:
+        answer = _answer_preference(t)
+        if answer is not None:
+            return answer
+    except Exception:
+        pass
+    # "yes, search movie Godzilla": the leading okay isn't part of the command.
+    t = _LEAD_ACK_RE.sub("", t).strip() or t
     pend = dict(_PENDING_RULE_SLOT)
     _PENDING_RULE_SLOT.clear()
     try:

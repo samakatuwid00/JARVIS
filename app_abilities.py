@@ -374,6 +374,16 @@ def add_app(query, llm=None, progress=None, scan=True):
     else:
         tier, hits = mc.resolve_candidates(query)
         if not hits:
+            # Not in the software index (a fresh machine, or a new install):
+            # look at the computer itself before giving up.
+            say(f"Searching this computer for {query}...", 20)
+            q = query.lower()
+            scanned = {k: e for k, e in mc.scan().items()
+                       if q in k.lower() and mc._is_launchable(e.get("bin"))}
+            exact = {k: e for k, e in scanned.items() if k.lower() == q}
+            hits = list((exact or scanned).items())
+            tier = "exact" if exact else "substring"
+        if not hits:
             return {"error": f"I couldn't find an app called \"{query}\". Try its program "
                              "path, like C:\\Program Files\\App\\app.exe."}
         if tier != "exact" and len(hits) > 1:
@@ -519,6 +529,71 @@ def scan_app(key, launch=False, progress=None):
                               "version": entry.get("version")}
         save_apps(data)
     return {"found": len(scanned), "opened": opened}
+
+
+# "Deep scan all": one app at a time in the background, cancellable, and
+# resumable (apps already scanned are skipped).
+_SCAN_ALL = {"running": False, "cancel": False, "done": 0, "total": 0, "current": "",
+             "scanned": 0, "failed": 0}
+
+
+def scan_all_status():
+    return dict(_SCAN_ALL)
+
+
+def cancel_scan_all():
+    _SCAN_ALL["cancel"] = True
+
+
+def _scan_all_targets():
+    import curate
+    apps = load_apps()["apps"]
+    return [k for k, e in apps.items()
+            if isinstance(e, dict) and not e.get("hidden") and not e.get("deep_scan")
+            and e.get("app_kind") not in ("noise", "system") and curate.is_registered(k)]
+
+
+_SCAN_ALL_LOCK = threading.Lock()
+
+
+def claim_scan_all():
+    """Take the one "Deep scan all" slot. False when a scan already holds it:
+    two quick clicks must never launch apps from two scans at once."""
+    with _SCAN_ALL_LOCK:
+        if _SCAN_ALL["running"]:
+            return False
+        _SCAN_ALL.update(running=True, cancel=False, done=0, total=0, current="",
+                         scanned=0, failed=0)
+        return True
+
+
+def deep_scan_all(progress=None, claimed=False):
+    """Open, read and close every registered app not scanned yet. Returns a
+    summary; progress(stage, pct) reports each app. claimed=True when the
+    caller already took the slot with claim_scan_all()."""
+    say = progress or (lambda stage, pct: None)
+    if not claimed and not claim_scan_all():
+        return {"error": "A deep scan of all apps is already running."}
+    targets = _scan_all_targets()
+    _SCAN_ALL["total"] = len(targets)
+    try:
+        for i, key in enumerate(targets):
+            if _SCAN_ALL["cancel"]:
+                break
+            _SCAN_ALL["current"] = key
+            say(f"Scanning {key} ({i + 1} of {len(targets)})...", 100 * i / max(len(targets), 1))
+            try:
+                out = scan_app(key, launch=True)
+            except Exception as e:
+                out = {"error": type(e).__name__}
+            _SCAN_ALL["scanned" if "error" not in out else "failed"] += 1
+            _SCAN_ALL["done"] = i + 1
+    finally:
+        cancelled = _SCAN_ALL["cancel"]
+        _SCAN_ALL.update(running=False, current="")
+    return {"total": len(targets), "scanned": _SCAN_ALL["scanned"],
+            "failed": _SCAN_ALL["failed"], "cancelled": cancelled,
+            "left": len(targets) - _SCAN_ALL["done"]}
 
 
 def scan_soon(app):

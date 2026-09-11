@@ -21,7 +21,7 @@ class OfflineProbe:
 
 
 @pytest.fixture(autouse=True)
-def offline_probe(monkeypatch):
+def offline_probe(monkeypatch, tmp_path_factory):
     import rules_sim
     import rules_steps
     import rules_voice
@@ -33,3 +33,9 @@ def offline_probe(monkeypatch):
     monkeypatch.setattr(rules_voice, "_PENDING", {})
     import tools
     tools._PENDING_RULE_SLOT.clear()
+    # Learned defaults and the conversation state are per test, never the
+    # user's real memory/preferences.json.
+    import dialogue_state
+    import preferences
+    dialogue_state.reset()
+    monkeypatch.setattr(preferences, "_PATH", str(tmp_path_factory.mktemp("prefs") / "p.json"))

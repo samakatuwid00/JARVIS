@@ -176,6 +176,9 @@ def remember(kind, run, url, title=None):
     _LAST.update(kind=kind, url=url, title=title, ts=time.time(),
                  rule=run["rule"], owner=run["owner"], action=run["action"],
                  slot=run.get("slot", ""), entry=run.get("entry") or {})
+    import dialogue_state
+    dialogue_state.remember_result(kind, url=url, title=title, app=run["owner"],
+                                   slot=run.get("slot", ""))
 
 
 def is_follow_up(text):
@@ -379,7 +382,11 @@ def _pause(run, said):
     run["ts"] = time.time()
     _RUN.clear()
     _RUN.update(run)
-    return " ".join(s for s in said if s)
+    text = " ".join(s for s in said if s)
+    import dialogue_state
+    dialogue_state.ask(run.get("awaiting") or "step", text, {"rule": run["rule"].get("rule_id")},
+                       owner="rules_steps")
+    return text
 
 
 def start(rule, owner, action, slot="", entry=None):

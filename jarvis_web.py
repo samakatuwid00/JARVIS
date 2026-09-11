@@ -41,8 +41,13 @@ async def _guard_apps_writes(request: Request, call_next):
     own pages. The server binds 0.0.0.0 with no login and the handlers parse
     the body as JSON whatever its type, so without this any web page the user
     visits could post a rule (a text/plain POST skips the CORS preflight)."""
+    # What you said (shadow review) and your learned defaults stay on this
+    # computer: the server listens on the network, these pages don't.
+    if request.url.path.startswith(("/shadow", "/prefs")) and \
+            (request.client.host if request.client else "") not in ("127.0.0.1", "::1", "localhost"):
+        return JSONResponse({"error": "Only available on this computer."}, status_code=403)
     if request.method in ("POST", "PUT", "PATCH", "DELETE") \
-            and request.url.path.startswith("/apps"):
+            and request.url.path.startswith(("/apps", "/shadow", "/prefs")):
         ctype = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
         origin = request.headers.get("origin")
         same_origin = not origin or \
@@ -1252,6 +1257,73 @@ async def post_apps_abilities_test(message: Request):
         args[needs[0]] = str(body["value"]).strip()[:300]
     result = await asyncio.to_thread(app_abilities.run_ability, key, aid, args)
     return JSONResponse({"ok": not result.startswith("[Error]"), "result": result})
+
+
+@app.post("/apps/abilities/scan-all")
+async def post_apps_scan_all(message: Request):
+    """Start "Deep scan all" in the background: open, read and close each
+    registered app not scanned yet, one at a time. Returns at once; progress
+    is under key "apps-scan-all"."""
+    import threading
+    import app_abilities
+    if not app_abilities.claim_scan_all():
+        return JSONResponse({"error": "A deep scan of all apps is already running."}, status_code=409)
+    total = len(app_abilities._scan_all_targets())
+    threading.Thread(target=lambda: _apps_job(
+        "apps-scan-all", lambda say: app_abilities.deep_scan_all(progress=say, claimed=True)),
+        daemon=True).start()
+    return JSONResponse({"ok": True, "started": True, "total": total})
+
+
+@app.post("/apps/abilities/scan-all/cancel")
+async def post_apps_scan_all_cancel(message: Request):
+    """Stop after the app being scanned now; the next run resumes from there."""
+    import app_abilities
+    app_abilities.cancel_scan_all()
+    return JSONResponse({"ok": True})
+
+
+@app.get("/apps/abilities/scan-all")
+async def get_apps_scan_all():
+    import app_abilities
+    return JSONResponse(dict(app_abilities.scan_all_status(), ok=True))
+
+
+@app.get("/shadow/review")
+async def get_shadow_review(all: int = 0):
+    """Shadow mode: where the understand-first router would have acted
+    differently from JARVIS, newest first, with readiness stats."""
+    import intent_router
+    return JSONResponse({"ok": True, "items": intent_router.review(disagreements_only=not all),
+                         "stats": intent_router.stats()})
+
+
+@app.post("/shadow/label")
+async def post_shadow_label(message: Request):
+    """The user's verdict on one shadow turn: "old", "new" or "neither"."""
+    body = await _json_body(message) or {}
+    import intent_router
+    try:
+        intent_router.label(str(body.get("id") or ""), str(body.get("verdict") or ""))
+    except ValueError:
+        return JSONResponse({"error": "verdict must be old, new or neither"}, status_code=400)
+    return JSONResponse({"ok": True, "stats": intent_router.stats()})
+
+
+@app.get("/prefs")
+async def get_prefs():
+    """Defaults JARVIS learned from use and you agreed to."""
+    import preferences
+    return JSONResponse({"ok": True, "defaults": preferences.all_defaults()})
+
+
+@app.post("/prefs/forget")
+async def post_prefs_forget(message: Request):
+    body = await _json_body(message) or {}
+    import preferences
+    if not preferences.forget(str(body.get("topic") or "")):
+        return JSONResponse({"error": "unknown default"}, status_code=404)
+    return JSONResponse({"ok": True})
 
 
 @app.get("/apps/rules/progress")

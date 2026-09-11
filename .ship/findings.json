@@ -180,6 +180,46 @@
       "first_seen": "2026-09-11",
       "last_seen": "2026-09-11",
       "runs": 1
+    },
+    {
+      "id": "e9d373729fa5",
+      "path": "intent_router.py",
+      "category": "growth",
+      "summary": "shadow.jsonl gains one line per command and review() reads it whole",
+      "tier": "WATCH",
+      "first_seen": "2026-09-11",
+      "last_seen": "2026-09-11",
+      "runs": 1
+    },
+    {
+      "id": "629f52027cb0",
+      "path": "intent_router.py",
+      "category": "audit-offset",
+      "summary": "a shrinking audit.jsonl between turn start and end would mislabel that turn",
+      "tier": "WATCH",
+      "first_seen": "2026-09-11",
+      "last_seen": "2026-09-11",
+      "runs": 1
+    },
+    {
+      "id": "5321587229a4",
+      "path": "tools.py",
+      "category": "fail-open",
+      "summary": "preference learning and answers fail open silently on errors",
+      "tier": "WATCH",
+      "first_seen": "2026-09-11",
+      "last_seen": "2026-09-11",
+      "runs": 1
+    },
+    {
+      "id": "d5fa53ea19c3",
+      "path": "apps_panel.html",
+      "category": "clean-code",
+      "summary": "fetch/busy/toast pattern repeated across the new shadow and deep-scan handlers",
+      "tier": "CLEAN CODE",
+      "first_seen": "2026-09-11",
+      "last_seen": "2026-09-11",
+      "runs": 1
     }
   ]
 }

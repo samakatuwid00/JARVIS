@@ -343,6 +343,20 @@
     background: var(--surface-2); color: var(--text-2); border: 1px solid var(--border);
   }
   .ab.is-off .ab-name { color: var(--text-3); }
+  .sh-stats { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 12.5px; color: var(--text-2); padding: 12px 0 4px; }
+  .sh-stats b { color: var(--text); font-variant-numeric: tabular-nums; }
+  .sh-ready { color: var(--accent); }
+  .sh-block { padding: 10px 0 14px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
+  .sh-block h3 { font-size: 12px; font-weight: 600; margin: 0 0 8px; color: var(--text-2); }
+  .sh-pref { display: flex; align-items: center; gap: 10px; font-size: 13px; padding: 4px 0; }
+  .sh-pref span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .sh-card { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; background: var(--surface); display: grid; gap: 7px; margin-bottom: 10px; }
+  .sh-row { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 10px; font-size: 13px; }
+  .sh-row > span:first-child { color: var(--text-3); }
+  .sh-row > span:last-child { overflow-wrap: anywhere; }
+  @media (max-width: 640px) { .sh-row { grid-template-columns: 1fr; gap: 2px; } }
+  .sh-verdicts { display: flex; flex-wrap: wrap; gap: 6px; padding-top: 4px; }
+  .btn.is-chosen { border-color: var(--accent); color: var(--accent); }
   .progress { margin: 8px 0 12px; }
   .progress-bar {
     height: 4px; border-radius: 99px; overflow: hidden;
@@ -442,6 +456,8 @@
           <button class="btn btn-sm" id="h-add">Add app</button>
           <button class="btn btn-sm" id="h-scan" title="Find every app on this computer">Full scan</button>
           <button class="btn btn-sm btn-primary" id="h-gen" title="Give every registered app its predefined abilities">Create predefined rules for all</button>
+          <button class="btn btn-sm" id="h-deep" title="Open, read and close every registered app not scanned yet, one at a time">Deep scan all</button>
+          <button class="btn btn-sm btn-danger" id="h-deep-cancel" hidden>Stop deep scan</button>
         </div>
         <button class="icon-btn" id="refresh" title="Refresh" aria-label="Refresh"></button>
       </div>
@@ -472,6 +488,10 @@
         </button>
         <button id="tab-all" class="tab" role="tab" aria-selected="false" data-tab="all">
           All Detected (Raw) <span class="count" id="count-all">0</span>
+        </button>
+        <button id="tab-shadow" class="tab" role="tab" aria-selected="false" data-tab="shadow"
+                title="Where the new understand-first router would have acted differently">
+          Shadow review <span class="count" id="count-shadow"></span>
         </button>
       </nav>
     </div>
@@ -728,7 +748,7 @@ function updateCounts() {
 
 function setTab(tab) {
   S.tab = tab;
-  for (const t of ["curated", "all"]) {
+  for (const t of ["curated", "all", "shadow"]) {
     const el = $("#tab-" + t);
     el.classList.toggle("active", t === tab);
     el.setAttribute("aria-selected", String(t === tab));
@@ -755,6 +775,7 @@ function matches(a, q) {
 
 function render() {
   const list = $("#list");
+  if (S.tab === "shadow") { renderShadow(); return; }
   if (S.loading && !S.all.length) {
     list.innerHTML = Array.from({ length: 7 }, () =>
       '<div class="skel"><i class="sq"></i><i style="width:' + (30 + Math.random() * 35) + '%"></i><i></i></div>').join("");
@@ -1399,6 +1420,124 @@ async function scanThisApp(btn) {
   await loadApps();
 }
 
+// ------------------------------------------------ deep scan all (background) --
+
+async function deepScanAll(btn) {
+  if (!confirm("Deep scan all opens each registered app that hasn't been scanned yet, reads its buttons, and closes it again, one at a time. Windows will pop up while it runs. Start?")) return;
+  let res = null, d = {};
+  try {
+    res = await fetch("/apps/abilities/scan-all", post({}));
+    d = await res.json().catch(() => ({}));
+  } catch (e) {}
+  if (!res || !res.ok) { toast(d.error || "Couldn't start the deep scan", "err"); return; }
+  if (!d.total) { toast("Every registered app is already scanned"); return; }
+  watchDeepScan(btn);
+}
+
+async function watchDeepScan(btn) {
+  setBusy(btn, true);
+  $("#h-deep-cancel").hidden = false;
+  const stop = startProgress("#h-progress", "apps-scan-all", "Starting the deep scan...");
+  let st = { running: true };
+  while (st.running) {
+    await new Promise(r => setTimeout(r, 1500));
+    try { st = await (await fetch("/apps/abilities/scan-all")).json(); } catch (e) { break; }
+  }
+  stop();
+  setBusy(btn, false);
+  $("#h-deep-cancel").hidden = true;
+  toast(`Deep scan: ${st.scanned || 0} scanned, ${st.failed || 0} couldn't be read` +
+        (st.done < st.total ? `, ${st.total - st.done} left for next time` : ""));
+  await loadApps();
+}
+
+async function cancelDeepScan(btn) {
+  setBusy(btn, true);
+  try { await fetch("/apps/abilities/scan-all/cancel", post({})); } catch (e) {}
+  toast("Stopping after the app being scanned now");
+}
+
+// ----------------------------------------------------------- shadow review --
+
+function describeRoute(r) {
+  if (!r) return "—";
+  const on = r.app ? ` on ${r.app}` : "";
+  return {
+    rule: `your rule “${r.id}”${on}`,
+    ability: `${r.id || "an ability"}${r.app && !String(r.id || "").startsWith(r.app) ? on : ""}`,
+    web_search: "a web search",
+    chat: "just answer (no action)",
+    delegate: "hand it to Hermes",
+    ask: `ask: “${r.question || "a question"}”`,
+    invalid: "an option that doesn't exist (not allowed)"
+  }[r.type] || r.type;
+}
+
+async function renderShadow() {
+  const list = $("#list");
+  list.innerHTML = '<div class="skel"><i class="sq"></i><i style="width:40%"></i><i></i></div>';
+  let d = {}, p = {};
+  try {
+    [d, p] = await Promise.all([fetch("/shadow/review").then(r => r.json()), fetch("/prefs").then(r => r.json())]);
+  } catch (e) {
+    list.innerHTML = emptyState("Couldn't load shadow review", "JARVIS didn't answer. Check that the server is running.", "retry", "Retry");
+    return;
+  }
+  if (S.tab !== "shadow") return;
+  const s = d.stats || {};
+  const items = d.items || [];
+  $("#count-shadow").textContent = items.filter(x => !x.verdict).length || "";
+  const need = Math.max(0, 200 - (s.turns || 0));
+  const readiness = s.ready ? '<span class="sh-ready">Ready to switch</span>'
+    : `Not ready yet${need ? ` · ${need} more commands needed` : ""}${s.unsafe ? " · unsafe choices seen" : ""}`;
+  const prefs = Object.entries(p.defaults || {});
+  let html = `<div class="sh-stats">
+      <span><b>${s.turns || 0}</b> commands watched</span>
+      <span><b>${s.agreed || 0}</b> same decision</span>
+      <span><b>${Math.round((s.agreement_where_old_right || 0) * 100)}%</b> agreement where JARVIS was right</span>
+      <span><b>${s.new_right || 0}</b> new router right · <b>${s.old_right || 0}</b> JARVIS right · <b>${s.both_wrong || 0}</b> both wrong</span>
+      <span><b>${s.unsafe || 0}</b> unsafe</span>
+      <span>${readiness}</span>
+    </div>
+    <div class="sh-block"><h3>Learned defaults</h3>${prefs.length ? prefs.map(([topic, v]) =>
+      `<div class="sh-pref"><span><b>${escapeHtml(topic)}</b> → ${escapeHtml([v.site, v.browser && "in " + v.browser, v.app].filter(Boolean).join(" "))}</span>
+       <button class="btn btn-sm btn-quiet" data-forget="${escapeHtml(topic)}">Forget</button></div>`).join("")
+      : '<div class="empty-mini">None yet. After you use the same site or app for the same thing three times, JARVIS asks whether to make it the default.</div>'}</div>`;
+  if (!items.length) {
+    html += '<div class="empty-mini">No disagreements yet. Use JARVIS as usual; every command is compared in the background.</div>';
+  } else {
+    html += items.map(x => {
+      const btn = (v, label) => `<button class="btn btn-sm${x.verdict === v ? " is-chosen" : ""}" data-verdict="${v}" data-sid="${escapeHtml(x.id)}">${label}</button>`;
+      return `<div class="sh-card">
+        <div class="sh-row"><span>You said</span><span>“${escapeHtml(x.user)}”</span></div>
+        <div class="sh-row"><span>JARVIS did</span><span>${escapeHtml(describeRoute(x.actual))}${x.reply ? ` — “${escapeHtml(x.reply.slice(0, 140))}”` : ""}</span></div>
+        <div class="sh-row"><span>New router would</span><span>${escapeHtml(describeRoute(x.decision))}${x.reason ? ` — ${escapeHtml(x.reason)}` : ""} <span class="muted">(${Math.round((x.confidence || 0) * 100)}% sure)</span></span></div>
+        <div class="sh-row"><span>When</span><span>${escapeHtml(x.ts || "")}</span></div>
+        <div class="sh-verdicts">${btn("old", "JARVIS was right")}${btn("new", "New router was right")}${btn("neither", "Both wrong")}</div>
+      </div>`;
+    }).join("");
+  }
+  list.innerHTML = html;
+}
+
+async function labelShadow(id, verdict, btn) {
+  setBusy(btn, true);
+  let ok = false;
+  try { ok = (await fetch("/shadow/label", post({ id, verdict }))).ok; } catch (e) {}
+  setBusy(btn, false);
+  if (!ok) { toast("Couldn't save your verdict", "err"); return; }
+  renderShadow();
+}
+
+async function forgetDefault(topic, btn) {
+  setBusy(btn, true);
+  let ok = false;
+  try { ok = (await fetch("/prefs/forget", post({ topic }))).ok; } catch (e) {}
+  setBusy(btn, false);
+  toast(ok ? `Forgot the default for ${topic}` : "Couldn't forget that default", ok ? "ok" : "err");
+  if (ok) renderShadow();
+}
+
 // Runs the proposed rule once for real (opens the browser), before saving.
 async function voiceTest(key, btn) {
   const sample = ($(".v-sample").value || "").trim();
@@ -1511,6 +1650,18 @@ function init() {
   $("#add-row").addEventListener("submit", addApp);
   $("#h-scan").addEventListener("click", e => fullScan(e.currentTarget));
   $("#h-gen").addEventListener("click", e => generateAll(e.currentTarget));
+  $("#h-deep").addEventListener("click", e => deepScanAll(e.currentTarget));
+  $("#h-deep-cancel").addEventListener("click", e => cancelDeepScan(e.currentTarget));
+  $("#list").addEventListener("click", e => {
+    const v = e.target.closest("[data-verdict]");
+    if (v) return labelShadow(v.dataset.sid, v.dataset.verdict, v);
+    const f = e.target.closest("[data-forget]");
+    if (f) return forgetDefault(f.dataset.forget, f);
+  });
+  // A deep scan started before this page opened keeps reporting here.
+  fetch("/apps/abilities/scan-all").then(r => r.json()).then(st => {
+    if (st.running) watchDeepScan($("#h-deep"));
+  }).catch(() => {});
   $("#ab-scan").addEventListener("click", e => scanThisApp(e.currentTarget));
   $("#ab-list").addEventListener("change", e => {
     const row = e.target.closest(".ab");
