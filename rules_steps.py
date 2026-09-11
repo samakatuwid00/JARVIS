@@ -456,8 +456,13 @@ def resume(text, looks_new=False):
                 return f"[Error] {browser_cdp.label(browser)} didn't come back with its control port."
             run["i"] += 1
             return _advance(dict(run, url=url))
-        run["no_clicks"] = True
-        return _advance(run)
+        if _NO_RE.match(reply):
+            run["no_clicks"] = True
+            return _advance(run)
+        # Neither yes nor no: a new request ("delete the file..."), not an
+        # answer. It used to count as "no" and open the page.
+        cancel()
+        return None
     if kind in ("confirm", "confirm_ask"):
         if not _YES_RE.match(reply):
             if looks_new:

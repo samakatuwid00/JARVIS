@@ -26,11 +26,14 @@ Design notes / pitfalls
   server only acts when no browser-side wake has recently happened. The server
   tracks the last browser-wake time via `note_browser_wake()` (called from the WS
   handler when the browser's own listener fires).
-* Whisper is CPU-heavy. This loop re-decodes roughly once per STEP_S for as
-  long as the room is above the silence gate, so it is NOT 'a few calls/min'
-  in a normally noisy room — it is close to continuous. That is why it runs
-  its own tiny model on few threads (WAKE_WHISPER_MODEL) instead of sharing
-  the command model, and why it suspends while a command turn is in flight.
+* Whisper is CPU-heavy. This loop decodes at most once per step_s for as
+  long as the room is above the silence gate. Before 2026-09-11 nothing
+  enforced the step: it decoded after every 0.1 s block, so music kept two
+  cores busy nonstop and starved the command transcription. Audio that piled
+  up during a decode is folded in at once (the buffer keeps the newest
+  window), so the listener never falls behind. It runs its own tiny model on
+  few threads (WAKE_WHISPER_MODEL), pauses while a command turn is in flight,
+  and holds off while the browser is recording a command (hold()/release()).
 """
 
 import os
@@ -85,6 +88,8 @@ class WakeEngine:
         self._last_fire = 0.0
         self._suspend_until = 0.0
         self._last_browser_wake = 0.0
+        self._last_decode = 0.0
+        self._hold_until = 0.0
         self._paused = False
         self._last_audio_ts = 0.0
         self._running = False
@@ -122,6 +127,16 @@ class WakeEngine:
 
     def resume(self):
         self._paused = False
+
+    def hold(self, ms):
+        """The browser is recording a command: it owns the mic, so stay quiet.
+        A deadline, not a flag, so a capture that never reports back can't
+        leave the fallback deaf. Separate from suspend(): release() must not
+        cut short the post-TTS window."""
+        self._hold_until = time.time() + ms / 1000.0
+
+    def release(self):
+        self._hold_until = 0.0
 
     def note_browser_wake(self):
         """The browser's own Web Speech listener fired — don't double-trigger."""
@@ -169,66 +184,83 @@ class WakeEngine:
 
     # -- capture + detect loop ---------------------------------------------
     def _loop(self):
-        step_samples = int(self.sr * self.step_s)
-        window_samples = int(self.sr * self.window_s)
         while self._running:
             try:
-                chunk = self._q.get(timeout=1.0)
+                chunks = [self._q.get(timeout=1.0)]
             except queue.Empty:
                 # No audio arriving? Mark unhealthy only if it's been a while.
                 if time.time() - self._last_audio_ts > 5.0:
                     self.healthy = False
                     self.last_err = 'no microphone audio received'
                 continue
+            # Everything that arrived during the last decode, at once: only the
+            # newest window matters, and one block per pass would fall behind.
+            while True:
+                try:
+                    chunks.append(self._q.get_nowait())
+                except queue.Empty:
+                    break
             self.healthy = True
             self.last_err = ''
-            self._buf = np.concatenate([self._buf, chunk])
-            # Keep at most one window + a step of history.
-            cap = window_samples + step_samples
-            if self._buf.shape[0] > cap:
-                self._buf = self._buf[-cap:]
+            self._tick(chunks, time.time())
 
-            now = time.time()
-            if now - self._last_fire < self.cooldown:
-                continue
-            if self._paused:
-                continue                      # a command turn owns the CPU
-            if now < self._suspend_until:
-                continue                      # JARVIS is (or just was) speaking
-            if self._buf.shape[0] < window_samples:
-                continue
-            if now - self._last_browser_wake < 2.0:
-                continue                      # browser already handled it
+    def _tick(self, chunks, now):
+        """Buffer new audio; decode the newest window when every gate allows.
+        Returns True when it ran Whisper."""
+        step_samples = int(self.sr * self.step_s)
+        window_samples = int(self.sr * self.window_s)
+        self._buf = np.concatenate([self._buf] + list(chunks))
+        # Keep at most one window + a step of history.
+        cap = window_samples + step_samples
+        if self._buf.shape[0] > cap:
+            self._buf = self._buf[-cap:]
 
-            window = self._buf[-window_samples:].astype(np.float32)
-            # Skip near-silent windows (room tone) — no point burning Whisper.
-            # 0.1 s block means, then a BURST_S moving average: the loudest slice.
-            blk = int(self.sr * 0.1)
-            n = window.shape[0] // blk
-            means = np.abs(window[:n * blk]).reshape(n, blk).mean(axis=1)
-            k = max(1, min(n, int(round(BURST_S / 0.1))))
-            if np.convolve(means, np.ones(k) / k, mode='valid').max() < SILENCE_FLOOR:
-                continue
-            try:
-                # Cheap wake-only model, not the command model — see
-                # VoiceEngine.transcribe_wake() and WAKE_WHISPER_MODEL.
-                text = self.ve.transcribe_wake(window)
-            except Exception as e:
-                self.last_err = f'transcribe error: {e}'
-                if now - self._last_err_print >= 60.0:
-                    self._last_err_print = now
-                    print(f"[WakeEngine] transcribe error: {e!r}", flush=True)
-                continue
-            if wake_word_in(text):
-                print(f"[WakeEngine] wake word detected: {text!r}", flush=True)
-                delivered = True
-                if self._callback:
-                    try:
-                        # A callback returning False means nobody got the wake;
-                        # None (no return value) counts as delivered.
-                        delivered = self._callback() is not False
-                    except Exception as e:
-                        delivered = False
-                        print(f"[WakeEngine] callback error: {e!r}", flush=True)
-                if delivered:
-                    self._last_fire = now
+        if now - self._last_fire < self.cooldown:
+            return False
+        if self._paused:
+            return False                      # a command turn owns the CPU
+        if now < self._suspend_until:
+            return False                      # JARVIS is (or just was) speaking
+        if now < self._hold_until:
+            return False                      # the browser is recording a command
+        if self._buf.shape[0] < window_samples:
+            return False
+        if now - self._last_browser_wake < 2.0:
+            return False                      # browser already handled it
+        if now - self._last_decode < self.step_s:
+            return False                      # at most one decode per step
+
+        window = self._buf[-window_samples:].astype(np.float32)
+        # Skip near-silent windows (room tone) — no point burning Whisper.
+        # 0.1 s block means, then a BURST_S moving average: the loudest slice.
+        blk = int(self.sr * 0.1)
+        n = window.shape[0] // blk
+        means = np.abs(window[:n * blk]).reshape(n, blk).mean(axis=1)
+        k = max(1, min(n, int(round(BURST_S / 0.1))))
+        if np.convolve(means, np.ones(k) / k, mode='valid').max() < SILENCE_FLOOR:
+            return False
+        self._last_decode = now
+        try:
+            # Cheap wake-only model, not the command model — see
+            # VoiceEngine.transcribe_wake() and WAKE_WHISPER_MODEL.
+            text = self.ve.transcribe_wake(window)
+        except Exception as e:
+            self.last_err = f'transcribe error: {e}'
+            if now - self._last_err_print >= 60.0:
+                self._last_err_print = now
+                print(f"[WakeEngine] transcribe error: {e!r}", flush=True)
+            return True
+        if wake_word_in(text):
+            print(f"[WakeEngine] wake word detected: {text!r}", flush=True)
+            delivered = True
+            if self._callback:
+                try:
+                    # A callback returning False means nobody got the wake;
+                    # None (no return value) counts as delivered.
+                    delivered = self._callback() is not False
+                except Exception as e:
+                    delivered = False
+                    print(f"[WakeEngine] callback error: {e!r}", flush=True)
+            if delivered:
+                self._last_fire = now
+        return True

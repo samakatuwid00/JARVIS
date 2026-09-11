@@ -74,9 +74,22 @@ def is_hidden(key):
     return is_noise(key)
 
 
+_CACHE = {"key": None, "apps": {}}
+
+
 def _apps():
-    reg = load_registry() or {}
-    return reg.get("apps", {})
+    """The registry's apps, re-read only when the file changes. Every check
+    here used to parse the whole file: registered_match asked once per app,
+    twice, so opening an app spent ~7 s reading the same JSON 2,000 times."""
+    import machine_capabilities as mc
+    try:
+        st = os.stat(mc.REGISTRY_PATH)
+    except OSError:
+        return {}
+    key = (mc.REGISTRY_PATH, st.st_mtime_ns, st.st_size)
+    if _CACHE["key"] != key:
+        _CACHE.update(key=key, apps=(load_registry() or {}).get("apps", {}))
+    return _CACHE["apps"]
 
 
 def is_registered(key):
@@ -103,17 +116,22 @@ def mark_registered(key, registered=True, enabled=True):
     """Opt an app in (or out). Writes the explicit flag to the registry."""
     if not load_registry():
         return False
-    data = json.load(open(REGISTRY_PATH, encoding="utf-8"))
-    apps = data.setdefault("apps", {})
-    if key not in apps:
-        return False
-    apps[key]["registered"] = bool(registered)
-    if registered:
-        apps[key]["enabled"] = bool(enabled)
-    tmp = REGISTRY_PATH + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-    os.replace(tmp, REGISTRY_PATH)
+    # Same lock as the scans: a pin clicked while a Full scan was sorting
+    # was overwritten when the scan saved its own copy of the registry.
+    import app_abilities
+    with app_abilities._LOCK:
+        data = json.load(open(REGISTRY_PATH, encoding="utf-8"))
+        apps = data.setdefault("apps", {})
+        if key not in apps:
+            return False
+        apps[key]["registered"] = bool(registered)
+        apps[key]["pinned_by"] = "user"     # a Full scan leaves this choice alone
+        if registered:
+            apps[key]["enabled"] = bool(enabled)
+        tmp = REGISTRY_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        os.replace(tmp, REGISTRY_PATH)
     return True
 
 

@@ -24,6 +24,31 @@ def test_unsure_whisper_loses_to_the_live_text():
     assert tp.pick(HEARD, -0.9, LIVE, lambda h: HEARD) == (LIVE, "browser")
 
 
+def test_a_very_unsure_whisper_loses_to_a_short_live_command():
+    garbage = "And on the other hand, Jarvis, help them spot the place you are next."
+    assert tp.pick(garbage, -0.99, "jarvis open spotify", lambda h: garbage) == \
+        ("jarvis open spotify", "browser")
+    assert tp.pick("Be a part of it.", -0.97, "jarvis", lambda h: "Be a part of it.") == \
+        ("jarvis", "browser")
+
+
+def test_the_transcript_naming_a_known_app_wins():
+    known = {"claude", "spotify", "notepad"}
+    assert tp.pick("Can you open the clock?", -0.67, "jarvis can you open claude",
+                   lambda h: "Can you open the clock?", known=known) == \
+        ("jarvis can you open claude", "browser")
+    # Whisper naming the app keeps its text.
+    assert tp.pick("Open Spotify.", -0.3, "open spot if I", lambda h: "Open Spotify.",
+                   known=known) == ("Open Spotify.", "whisper")
+
+
+def test_garbage_with_nothing_to_fall_back_on_is_unsure():
+    garbage = "Be a part of it."
+    assert tp.pick(garbage, -0.97, "", lambda h: garbage) == (garbage, "unsure")
+    assert tp.pick(garbage, -0.97, "um the", lambda h: garbage) == (garbage, "unsure")
+    assert tp.pick(garbage, -0.5, "", lambda h: garbage) == (garbage, "whisper")
+
+
 def test_confident_whisper_keeps_its_text():
     assert tp.pick(HEARD, -0.2, LIVE, lambda h: HEARD) == (HEARD, "whisper")
 

@@ -905,8 +905,13 @@ def web_browse(url: str, mode: str = "open", query: str = "") -> str:
     oc = shutil.which("oc") or r"C:\Users\deped\AppData\Roaming\npm\oc.CMD"
     if not oc:
         return "[Error] oc CLI not found on PATH. Install with: npm i -g @only-cli/oc"
+    url = (url or "").strip()
+    if mode != "read" and "://" not in url and (" " in url or "." not in url):
+        # The model once passed a whole sentence ("go back to the lo-fi
+        # channels...") as the address.
+        return f"[Error] \"{url[:60]}\" isn't a web address."
     if "://" not in url and "." in url:
-        url = "https://" + url.strip()
+        url = "https://" + url
     try:
         if mode == "raw":
             cmd = [oc, "raw", url]
@@ -915,7 +920,7 @@ def web_browse(url: str, mode: str = "open", query: str = "") -> str:
         else:
             cmd = [oc, "open", url, "--budget", "500"]
         res = subprocess.run(cmd, capture_output=True, text=True, timeout=120,
-                             shell=True)
+                             shell=True, encoding="utf-8", errors="replace")
         out = (res.stdout or "").strip()
         if res.returncode != 0 or not out:
             err = (res.stderr or "").strip()[:200]
@@ -1195,6 +1200,12 @@ def search_sessions(query: str, limit: int = 10) -> str:
 
 _SEARCH_START = re.compile(
     r"^(search|look ?up|find|google)\b[,:]?\s*", re.I)
+_WEB_LEAD_RE = re.compile(r"^(?:the\s+)?(?:web|internet|online|google)\s+(?:for\s+)?", re.I)
+_RESEARCH_TAIL_RE = re.compile(
+    r"\b(?:summari[sz]e|tell\s+me|report\s+back|list\s+them|compare|explain)\b", re.I)
+_DEICTIC_TAIL = re.compile(
+    r"\s+(?:over\s+)?(?:there|here|(?:on|in)\s+(?:it|there|that|this)(?:\s+site)?|"
+    r"on\s+(?:that|this|the)\s+(?:site|page))[.!?]*$", re.I)
 _CORRECTION_START = re.compile(
     r"^(?:(?:no|oh|sorry|oops)[,.!]?\s+)*(?:i\s+meant?|actually)\b[,.:!]?\s*"
     r"|^no[, ]+|^sorry[,.!]?\s+", re.I)
@@ -1301,6 +1312,15 @@ def parse_search_command(text: str):
         return None
     body = raw[m.end():].strip()
 
+    # "search the web for X": the whole web, never the last site opened.
+    # Research phrasing ("... and summarize them") isn't a search tab at all:
+    # let the brain hand it to the executor.
+    web = _WEB_LEAD_RE.match(body)
+    if web:
+        body = body[web.end():].strip()
+        if _RESEARCH_TAIL_RE.search(body):
+            return None
+
     # correction marker: replace previous turn's query rather than append.
     # The marker may sit before the verb ("I mean search ...") or after it
     # (caller strips the verb first) — handle both.
@@ -1329,6 +1349,9 @@ def parse_search_command(text: str):
         body, bword = _split_browser(body)
         browser = _browser_key(bword) if bword else None
     body = _SEARCH_NAMED.sub("", body, count=1).strip()
+    # "search lo-fi music there": "there" points at the last site (the
+    # no-target path already uses it); it is not part of the query.
+    body = _DEICTIC_TAIL.sub("", body).strip() or body
 
     # tail qualifier: "... in <target>" — candidate capped at a few words,
     # resolved EXACTLY against AI names then the site registry.
@@ -1364,10 +1387,32 @@ def parse_search_command(text: str):
 
     out = {"query": body, "target": target, "browser": browser,
            "is_history_search": is_hist,
-           "corrected": corrected}
+           "corrected": corrected, "web": bool(web)}
     if body.strip().lower().rstrip("?.!, ") in _BARE_SEARCH_OBJECT:
         out["clarify"] = _SEARCH_CLARIFY
     return out
+
+
+# Sites whose own search page takes the query in the address. "Search X
+# there" goes straight to it instead of a Google site: query.
+_SITE_SEARCH = {
+    "youtube.com": "https://www.youtube.com/results?search_query={query}",
+    "m.youtube.com": "https://www.youtube.com/results?search_query={query}",
+    "music.youtube.com": "https://music.youtube.com/search?q={query}",
+}
+
+
+def _site_search_url(host: str) -> str | None:
+    """A search address for `host` with {query} in it: a known site, else one
+    a rule setup verified (site_probe's cache). None when unknown."""
+    template = _SITE_SEARCH.get(host)
+    if not template:
+        try:
+            import site_probe
+            template = site_probe._read_cache().get(host)
+        except Exception:
+            template = None
+    return template if isinstance(template, str) and "{query}" in template else None
 
 
 def execute_search(parsed: dict) -> str:
@@ -1396,7 +1441,7 @@ def execute_search(parsed: dict) -> str:
     browser = parsed.get("browser")
     try:
         import conversation_window as cw
-        site = cw.last_site()
+        site = None if parsed.get("web") else cw.last_site()
     except Exception:
         site = None
     if not site and not browser:
@@ -1406,14 +1451,20 @@ def execute_search(parsed: dict) -> str:
     if site:
         host = urllib.parse.urlsplit(site["url"]).netloc.lower()
         host = host[4:] if host.startswith("www.") else host
-    terms = f"site:{host} {q}" if host else q
-    url = "https://www.google.com/search?q=" + urllib.parse.quote_plus(terms)
+    template = _site_search_url(host) if host else None
+    if template:
+        url = template.replace("{query}", urllib.parse.quote_plus(q))
+    else:
+        terms = f"site:{host} {q}" if host else q
+        url = "https://www.google.com/search?q=" + urllib.parse.quote_plus(terms)
     opened = _open_url_in_browser(url, f"search: {q}", browser, remember=False)
     if opened.startswith("[Error]"):
         return opened
     note = opened.split("\n", 1)[1] if "\n" in opened else ""
     used = "Chrome" if note else _browser_label(browser or "chrome")
-    if host:
+    if template:
+        msg = f"Searching {site.get('key') or host} for {q} in {used}."
+    elif host:
         msg = (f"Searching {q} (on {site.get('key') or host}, {used}) — Google "
                f"results limited to {host}; I can't search inside the site itself.")
     else:
@@ -1434,7 +1485,8 @@ _RULE_CANCEL_RE = re.compile(
 _NEW_COMMAND_RE = re.compile(
     r"^(?:search|find|look\s*up|open|launch|visit|go\s+to|play|close|stop|pause|"
     r"what|who|how|why|when|where|which|can|could|is|are|do|does|tell|remember|"
-    r"rescan|volume|turn|set)\b", re.I)
+    r"rescan|volume|turn|set|delete|remove|create|make|send|write|download|install|"
+    r"email|message)\b", re.I)
 _SLOT_LEAD_RE = re.compile(r"^(?:it'?s|it\s+is|the\s+one\s+called|called|named)\s+", re.I)
 _TRAILING_VOCATIVE_RE = re.compile(r"[,\s]+(?:jarvis|sir)[.!?,\s]*$", re.I)
 
@@ -1752,11 +1804,43 @@ _SAFE_ALLOWLIST_RE = re.compile(
     """
 )
 # File-mutating verbs — even if allowlist matches, these need confirm (Phase 7).
+# 2026-09-11: "empty my recycle bin" matched none of these, read as chat, and
+# ran unconfirmed. Emptying, clearing, resetting and the like are mutations.
 _MUTATING_RE = re.compile(
     r"""(?ix)
       \b(create|make|build|generate|write|save|update|overwrite|clobber|replace|delete|remove|erase|wipe|purge|trash|format|drop|unlink|install|pip\s+install|npm\s+(i|install)|git\s+(push|reset|clean|checkout|rm)|chmod|chown|mkfs|sudo|deploy|migrate)\b
+    | \b(empty|emptied|clear|clean(\s*up)?|reset|flush|discard|uninstall|restore|revoke|rename|move|shred|nuke|kill|terminate|reboot|restart|shut\s*down|log\s*(out|off)|sign\s*out|disable)\b
+    | \bget\s+rid\s+of\b
     """
 )
+# Politeness and request framing before the real instruction: "please",
+# "can you", "I need you to", "go ahead and".
+_REQUEST_LEAD_RE = re.compile(
+    r"^(?:(?:please|jarvis|sir|hey|ok(?:ay)?|now|so|just|go\s+ahead\s+and|"
+    r"(?:can|could|would|will)\s+you|i\s+(?:want|need)\s+you\s+to)\b[,\s]*)+", re.I)
+# How chat starts: a pronoun, question word, auxiliary, greeting or a reply.
+# A task starting with anything else reads as an instruction ("empty my
+# recycle bin", "nuke my downloads"), whatever its verb.
+_CHAT_START = frozenset("""
+    i i'm im i've i'd i'll my me mine we we're our us you you're your it it's its
+    that that's this these those the a an there here what what's who who's whose
+    how how's why when where which is are am was were do does did can could would
+    will should shall may might have has had hello hi hey thanks thank good yes
+    yeah yep no nope ok okay sure cool nice great awesome wow lol haha hmm
+""".split())
+
+
+def _reads_as_command(task: str) -> bool:
+    """True when the task is an instruction rather than chat: it is framed
+    as a request ("can you ..."), or its first real word isn't how chat
+    starts. Used so an unlisted verb can't slip past the confirm gate."""
+    t = (task or "").strip()
+    lead = _REQUEST_LEAD_RE.match(t)
+    if lead and re.search(r"\byou\b", lead.group(0), re.I):
+        return True
+    rest = t[lead.end():] if lead else t
+    words = re.findall(r"[a-z']+", rest.lower())
+    return bool(words) and words[0] not in _CHAT_START
 
 # Legacy destructive regex kept for audit classification (not gating).
 _DESTRUCTIVE_RE = re.compile(
@@ -1811,16 +1895,22 @@ def _is_safe_task(task: str) -> bool:
     # Mutating always needs confirm, even if phrase looks safe.
     if _MUTATING_RE.search(t):
         return False
-    # Informational Q&A without explicit verb is safe if it ends with ? or is short question.
-    if t.endswith("?") and len(t.split()) <= 20:
-        return True
-    # Conversational exemption: no action verb anywhere -> there is nothing
-    # for the executor to DO on the machine, so answering is safe. (Verified
-    # live: a harmless "my codename is X, acknowledge it" was gated as
-    # destructive, costing a confirm + a 2-min Hermes round trip per chat turn.)
-    if is_conversational(t):
-        return True
-    return bool(_SAFE_ALLOWLIST_RE.search(t))
+    # An instruction ("empty my recycle bin", "can you nuke X?") is safe only
+    # through the allowlist. The question-mark and no-listed-verb exemptions
+    # below are for chat; before 2026-09-11 an instruction with an unlisted
+    # verb took them and ran with no confirm.
+    if not _reads_as_command(t):
+        # Informational Q&A without explicit verb is safe if it ends with ? or is short question.
+        if t.endswith("?") and len(t.split()) <= 20:
+            return True
+        # Conversational exemption: no action verb anywhere -> there is nothing
+        # for the executor to DO on the machine, so answering is safe. (Verified
+        # live: a harmless "my codename is X, acknowledge it" was gated as
+        # destructive, costing a confirm + a 2-min Hermes round trip per chat turn.)
+        if is_conversational(t):
+            return True
+    core = _REQUEST_LEAD_RE.sub("", t)
+    return bool(_SAFE_ALLOWLIST_RE.search(t) or _SAFE_ALLOWLIST_RE.search(core))
 
 # Module-level latch so a confirm only releases the EXACT pending task.
 _PENDING_DESTRUCTIVE = {"task": None}
@@ -2211,6 +2301,35 @@ def delegate_to_hermes(task: str, timeout: int = 300, max_turns: int = 15,
 def pending_confirm_task() -> str | None:
     """The raw user task currently latched awaiting confirm, or None."""
     return (_PENDING_HERMES_CALL or {}).get("raw_task")
+
+
+def decline_pending() -> str | None:
+    """The user said no to the confirm they just heard: drop that latch (the
+    Hermes task or the autonomous goal, whichever was asked last) and close
+    its job. None when nothing is waiting - the caller routes normally.
+
+    Before this, "no" reached the model, which answered "I have cancelled
+    that request" while the task stayed latched, and "no, cancel that" lost
+    its "no," to the correction stripper and became a NEW gated task."""
+    global _PENDING_HERMES_CALL
+    hermes = _PENDING_HERMES_CALL
+    goal = _PENDING_DESTRUCTIVE.get("autonomous")
+    if not hermes and not goal:
+        return None
+    goal_ts = _PENDING_DESTRUCTIVE.get("autonomous_ts") or 0.0
+    if goal and (not hermes or goal_ts >= (hermes.get("ts") or 0.0)):
+        _PENDING_DESTRUCTIVE["autonomous"] = None
+        _PENDING_DESTRUCTIVE["autonomous_ts"] = 0.0
+        what = goal
+    else:
+        what = hermes.get("raw_task") or hermes.get("task") or ""
+        _PENDING_HERMES_CALL = None
+        _PENDING_DESTRUCTIVE["task"] = None
+        if hermes.get("jid"):
+            import jobs as _jobs
+            _jobs.update(hermes["jid"], state="cancelled", note="declined by the user")
+    _audit_log("delegate_to_hermes", what, "declined", confirm=False)
+    return f"Cancelled, sir. I won't run “{what[:80]}”."
 
 
 def pending_autonomous_goal() -> str | None:
@@ -3985,7 +4104,7 @@ def list_installed_apps() -> str:
     return "\n".join(lines)
 
 
-def close_application(app: str) -> str:
+def close_application(app: str, force: bool = False) -> str:
     """Close a running application by friendly name, via registry lookup.
 
     Resolves the app exactly like open_application, derives its exe name,
@@ -4066,13 +4185,18 @@ def close_application(app: str) -> str:
     if not _running(exe_name):
         return f"Closed {name}."
 
-    # 2) Force: taskkill without /F first (sends WM_QUIT), then /F as last resort.
+    # 2) taskkill without /F (sends WM_QUIT): still a polite close.
     subprocess.run(["taskkill", "/IM", f"{exe_name}.exe"],
                    capture_output=True, timeout=15)
     time.sleep(1)
     if not _running(exe_name):
         return f"Closed {name}."
 
+    # 3) Ending the process loses unsaved work (Notepad asking "Save?" was
+    # force-killed after 5 s on 2026-09-11), so only when the user says so.
+    if not force:
+        return (f"{name} is still open; it may be asking to save. Say "
+                f"“force close {name}” to end it anyway.")
     subprocess.run(["taskkill", "/IM", f"{exe_name}.exe", "/F"],
                    capture_output=True, timeout=15)
     time.sleep(1)
@@ -4414,7 +4538,8 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "name": {"type": "string", "description": "Site name or alias (e.g. 'facebook', 'email')"},
-                "url": {"type": "string", "description": "Direct URL; bypasses registry lookup"}
+                "url": {"type": "string", "description": "Direct URL; bypasses registry lookup"},
+                "browser": {"type": "string", "description": "Browser the user named ('brave', 'chrome', 'msedge'); omit when none was named"}
             },
             "required": ["name"]
         }
@@ -4821,7 +4946,7 @@ TOOL_MAP = {
     "open_chatgpt_conversation": lambda **kw: __import__("browser_agent").open_chatgpt_conversation(
         kw["title_contains"]),
     "search_web": lambda **kw: search_web(kw["query"]),
-    "open_site": lambda **kw: open_site(kw["name"], kw.get("url")),
+    "open_site": lambda **kw: open_site(kw["name"], kw.get("url"), browser=kw.get("browser")),
     "rescan_sites": lambda **kw: rescan_sites(),
     "list_sites": lambda **kw: __import__("web_registry").list_sites(),
     "add_site": lambda **kw: __import__("web_registry").add_manual_site(
@@ -4861,7 +4986,7 @@ TOOL_MAP = {
     "install_app": lambda **kw: install_app(kw["app"], _truthy(kw.get("enable", True))),
     "uninstall_app": lambda **kw: uninstall_app(kw["app"]),
     "list_installed_apps": lambda **kw: list_installed_apps(),
-    "close_application": lambda **kw: close_application(kw["app"]),
+    "close_application": lambda **kw: close_application(kw["app"], force=bool(kw.get("force"))),
     "run_autonomous": lambda **kw: run_autonomous(
         kw["goal"], int(kw.get("timeout", 1800) or 1800)),
     "job_control": lambda **kw: job_control(

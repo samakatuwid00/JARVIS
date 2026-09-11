@@ -32,12 +32,13 @@ import urllib.parse
 import rules_engine
 
 KINDS = ("browser", "media", "office", "editor", "files", "terminal", "chat", "game",
-         "utility", "system", "noise")
+         "utility", "system", "noise", "cli")
 LEVELS = ("safe", "ask", "never")
 SORT_BATCH = 40          # apps per AI sorting call
 MAX_SCANNED = 40         # abilities kept from one deep scan
 SCAN_WAIT = 15           # seconds to wait for a launched app's window
 MAX_CONTROLS = 1500      # UI elements read per window (big apps have thousands)
+FIND_WAIT = 3            # seconds a click/type ability waits for its control
 SCAN_SOON_DELAY = 6      # seconds after JARVIS opens an app before reading it
 RESCAN_AFTER = 86400     # one opportunistic deep scan per app per day
 
@@ -62,6 +63,12 @@ _TYPE_SPECIALS_RE = re.compile(r"([+^%~(){}\[\]])")
 _NOISE_NAME_RE = re.compile(
     r"(update|updater|uninst|setup|installer|helper|service|crash|report|elevat|"
     r"daemon|agent|broker|repair|diag|telemetry|redist|runtime|notif|host$)", re.I)
+# Start Menu shortcuts to documents, not programs ("Python 3.14 Manuals").
+_DOC_NAME_RE = re.compile(
+    r"\b(manuals?|help|documentation|docs|readme|release notes|what is new|what's new|"
+    r"license|website|homepage|home page|faq)\b", re.I)
+# Console programs a person opens from the Start Menu: shells and interpreters.
+_SHELL_NAME_RE = re.compile(r"command prompt|powershell|python|node|terminal|shell|\bcmd\b", re.I)
 
 # Registry category (machine_capabilities._categorize) -> kind, when no AI answers.
 _CATEGORY_KIND = {"browser": "browser", "media": "media", "office": "office",
@@ -329,34 +336,115 @@ def generate(keys=None, llm=None, progress=None):
     return {"apps": len(targets), "abilities": made}
 
 
+def launch_class(key, entry, start_menu):
+    """What a scanned program is to a person:
+      "app"     - in the Start Menu (or a known app): pinned
+      "program" - opens a window but has no Start Menu entry: listed, not pinned
+      "cli"     - a console program (coreutils, pip scripts, JDK tools): hidden
+      "doc"     - a shortcut to a manual or help file: hidden"""
+    import curate
+    import machine_capabilities as mc
+    if _DOC_NAME_RE.search(key):
+        return "doc"
+    path = mc.norm_path(entry.get("bin"))
+    # Store apps (Snipping Tool) have no .lnk to find: the seed list names them.
+    if key in PROFILES or key in curate.SEED_REGISTERED or path.endswith(".lnk"):
+        return "app"
+    if mc.exe_subsystem(path) == "console":
+        # Start Menu shortcuts also run console tools ("Start PostgreSQL
+        # server" is pg_ctl.exe); only shells people open count as apps.
+        return "app" if path in start_menu and _SHELL_NAME_RE.search(key) else "cli"
+    return "app" if path and path in start_menu else "program"
+
+
+def _users(entry):
+    """True when the user owns the whole entry: added it or wrote rules for it.
+    (Pinning or hiding by hand is tracked per flag by pinned_by / hidden_by.)"""
+    return bool(entry.get("added_by_user") or entry.get("compiled_rules"))
+
+
+def _friendliness(key, entry):
+    """Sort key for the name kept among duplicates: the user's entry, a known
+    app, never a helper ("setup" and "epson scan 2" share setup.exe), then
+    names without versions or "(user)", then the shortest."""
+    helper = entry.get("app_kind") in ("noise", "system") or bool(_NOISE_NAME_RE.search(key))
+    return (not _users(entry), key not in PROFILES, helper, bool(re.search(r"\d|\(", key)),
+            len(key), key)
+
+
+def _duplicates(apps, classes):
+    """{key: kept_key} for entries that point at the same program as a
+    friendlier entry ("google chrome" and "chrome", "opencode 1.18.30")."""
+    import machine_capabilities as mc
+    by_path = {}
+    for k, cls in classes.items():
+        path = mc.norm_path(apps[k].get("bin"))
+        if cls in ("app", "program") and path:
+            by_path.setdefault(path, []).append(k)
+    out = {}
+    for keys in by_path.values():
+        keys.sort(key=lambda k: _friendliness(k, apps[k]))
+        out.update({k: keys[0] for k in keys[1:] if not _users(apps[k])})
+    return out
+
+
+def _place(entry, cls, dup_of):
+    """Hide and pin one scanned entry, leaving what the user decided alone."""
+    kind = entry.get("app_kind")
+    if not _users(entry) and entry.get("hidden_by") != "user":
+        entry["hidden"] = cls in ("cli", "doc") or kind == "noise" or bool(dup_of)
+        entry["hidden_by"] = "scan"
+        if dup_of:
+            entry["duplicate_of"] = dup_of
+        else:
+            entry.pop("duplicate_of", None)
+    if not _users(entry) and entry.get("pinned_by") != "user":
+        # Windowed programs outside the Start Menu and system tools (drivers,
+        # OEM utilities) stay under "All detected": pinning floods the list.
+        entry["registered"] = cls == "app" and not entry.get("hidden") \
+            and kind not in ("noise", "system", "cli")
+        entry["pinned_by"] = "scan"
+
+
 def full_scan(llm=None, progress=None):
-    """Find every launchable app (merging, never dropping user data), sort new
-    ones, hide noise, and register the rest. Abilities are a separate step."""
+    """Find every launchable program (merging, never dropping user data), keep
+    console tools, help shortcuts and duplicates out of sight, sort the new
+    apps, and pin the Start Menu ones. Abilities are a separate step."""
     say = progress or (lambda stage, pct: None)
     import machine_capabilities
     say("Scanning the computer for apps...", 5)
     machine_capabilities.write_registry()
+    say("Checking which programs are apps...", 8)
+    start_menu = machine_capabilities.start_menu_targets()
     with _LOCK:
         data = load_apps()
         apps = data["apps"]
-        new = {k: e for k, e in apps.items() if isinstance(e, dict) and not e.get("app_kind")}
-        kinds = sort_apps(new, llm=llm, progress=say) if new else {}
-        hidden = registered = 0
-        for k, kind in kinds.items():
-            _apply_kind(apps[k], kind)
-        for k, e in apps.items():
-            if not isinstance(e, dict):
+        classes = {k: launch_class(k, e, start_menu) for k, e in apps.items()
+                   if isinstance(e, dict)}
+        import curate
+        for k, cls in classes.items():
+            if _users(apps[k]):
                 continue
-            if e.get("hidden"):
-                hidden += 1
-            # System tools (drivers, OEM utilities) stay visible under "All
-            # detected" but aren't pinned: they would flood the curated list.
-            elif "registered" not in e and e.get("app_kind") not in ("noise", "system"):
-                e["registered"] = True
-                registered += 1
+            if cls == "cli":
+                apps[k]["app_kind"] = "cli"
+            elif curate.is_noise(k):         # OEM families (asus*, epson*, ...)
+                apps[k]["app_kind"] = "noise"
+        new = {k: apps[k] for k, cls in classes.items()
+               if cls in ("app", "program") and not apps[k].get("app_kind")}
+        kinds = sort_apps(new, llm=llm, progress=say) if new else {}
+        for k, kind in kinds.items():
+            apps[k]["app_kind"] = kind
+        dupes = _duplicates(apps, classes)
+        was_pinned = {k for k in classes if apps[k].get("registered")}
+        for k, cls in classes.items():
+            _place(apps[k], cls, dupes.get(k))
+        pinned = {k for k in classes if apps[k].get("registered") and not apps[k].get("hidden")}
         save_apps(data)
-    return {"found": len(apps), "sorted": len(kinds), "hidden": hidden,
-            "newly_registered": registered}
+    return {"found": len(classes), "sorted": len(kinds), "pinned": len(pinned),
+            "newly_registered": len(pinned - was_pinned),
+            "hidden": sum(1 for k in classes if apps[k].get("hidden")),
+            "cli": sum(1 for c in classes.values() if c == "cli"),
+            "duplicates": len(dupes)}
 
 
 def add_app(query, llm=None, progress=None, scan=True):
@@ -395,7 +483,9 @@ def add_app(query, llm=None, progress=None, scan=True):
         entry = data["apps"].setdefault(key, {})
         for f, v in found.items():
             entry.setdefault(f, v)
-        entry.update(added_by_user=True, registered=True, enabled=True, hidden=False)
+        entry.update(added_by_user=True, registered=True, enabled=True, hidden=False,
+                     pinned_by="user", hidden_by="user")
+        entry.pop("duplicate_of", None)
         say("Working out what it is...", 30)
         kind = sort_apps({key: entry}, llm=llm).get(key) or heuristic_kind(key, entry)
         entry["app_kind"] = "utility" if kind == "noise" else kind
@@ -460,6 +550,31 @@ def find_app_window(entry, timeout=1.0):
         time.sleep(0.5)
 
 
+def _label(info):
+    """A control's name as the deep scan stores it: whitespace collapsed."""
+    return " ".join((info.name or "").split())
+
+
+def _find_control(window, title, types=None):
+    """The window's first control named `title` (of one of `types`), waiting
+    up to FIND_WAIT seconds for it to appear. Desktop() windows are
+    UIAWrapper, which has no child_window(), so this searches descendants."""
+    want = (title or "").lower()
+    deadline = time.time() + FIND_WAIT
+    while True:
+        try:
+            controls = window.descendants()[:MAX_CONTROLS]
+        except Exception:
+            controls = []
+        for c in controls:
+            info = c.element_info
+            if _label(info).lower() == want and (not types or info.control_type in types):
+                return c
+        if time.time() >= deadline:
+            return None
+        time.sleep(0.5)
+
+
 def abilities_from_window(key, name, window):
     """Click and type abilities from a window's real controls."""
     seen, out = set(), []
@@ -470,7 +585,7 @@ def abilities_from_window(key, name, window):
         return []
     for c in controls:
         info = c.element_info
-        label = " ".join((info.name or "").split())
+        label = _label(info)
         kind = info.control_type
         if not (2 <= len(label) <= 40) or label.lower() in _WINDOW_CHROME or label.isdigit():
             continue
@@ -550,7 +665,7 @@ def _scan_all_targets():
     apps = load_apps()["apps"]
     return [k for k, e in apps.items()
             if isinstance(e, dict) and not e.get("hidden") and not e.get("deep_scan")
-            and e.get("app_kind") not in ("noise", "system") and curate.is_registered(k)]
+            and e.get("app_kind") not in ("noise", "system", "cli") and curate.is_registered(k)]
 
 
 _SCAN_ALL_LOCK = threading.Lock()
@@ -706,14 +821,14 @@ def _run_op(key, entry, op, args):
         window.type_keys(keys)
         return ""
     if kind == "click":
-        ctrl = window.child_window(title=op.get("target"))
-        if not ctrl.exists(timeout=3):
+        ctrl = _find_control(window, op.get("target"))
+        if ctrl is None:
             return f"[Error] I couldn't find \"{op.get('target')}\" in {_display(key, entry)}."
         ctrl.click_input()
         return ""
     if kind == "type":
-        ctrl = window.child_window(title=op.get("target"), control_type="Edit")
-        if not ctrl.exists(timeout=3):
+        ctrl = _find_control(window, op.get("target"), types=("Edit", "ComboBox"))
+        if ctrl is None:
             return f"[Error] I couldn't find the \"{op.get('target')}\" box."
         text = _TYPE_SPECIALS_RE.sub(r"{\1}", _fill(op.get("text") or "", args))
         ctrl.set_focus()

@@ -1,15 +1,20 @@
-"""intent_router.py - the understand-first router, running in shadow mode.
+"""intent_router.py - the understand-first router.
 
-Phase 4 of the JARVIS Apps Intelligence design (decision: shadow first, then
-switch on evidence). After every turn, in the background, it works out what it
-WOULD have done:
+Phase 4 of the JARVIS Apps Intelligence design ran it in shadow: after every
+turn it worked out what it WOULD have done and logged that next to what
+JARVIS did (logs/shadow.jsonl). Phase 5 (2026-09-11, the user's call before
+the 200-turn bar - 143 turns, 0 unsafe picks) lets it lead:
   understand - the command becomes a structured intent, with the conversation
                state (open question, last result, app in front) as context
   resolve    - one ability of one app, one of the user's rules, a web search,
                plain conversation, or a question back to the user
-Nothing is executed. The decision is logged next to what JARVIS actually did
-(logs/shadow.jsonl). The Apps panel's Shadow review lists disagreements; the
-user's verdicts (logs/shadow_labels.jsonl) are the evidence for the switch.
+  act        - route() runs an ability or a rule it is confident about; an
+               ability marked "ask" is asked first (one consent gate, in
+               dialogue_state). Anything else falls through to the old routing.
+The fast lane (rules, declines, confirms, instant answers) still runs first;
+the router only leads where the old code delegated or guessed.
+JARVIS_ROUTER=lead|shadow|off: "shadow" logs decisions without acting (the
+kill switch), "off" disables the router entirely.
 """
 
 import difflib
@@ -24,7 +29,15 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SHADOW_LOG = os.path.join(BASE_DIR, "logs", "shadow.jsonl")
 LABELS_LOG = os.path.join(BASE_DIR, "logs", "shadow_labels.jsonl")
 AUDIT_LOG = os.path.join(BASE_DIR, "logs", "audit.jsonl")
-ENABLED = os.getenv("SHADOW_ROUTER", "on").lower() not in ("0", "off", "false")
+MODE = os.getenv("JARVIS_ROUTER", "lead").strip().lower()
+if MODE not in ("lead", "shadow", "off"):
+    MODE = "lead"
+# The older switch still turns the shadow log off.
+ENABLED = MODE != "off" and os.getenv("SHADOW_ROUTER", "on").lower() not in ("0", "off", "false")
+# Below this the router's pick is logged, not acted on. Shadow data: right
+# picks scored 0.85-1.0, the wrong ones ("Play my favorite lo-fi artist" ->
+# brave.search_web) 0.7-0.8.
+LEAD_CONFIDENCE = float(os.getenv("JARVIS_ROUTER_CONFIDENCE", "0.85"))
 
 MAX_CANDIDATES = 8
 # Background turns finishing together must not interleave their lines.
@@ -170,6 +183,110 @@ def decide(text, snapshot, apps, llm=None):
     return decision, raw.get("intent") or {}, confidence, str(raw.get("reason") or "")[:200], model
 
 
+# --------------------------------------------------------------- leading --
+
+_YES_RE = re.compile(r"^(?:yes|yeah|yep|yup|sure|ok(?:ay)?|go ahead|do it|please|confirm)\b", re.I)
+_NO_RE = re.compile(r"^(?:no|nope|nah|don'?t|cancel|never ?mind|forget it|stop)\b", re.I)
+
+
+def worth_asking(text, snapshot, apps):
+    """Whether a model call can change anything: some app is in play (named,
+    in front, behind the last result, of the kind mentioned) or a question
+    of ours is open. Chat with no app in it skips the ~2 s call."""
+    return bool(shortlist(text, snapshot, apps)) or bool((snapshot or {}).get("open_question"))
+
+
+def _display(app, apps):
+    import app_abilities
+    return app_abilities._display(app, apps.get(app) or {})
+
+
+def _run_ability(app, ability_id, args, apps):
+    """Run one ability; (reply, ok). A missing detail or a failed step is
+    reported, never silently swallowed."""
+    import app_abilities
+    out = app_abilities.run_ability(app, ability_id, args or {})
+    if out.startswith("[Error]"):
+        return out, False
+    name = out[len("Done: "):].rstrip(".") if out.startswith("Done: ") else out
+    return f"{name}, sir ({_display(app, apps)}).", True
+
+
+def _run_rule(app, rule_id, args, apps):
+    import rules_engine
+    import tools
+    entry = apps.get(app) or {}
+    rule = next((r for r in entry.get("compiled_rules") or [] if r.get("rule_id") == rule_id), None)
+    action = rules_engine.action_of(rule, app, entry) if rule else None
+    if not action:
+        return None, False
+    slot = next((str(v) for v in (args or {}).values() if str(v).strip()), "")
+    out = tools.run_rule_action(rule, app, action, slot, entry)
+    return out, not out.startswith("[Error]")
+
+
+def route(text, snapshot, apps, llm=None):
+    """Decide, then act when confident. Returns (reply, record): reply is None
+    when the old routing should take the turn; record is what the shadow log
+    gets either way (no second model call)."""
+    t0 = time.time()
+    decision, intent, confidence, reason, model = decide(text, snapshot, apps, llm=llm)
+    record = {"decision": decision, "intent": intent, "confidence": confidence,
+              "reason": reason, "model": model, "ms": int((time.time() - t0) * 1000),
+              "mode": "lead", "executed": False}
+    kind, app, aid = decision.get("type"), decision.get("app"), decision.get("id")
+    if confidence < LEAD_CONFIDENCE or decision.get("unsafe"):
+        record["why_not"] = "low confidence" if confidence < LEAD_CONFIDENCE else "unsafe"
+        return None, record
+    reply, ok = None, False
+    if kind == "ability":
+        item = next((a for a in (apps.get(app) or {}).get("abilities") or [] if a.get("id") == aid), None)
+        if item and item.get("level") == "ask":
+            import dialogue_state
+            question = f"Should I {item['name'].lower()} in {_display(app, apps)}, sir?"
+            dialogue_state.ask("ability", question,
+                               payload={"app": app, "id": aid, "args": decision.get("args") or {}})
+            record["executed"] = True
+            record["asked"] = True
+            return question, record
+        reply, ok = _run_ability(app, aid, decision.get("args"), apps)
+        if not ok and reply and " needs a " in reply:
+            # "needs a query": ask rather than fall through to a guess.
+            reply, ok = reply.replace("[Error] ", "").rstrip(".") + ", sir. Which?", True
+    elif kind == "rule":
+        reply, ok = _run_rule(app, aid, decision.get("args"), apps)
+    elif kind == "ask" and decision.get("question"):
+        import dialogue_state
+        dialogue_state.ask("router", decision["question"])
+        reply, ok = decision["question"], True
+    if not ok:
+        record["why_not"] = reply or f"{kind}: old routing"
+        return None, record
+    record["executed"] = True
+    return reply, record
+
+
+def answer_pending_ability(text):
+    """The reply to "Should I ...?" for an ability marked ask: yes runs it, no
+    drops it. None when no such question is open or the reply is neither."""
+    import dialogue_state
+    p = dialogue_state.pending("ability")
+    if not p:
+        return None
+    t = (text or "").strip()
+    if _YES_RE.match(t):
+        import app_abilities
+        dialogue_state.answered()
+        pl = p.get("payload") or {}
+        apps = app_abilities.load_apps()["apps"]
+        reply, _ = _run_ability(pl.get("app"), pl.get("id"), pl.get("args"), apps)
+        return reply
+    if _NO_RE.match(t):
+        dialogue_state.answered()
+        return "Okay, sir. I won't."
+    return None
+
+
 # ------------------------------------------------------------- what ran --
 
 def _audit_since(pos):
@@ -257,8 +374,11 @@ def turn_started(text):
     return {"text": text, "ts": time.time(), "audit_pos": pos, "snapshot": dialogue_state.snapshot()}
 
 
-def turn_finished(started, reply, backend=None, stats=None, llm=None, background=True):
-    """After the reply: record the turn, then decide in shadow and log both."""
+def turn_finished(started, reply, backend=None, stats=None, llm=None, background=True,
+                  decided=None):
+    """After the reply: record the turn, then log the router's decision next
+    to what ran. `decided` is route()'s record when the router already
+    decided this turn (it is not asked twice); otherwise decide in shadow."""
     import dialogue_state
     entries = _audit_since(started["audit_pos"])
     actual = actual_route(entries, backend, stats)
@@ -268,17 +388,22 @@ def turn_finished(started, reply, backend=None, stats=None, llm=None, background
 
     def work():
         try:
-            import app_abilities
-            apps = app_abilities.load_apps()["apps"]
-            t0 = time.time()
-            decision, intent, confidence, reason, model = decide(
-                started["text"], started["snapshot"], apps, llm=llm)
+            if decided is not None:
+                rec = dict(decided)
+            else:
+                import app_abilities
+                apps = app_abilities.load_apps()["apps"]
+                t0 = time.time()
+                decision, intent, confidence, reason, model = decide(
+                    started["text"], started["snapshot"], apps, llm=llm)
+                rec = {"decision": decision, "intent": intent, "confidence": confidence,
+                       "reason": reason, "model": model, "ms": int((time.time() - t0) * 1000),
+                       "mode": "shadow"}
+            decision = rec.get("decision") or {}
             record = {"id": uuid.uuid4().hex[:12], "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
                       "user": started["text"], "reply": (reply or "")[:300],
-                      "snapshot": started["snapshot"], "actual": actual,
-                      "decision": decision, "intent": intent, "confidence": confidence,
-                      "reason": reason, "model": model, "ms": int((time.time() - t0) * 1000),
-                      "agree": agree(decision, actual)}
+                      "snapshot": started["snapshot"], "actual": actual, **rec,
+                      "agree": True if rec.get("executed") else agree(decision, actual)}
             os.makedirs(os.path.dirname(SHADOW_LOG), exist_ok=True)
             with _WRITE_LOCK, open(SHADOW_LOG, "a", encoding="utf-8") as f:
                 f.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -337,7 +462,8 @@ def stats():
     # Where the old router was right: agreed turns, plus disagreements judged "old".
     old_correct = agreed + old_right
     agreement_where_old_right = agreed / old_correct if old_correct else 0.0
-    return {"turns": total, "agreed": agreed, "disagreed": total - agreed,
+    return {"mode": MODE, "led": sum(1 for r in records if r.get("executed")),
+            "turns": total, "agreed": agreed, "disagreed": total - agreed,
             "judged": len(judged), "new_right": judged.count("new"), "old_right": old_right,
             "both_wrong": judged.count("neither"), "unsafe": unsafe,
             "agreement_where_old_right": round(agreement_where_old_right, 3),

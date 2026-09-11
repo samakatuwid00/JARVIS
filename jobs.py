@@ -219,6 +219,7 @@ def get(jid: str) -> dict | None:
 def active() -> list[dict]:
     """Currently queued/running/waiting-on-confirm jobs, oldest first."""
     _load_history()
+    _expire_stale()     # was defined but never called: weeks-old confirms stayed "active"
     with _lock:
         rows = [dict(j) for j in _jobs.values()
                 if j.get("state") in ("queued", "running", "waiting-on-confirm")]
@@ -228,6 +229,7 @@ def active() -> list[dict]:
 def waiting() -> list[dict]:
     """Jobs awaiting confirm, oldest first."""
     _load_history()
+    _expire_stale()
     with _lock:
         rows = [dict(j) for j in _jobs.values() if j.get("state") == "waiting-on-confirm"]
     rows.sort(key=lambda j: j.get("started") or 0)

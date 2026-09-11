@@ -232,6 +232,7 @@ def _supervise(jid: str, goal: str, proc, timeout: int,
     steps_done = 0          # Hermes-claimed done
     steps_verified = 0      # JARVIS independently confirmed
     steps_failed = 0
+    failed_steps = []       # what Hermes claimed that JARVIS could not confirm
     deadline = time.time() + timeout
 
     def _progress(msg):
@@ -264,9 +265,11 @@ def _supervise(jid: str, goal: str, proc, timeout: int,
                     jobreg.update(jid, note=f"[STEP {n}] ✓ {rest[:90]} — JARVIS: {note}")
                 else:
                     steps_failed += 1
+                    failed_steps.append(rest.split("|")[0].strip()[:60])
                     jobreg.update(jid, note=f"[STEP {n}] ✗ CLAIM UNVERIFIED — {note}")
             elif st == "fail":
                 steps_failed += 1
+                failed_steps.append(rest.split("|")[0].strip()[:60])
                 jobreg.update(jid, note=f"[STEP {n}] ✗ {rest[:120]}")
             else:
                 jobreg.update(jid, note=f"[STEP {n}] … {rest[:120]}")
@@ -300,10 +303,12 @@ def _supervise(jid: str, goal: str, proc, timeout: int,
                             f"({steps_done} claimed, {steps_failed} failed check)",
                     result=body[-4000:], on_done=on_done)
         elif steps_failed > 0 or steps_verified < steps_done:
+            # Name the step, so "VS Code is open" is never reported as a
+            # success when the check found no VS Code window (2026-09-11).
+            which = "; ".join(failed_steps[:3]) or "a step Hermes reported"
             _finish(jid, proc, state="unverified",
-                    summary=(f"done but {steps_done - steps_verified} step(s) "
-                             f"FAILED JARVIS verification "
-                             f"({steps_verified} verified, {steps_failed} failed)"),
+                    summary=(f"{steps_verified} of {steps_done} steps verified. "
+                             f"I could not confirm: {which}."),
                     result=body[-4000:], on_done=on_done)
         else:
             _finish(jid, proc, state="done",

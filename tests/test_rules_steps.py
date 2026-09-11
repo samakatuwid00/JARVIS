@@ -154,6 +154,16 @@ def test_running_browser_without_port_asks_before_restart(web, monkeypatch):
     assert out.endswith("You can play it yourself.")
 
 
+def test_restart_question_lets_an_unrelated_command_through(web, monkeypatch):
+    monkeypatch.setattr(browser_cdp, "is_attached", lambda b: False)
+    monkeypatch.setattr(browser_cdp, "is_running", lambda b: True)
+    rules_steps.start(STEPS_RULE, "brave", STEPS_ACTION, "Dune")
+    assert "Restart Brave" in rules_steps.resume("1")
+    # Not yes, not no: routed as the new request it is, nothing opened.
+    assert rules_steps.resume("delete the file notes.txt from my desktop") is None
+    assert not rules_steps.active() and web == []
+
+
 def test_typed_names_are_literal_and_unsafe_keys_are_refused(monkeypatch):
     import audit
     import desktop_driver

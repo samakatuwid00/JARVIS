@@ -1,0 +1,179 @@
+"""Fixes from the 2026-09-11 session test: web searches stay web-wide, a
+named browser is honoured, an unverified job names the failed step, closing
+never force-kills, web_browse rejects sentences, old confirms expire, commands
+aren't saved as preferences, rule slots drop filler, and the honesty guard
+leaves questions alone."""
+
+import time
+
+import pytest
+
+
+# ---------------------------------------------------------- web search --
+
+def test_search_the_web_is_never_limited_to_the_last_site(monkeypatch):
+    import conversation_window as cw
+    import tools
+    opened = []
+    monkeypatch.setattr(cw, "last_site", lambda: {"key": "github", "url": "https://github.com",
+                                                   "browser": "chrome"})
+    monkeypatch.setattr(tools, "search_web", lambda q: opened.append(q) or f"Opened search: {q}")
+    parsed = tools.parse_search_command("search the web for top lo-fi channels")
+    assert parsed["query"] == "top lo-fi channels" and parsed["web"] is True
+    assert tools.execute_search(parsed) == "Opened search: top lo-fi channels"
+    assert opened == ["top lo-fi channels"]
+
+
+def test_research_phrasing_is_not_a_search_tab():
+    import tools
+    assert tools.parse_search_command(
+        "search the web for the top 3 lo-fi YouTube channels and summarize them") is None
+    assert tools.parse_search_command("search the web for cats")["query"] == "cats"
+
+
+# --------------------------------------------------------- named browser --
+
+def test_open_site_tool_passes_the_browser(monkeypatch):
+    import tools
+    seen = {}
+    monkeypatch.setattr(tools, "open_site",
+                        lambda name, url=None, browser=None, **k: seen.update(name=name, browser=browser)
+                        or "Opened.")
+    tools.TOOL_MAP["open_site"](name="github", browser="brave")
+    assert seen == {"name": "github", "browser": "brave"}
+
+
+def test_split_browser_reads_in_brave():
+    import tools
+    text, word = tools._split_browser("open github in brave")
+    assert text == "open github" and word == "brave"
+
+
+# ------------------------------------------------------- unverified job --
+
+def test_unverified_job_names_the_step_it_could_not_confirm(tmp_path, monkeypatch):
+    import autonomous
+    import jobs
+    monkeypatch.setattr(jobs, "update", lambda *a, **k: None)
+    monkeypatch.setattr(autonomous, "status_path", lambda jid: str(tmp_path / "s.status"))
+    monkeypatch.setattr(autonomous, "_verify_step",
+                        lambda rest: (False, "no window") if "VS Code" in rest else (True, "ok"))
+    monkeypatch.setattr(autonomous, "POLL_INTERVAL", 0.01)
+    (tmp_path / "s.status").write_text(
+        "[STEP 1] done - Opened VS Code | launched code.exe\n"
+        "[STEP 2] done - Opened GitHub in Brave | tab open\n", encoding="utf-8")
+    finished = {}
+    monkeypatch.setattr(autonomous, "_finish",
+                        lambda jid, proc, **k: finished.update(k))
+
+    class Proc:
+        returncode = 0
+
+        def poll(self):
+            return 0
+
+        def communicate(self):
+            return "RESULT: done\n", ""
+    autonomous._supervise("j1", "workspace", Proc(), timeout=30)
+    assert finished["state"] == "unverified"
+    assert finished["summary"] == "1 of 2 steps verified. I could not confirm: Opened VS Code."
+
+
+# ------------------------------------------------------------- closing --
+
+def test_close_never_force_kills_unless_asked(monkeypatch):
+    import machine_capabilities as mc
+    import tools
+    ran = []
+    monkeypatch.setattr(mc, "load_registry",
+                        lambda: {"apps": {"notepad": {"name": "notepad", "bin": "C:/notepad.exe"}}})
+    monkeypatch.setattr(tools.subprocess, "run",
+                        lambda cmd, **k: ran.append(cmd) or type("R", (), {"stdout": "notepad.exe"})())
+    monkeypatch.setattr(tools.time, "sleep", lambda s: None)
+    out = tools.close_application("notepad")
+    assert "still open" in out and "force close" in out
+    assert not any("/F" in c for c in ran if isinstance(c, list))
+    tools.close_application("notepad", force=True)
+    assert any(isinstance(c, list) and "/F" in c for c in ran)
+
+
+# ------------------------------------------------------------ web_browse --
+
+def test_web_browse_refuses_a_sentence_as_a_url():
+    import tools
+    out = tools.web_browse("go back to the lo-fi channels which one is the most popular?")
+    assert out.startswith("[Error]") and "isn't a web address" in out
+
+
+# ---------------------------------------------------------- stale jobs --
+
+def test_weeks_old_confirms_are_not_active(monkeypatch):
+    import jobs
+    monkeypatch.setattr(jobs, "_load_history", lambda: None)
+    monkeypatch.setattr(jobs, "_append_log", lambda rec: None)
+    monkeypatch.setattr(jobs, "_emit", lambda rec: None)
+    monkeypatch.setattr(jobs, "_jobs", {
+        "old": {"id": "old", "state": "waiting-on-confirm", "started": time.time() - 30 * 86400,
+                "task": "x", "progress": []},
+        "new": {"id": "new", "state": "waiting-on-confirm", "started": time.time() - 60,
+                "task": "y", "progress": []}})
+    assert [j["id"] for j in jobs.active()] == ["new"]
+    assert jobs._jobs["old"]["state"] == "timeout"
+
+
+# --------------------------------------------------------- preferences --
+
+@pytest.mark.parametrize("text, pref", [
+    ("I prefer lo-fi while coding", True), ("my favorite editor is VS Code", True),
+    ("play some of my favorite on spotify", False), ("open my favorite site", False)])
+def test_commands_are_not_saved_as_preferences(text, pref):
+    import brain_gemini
+    assert brain_gemini._looks_like_preference(text) is pref
+
+
+# ------------------------------------------------------------ rule slot --
+
+def test_rule_slot_drops_that_site_for_and_instead():
+    import rules_engine
+    rule = {"rule_id": "search_movie", "source_phrase": "search movie",
+            "triggers": ["search movie"], "enforcement": "action",
+            "action": {"type": "search_site", "site": "hollymoviehd.cc",
+                       "url": "https://hollymoviehd.cc",
+                       "search_url": "https://hollymoviehd.cc?s={query}", "browser": "brave"}}
+    apps = {"brave": {"category": "browser", "compiled_rules": [rule]}}
+    m = rules_engine.match_action("search that movie site for Blade Runner instead", apps)
+    assert m and m["slot"] == "Blade Runner"
+    # Titles that start with a pointer word keep it.
+    assert rules_engine.match_action("search movie This Is Us", apps)["slot"] == "This Is Us"
+    assert rules_engine.match_action("search movie That Thing You Do", apps)["slot"] == "That Thing You Do"
+
+
+def test_pinning_takes_the_scan_lock(tmp_path, monkeypatch):
+    import json
+    import app_abilities as aa
+    import curate
+    import machine_capabilities as mc
+    path = tmp_path / "app_registry.json"
+    path.write_text(json.dumps({"apps": {"vlc": {"name": "vlc"}}}), encoding="utf-8")
+    monkeypatch.setattr(mc, "REGISTRY_PATH", str(path))
+    monkeypatch.setattr(curate, "REGISTRY_PATH", str(path))
+    held = []
+
+    class Lock:
+        def __enter__(self):
+            held.append(True)
+
+        def __exit__(self, *a):
+            pass
+    monkeypatch.setattr(aa, "_LOCK", Lock())
+    assert curate.mark_registered("vlc") is True and held == [True]
+    assert json.loads(path.read_text(encoding="utf-8"))["apps"]["vlc"]["pinned_by"] == "user"
+
+
+# ------------------------------------------------------- honesty guard --
+
+def test_honesty_guard_leaves_questions_alone():
+    from brain_gemini import honest_reply
+    answer = "Opened three things for you so far, sir."
+    assert honest_reply(answer, [], "router", "how many things have you opened for me so far?") == answer
+    assert honest_reply("Opened notes app.", [], "router", "open my notes app") != "Opened notes app."

@@ -24,6 +24,7 @@ import os
 import re
 import json
 import shutil
+import struct
 import subprocess
 import platform
 
@@ -101,10 +102,8 @@ def _scan_windows():
                     out[key] = {"bin": os.path.join(dirpath, fn), "kind": "gui",
                                 "category": _categorize(base), "confidence": "medium",
                                 "version": None}
-    # 3) Start Menu .lnk targets
-    start = os.path.join(os.environ.get("APPDATA", ""),
-                         "Microsoft", "Windows", "Start Menu", "Programs")
-    if os.path.isdir(start):
+    # 3) Start Menu .lnk targets (the user's and the all-users menu)
+    for start in _start_menu_dirs():
         for dirpath, _d, files in os.walk(start):
             for fn in files:
                 if fn.lower().endswith(".lnk"):
@@ -132,6 +131,55 @@ def _scan_windows():
     except Exception:
         pass
     return out
+
+
+def _start_menu_dirs():
+    """The user's Start Menu and the all-users one (most installers use it)."""
+    dirs = []
+    for env in ("APPDATA", "PROGRAMDATA"):
+        base = os.environ.get(env)
+        if base:
+            d = os.path.join(base, "Microsoft", "Windows", "Start Menu", "Programs")
+            if os.path.isdir(d):
+                dirs.append(d)
+    return dirs
+
+
+def norm_path(path) -> str:
+    """Comparable form of a program path: no icon suffix, quotes, %VARS% or case."""
+    p = (path or "").split(",")[0].strip().strip('"')
+    return os.path.normcase(os.path.normpath(os.path.expandvars(p))) if p else ""
+
+
+def start_menu_targets() -> set:
+    """Normalized paths of every Start Menu shortcut and its target. Windows
+    lists these as the apps a person opens, so they are what JARVIS pins."""
+    out = set()
+    for start in _start_menu_dirs():
+        for dirpath, _d, files in os.walk(start):
+            for fn in files:
+                if fn.lower().endswith(".lnk"):
+                    lnk = os.path.join(dirpath, fn)
+                    out.add(norm_path(lnk))
+                    target = _resolve_lnk(lnk)
+                    if target:
+                        out.add(norm_path(target))
+    return out
+
+
+def exe_subsystem(path):
+    """"gui" or "console" from the program's PE header, None when unreadable
+    (App Execution Aliases in WindowsApps are 0-byte links, .lnk isn't a PE).
+    Console programs (coreutils, pip scripts, JDK tools) aren't apps."""
+    try:
+        with open(norm_path(path), "rb") as f:
+            head = f.read(4096)
+        pe = struct.unpack_from("<I", head, 0x3C)[0]
+        if head[pe:pe + 4] != b"PE\0\0":
+            return None
+        return {2: "gui", 3: "console"}.get(struct.unpack_from("<H", head, pe + 0x5C)[0])
+    except (OSError, struct.error):
+        return None
 
 
 def _resolve_lnk(path: str):
@@ -389,6 +437,10 @@ def write_registry() -> str:
 # registry from the scan alone, so "rescan my apps" deleted every rule.
 USER_FIELDS = ("compiled_rules", "rule_drafts", "enabled", "registered", "hidden",
                "abilities", "added_by_user")
+# What JARVIS learned about an app. Kept too, so a rescan doesn't send every
+# app back to the AI sorter or make "Deep scan all" start over. pinned_by /
+# hidden_by say who set registered / hidden ("scan" or "user").
+LEARNED_FIELDS = ("app_kind", "deep_scan", "pinned_by", "hidden_by", "duplicate_of")
 
 
 def _keep_user_data(manifest, old_registry):
@@ -398,7 +450,7 @@ def _keep_user_data(manifest, old_registry):
     for key, old in old_apps.items():
         if not isinstance(old, dict):
             continue
-        mine = {f: old[f] for f in USER_FIELDS if f in old}
+        mine = {f: old[f] for f in USER_FIELDS + LEARNED_FIELDS if f in old}
         if key in manifest:
             manifest[key].update(mine)
         elif mine.get("added_by_user") or mine.get("compiled_rules"):

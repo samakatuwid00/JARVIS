@@ -1396,7 +1396,8 @@ async function addApp(e) {
 
 async function fullScan(btn) {
   const d = await appsJob("/apps/fullscan", {}, "Scanning the computer for apps...", btn);
-  if (d) toast(`Found ${d.found} apps · ${d.newly_registered} new · ${d.hidden} hidden as noise`);
+  if (d) toast(`${d.pinned} apps pinned (${d.newly_registered} new) · ${d.found} programs checked · ` +
+               `${d.hidden} hidden: ${d.cli} command-line tools, ${d.duplicates} duplicates, the rest helpers`);
 }
 
 async function generateAll(btn) {

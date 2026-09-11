@@ -1993,6 +1993,7 @@
   var lastWakeAt = 0;           // de-dupe server vs browser wake (ms epoch)
 
   function goIdle() {
+    send({ type: 'listening', state: 'end' });   // wake fallback may listen again
     stopSpeakLoop();                   // idempotent: kills the RAF + resets levers
     clearInterim();                    // drop any provisional live text
     cap = null; capLen = 0; capHeard = false; capWaited = 0;
@@ -2074,6 +2075,9 @@
     if (seed) { for (var i = 0; i < ring.length; i++) { cap.push(ring[i]); capLen += ring[i].length; } }
     ring = []; ringLen = 0;
     setState('listening', 'LISTENING…');
+    // The server's wake fallback holds off while we own the mic: its decodes
+    // were competing with this capture for the CPU.
+    send({ type: 'listening', state: 'start' });
   }
 
   function endCapture() {

@@ -258,11 +258,12 @@ class VoiceEngine:
         """Transcribe audio from a file using Whisper."""
         return self._decode(self._load_audio(file_path), WHISPER_INITIAL_PROMPT)[0]
 
-    def transcribe_with_hint(self, file_path, hint):
+    def transcribe_with_hint(self, file_path, hint, known=()):
         """Whisper's transcript checked against the browser's live one.
 
         Returns (chosen text, source, Whisper's text, Whisper's confidence);
-        see transcript_pick for how the two are compared.
+        see transcript_pick for how the two are compared. `known`: the
+        user's app and site names, so the transcript that names one wins.
         """
         import transcript_pick
         audio = self._load_audio(file_path)
@@ -270,7 +271,7 @@ class VoiceEngine:
         # Whisper keeps only the prompt's last ~223 tokens: cap the hint so the
         # vocabulary bias ahead of it survives.
         redecode = lambda h: self._decode(audio, f"{WHISPER_INITIAL_PROMPT} {h[:200]}")[0]
-        text, source = transcript_pick.pick(heard, conf, hint, redecode)
+        text, source = transcript_pick.pick(heard, conf, hint, redecode, known=known)
         return text, source, heard, conf
 
 

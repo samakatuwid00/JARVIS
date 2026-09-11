@@ -44,6 +44,15 @@ def _is_ambiguous(clause: str) -> bool:
     )
 
 
+# "never close notepad", "don't let me open steam": a hard block on one action.
+_NEVER_ACTION_RE = re.compile(
+    r"^\s*(?:never|don'?t\s+ever|do\s+not\s+ever|don'?t|do\s+not|block)\s+"
+    r"(?:let\s+(?:me|jarvis|anyone)\s+)?(open|launch|start|run|close|quit|exit|play)\b", re.I)
+_NEVER_SCOPE = {"open": "pre_launch", "launch": "pre_launch", "start": "pre_launch",
+                "run": "pre_launch", "close": "pre_close", "quit": "pre_close",
+                "exit": "pre_close", "play": "pre_play"}
+
+
 def parse_scaffold(app_id: str, phrase: str) -> dict:
     clauses = _split_clauses(phrase)
     candidate_rules = []
@@ -54,6 +63,19 @@ def parse_scaffold(app_id: str, phrase: str) -> dict:
                 "intent": "avoid explicit content",
                 "enforcement": "soft",
                 "adapter_check": "pre_play: skip if track.explicit",
+                "scope": "all_sessions",
+                "source_phrase": clause,
+                "needs_clarification": False,
+                "clarification_question": None,
+            }
+        elif not _is_ambiguous(clause) and _NEVER_ACTION_RE.match(clause):
+            # "never close notepad" says exactly what to block: no question.
+            verb = _NEVER_ACTION_RE.match(clause).group(1).lower()
+            rule = {
+                "rule_id": _slug(clause),
+                "intent": clause,
+                "enforcement": "hard",
+                "adapter_check": f"{_NEVER_SCOPE[verb]}: block",
                 "scope": "all_sessions",
                 "source_phrase": clause,
                 "needs_clarification": False,

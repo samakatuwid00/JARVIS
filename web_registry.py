@@ -162,12 +162,67 @@ def _host_of(url: str) -> str | None:
     return host
 
 
+# Second-level labels under a country code: "google.com.ph", "bbc.co.uk".
+_CC_SECOND = {"com", "co", "org", "net", "gov", "edu", "ac"}
+
+
+def _host_parts(host: str):
+    """(labels before the registrable domain, the registrable domain's labels)."""
+    parts = [p for p in (host or "").lower().split(".") if p]
+    n = 3 if len(parts) >= 3 and len(parts[-1]) == 2 and parts[-2] in _CC_SECOND else 2
+    return parts[:-n], parts[-n:]
+
+
+def _root_host(host: str) -> str:
+    """'music.youtube.com' -> 'youtube.com'."""
+    return ".".join(_host_parts(host)[1])
+
+
 def _domain_name(host: str) -> str:
-    """'www.youtube.com' -> 'youtube' (the speakable name)."""
-    parts = host.split(".")
-    # strip leading www / m, and the TLD
-    core = [p for p in parts[:-1] if p not in ("www", "m", "mobile")]
-    return (core[-1] if core else parts[0]).lower()
+    """The speakable name: 'www.youtube.com' -> 'youtube'.
+
+    A subdomain keeps its own name: 'music.youtube.com' -> 'youtube music',
+    'accounts.google.com.ph' -> 'google accounts'. Before 2026-09-11 both
+    became 'youtube' (and '.com.ph' became 'com'), so whichever subdomain
+    was visited most took the domain's name and 'open youtube' opened
+    YouTube Music."""
+    subs, root = _host_parts(host)
+    if not root:
+        return (host or "").lower()
+    subs = [s for s in subs if s not in ("www", "m", "mobile")]
+    return f"{root[0]} {subs[-1]}" if subs else root[0]
+
+
+def normalize_sites(sites: dict) -> list:
+    """Name every history entry by its host (see _domain_name) and, where no
+    entry holds a domain's bare name, give it as an alias to that domain's
+    most-visited entry ('open deepseek' still opens chat.deepseek.com).
+    Manual entries are never touched. Returns [(old_key, new_key)] renames."""
+    renames = []
+    for key in list(sites):
+        site = sites[key]
+        if site.get("source") != "history" or not site.get("host"):
+            continue
+        want = new = _domain_name(site["host"])
+        n = 2
+        while new != key and new in sites:
+            new = f"{want}{n}"
+            n += 1
+        if new != key:
+            sites[new] = sites.pop(key)
+            renames.append((key, new))
+    owners = {}
+    for key, site in sites.items():
+        if site.get("source") == "history" and " " in key:
+            bare = key.split(" ")[0]
+            if bare not in sites and (bare not in owners or
+                                      (site.get("visits") or 0) > (sites[owners[bare]].get("visits") or 0)):
+                owners[bare] = key
+    for bare, key in owners.items():
+        aliases = sites[key].setdefault("aliases", [])
+        if bare not in aliases:
+            aliases.append(bare)
+    return renames
 
 
 # --------------------------------------------------------------------------
@@ -230,6 +285,7 @@ def scan_sites(force_full: bool = False) -> dict:
             max_last = max(max_last, d["last"])
 
     sites = reg.setdefault("sites", {})
+    normalize_sites(sites)
 
     # 1) update existing HISTORY-sourced entries (accumulate)
     # 2) promote scanned domains that are not yet present
@@ -245,7 +301,9 @@ def scan_sites(force_full: bool = False) -> dict:
                 continue  # registry full, this domain didn't rank
             key = m["name"]
             suffix = 2
-            while key in sites and sites[key].get("source") == "manual":
+            # Any entry already under this name (manual, or another host)
+            # keeps it: overwriting one lost that site's visits and URLs.
+            while key in sites:
                 key = f"{m['name']}{suffix}"; suffix += 1
             sites[key] = {"url": f"https://{host}", "host": host,
                           "aliases": [], "source": "history", "visits": 0,
@@ -266,6 +324,7 @@ def scan_sites(force_full: bool = False) -> dict:
               and (v.get("visits") or 0) * 0 >= MIN_VISITS]:  # never prune accumulated
         pass  # accumulation means counts only grow; pruning handled by ranking cap above
 
+    normalize_sites(sites)
     reg["watermark_chrome_us"] = max_last
     reg["last_scan"] = datetime.now().isoformat(timespec="seconds")
     save_registry(reg)
@@ -311,18 +370,23 @@ def _singular(word: str) -> str:
 
 def build_index(reg: dict = None) -> None:
     reg = reg or load_registry()
-    exact = {}
-    names = []
+    # A site's own name beats an alias, and a manual entry beats history:
+    # the manual "youtube" (youtube.com) must win over the "youtube" alias of
+    # "youtube music", whatever order the entries are in.
+    ranked = {}
     for name, site in reg.get("sites", {}).items():
-        keys = {name, _singular(name)} | {_singular(a) for a in site.get("aliases", [])} \
-               | set(a.lower() for a in site.get("aliases", []))
-        host = site.get("host")
-        if host:
-            keys |= {_domain_name(host)}
-        for k in keys:
-            if k:
-                exact[k] = name
-        names.append(name)
+        manual = site.get("source") == "manual"
+        aliases = site.get("aliases", [])
+        tiers = [(0, {name, _singular(name)}),
+                 (1, {_singular(a) for a in aliases} | {a.lower() for a in aliases}),
+                 (2, {_domain_name(site["host"])} if site.get("host") else set())]
+        for tier, keys in tiers:
+            for k in keys:
+                rank = (tier, not manual)
+                if k and (k not in ranked or rank < ranked[k][0]):
+                    ranked[k] = (rank, name)
+    exact = {k: name for k, (_, name) in ranked.items()}
+    names = list(reg.get("sites", {}))
     _index["exact"] = exact
     _index["names"] = names
     _index["built_from"] = reg.get("generated")

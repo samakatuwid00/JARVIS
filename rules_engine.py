@@ -76,10 +76,11 @@ def evaluate_app_rules(entry, action):
             if scope != "all" and scope != a:
                 continue
             allowed = False
+            # Spoken to the user: their own words, no rule ids or tags.
+            phrase = rule.get("source_phrase") or intent or rule_id
             blocks.append(
-                f"[BLOCKED by rule {rule_id}] {intent}. Hard rule — cannot be "
-                f"overridden by a voice command. Edit the app rules in settings "
-                f"to allow it."
+                f"I can't do that, sir: your rule “{phrase}” blocks it. "
+                f"Change it in the Apps panel if you want to allow it."
             )
         elif enforcement == "soft":
             notices.append(
@@ -251,7 +252,11 @@ _MATCH_STOP = {"a", "an", "the", "some", "please", "jarvis", "sir", "hey", "ok",
                "using", "with", "via", "into"}
 # Trimmed off the ends of the name the user filled in.
 _SLOT_EDGE = _MATCH_STOP | {"named", "called", "titled", "about", "in", "on", "at",
-                            "to", "and", "of", "name", "title"}
+                            "to", "and", "of", "name", "title", "there", "instead", "again"}
+# "search that site for Blade Runner instead": the pointer phrase, not the
+# bare words - "that"/"this" as edge words cost "This Is Us" its first word.
+_SLOT_POINTER_RE = re.compile(
+    r"^(?:(?:that|this|the\s+same)\s+(?:site|one|page|place)\s+(?:for|to|with)?\s*)", re.I)
 _VERB_WORDS = {"search", "find", "look", "lookup", "open", "launch", "visit", "go",
                "take", "play", "watch", "browse", "show"}
 _BROWSER_WORDS = {"brave", "chrome", "edge", "msedge", "firefox"}
@@ -336,7 +341,8 @@ def _match_trigger(trigger, toks):
             return None
         matched.add(j)
         j -= 1
-    words = [w for i, (w, _) in enumerate(toks) if i not in matched]
+    words = _SLOT_POINTER_RE.sub("", " ".join(w for i, (w, _) in enumerate(toks)
+                                              if i not in matched)).split()
     while words and words[0].lower() in _SLOT_EDGE:
         words.pop(0)
     while words and words[-1].lower() in _SLOT_EDGE:

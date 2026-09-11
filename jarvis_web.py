@@ -9,7 +9,16 @@ Browser captures mic -> sends audio (WebM/Opus) -> backend transcribes with Whis
 
 import os
 import io
+import sys
 import json
+
+# The console (and a redirected log) is cp1252 on Windows: a page read or a
+# job note with "↘" or "ロ" crashed the print, and with it the announcement.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
 import time
 import base64
 import tempfile
@@ -79,6 +88,8 @@ except ValueError:
     print("[WakeEngine] bad JARVIS_WAKE_SUSPEND_MS, using 1500", flush=True)
     _WAKE_SUSPEND_MS = 1500
 wake_engine = WakeEngine(voice_engine, suspend_ms=_WAKE_SUSPEND_MS)
+# Longest the wake fallback stays quiet for one browser capture.
+_WAKE_HOLD_MS = 30000
 
 # The server's event loop, captured by websocket_endpoint. broadcast_wake runs on
 # the WakeEngine worker thread, which has no loop of its own — asyncio.get_event_loop()
@@ -231,7 +242,7 @@ def _start_confirm_reminder(ws, vf) -> None:
         except Exception:
             return
         if pending:
-            await _send_cue(ws, "confirm_pending")
+            await _send_cue(ws, "confirm_pending", vf)
     asyncio.get_running_loop().create_task(_run())
 
 
@@ -639,6 +650,32 @@ async def send_telemetry(websocket: WebSocket):
         await websocket.send_text(json.dumps({"type": "telemetry", "stats": stats}))
     except Exception as e:
         print(f"[WS] telemetry error: {e}", flush=True)
+
+
+def _known_names():
+    """Lowercase names of the user's pinned apps and registered sites, for
+    the transcript picker: the transcript that names one is the one meant."""
+    names = set()
+    try:
+        import app_abilities
+        import curate
+        apps = app_abilities.load_apps()["apps"]
+        for key in curate.registered_apps():
+            entry = apps.get(key) or {}
+            for n in (key, entry.get("name"), entry.get("display_name"),
+                      app_abilities.DISPLAY_NAMES.get(key)):
+                if n:
+                    names.add(" ".join(n.lower().split()))
+    except Exception:
+        pass
+    try:
+        import web_registry
+        for key, site in (web_registry.load_registry().get("sites") or {}).items():
+            names.add(key.lower())
+            names.update(a.lower() for a in site.get("aliases") or [])
+    except Exception:
+        pass
+    return {n for n in names if len(n) >= 3}
 
 
 async def deliver_result(websocket: WebSocket, text: str, speak: bool):
@@ -1473,8 +1510,10 @@ async def post_apps_hide(message: Request):
     if key not in apps:
         return JSONResponse({"error": "unknown app"}, status_code=400)
     apps[key]["hidden"] = bool(hide)
+    apps[key]["hidden_by"] = "user"      # a Full scan leaves this choice alone
     if hide and apps[key].get("registered"):
         apps[key]["registered"] = False  # unregistering on hide
+        apps[key]["pinned_by"] = "user"
     tmp = REGISTRY_PATH + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
@@ -1628,6 +1667,18 @@ async def websocket_endpoint(websocket: WebSocket):
                 except Exception as e:
                     print(f"[DUCK] {state} failed: {e}", flush=True)
 
+            elif mtype == "listening":
+                # The HUD is recording a command: it owns the mic, so the
+                # server-side wake fallback holds off (capped, in case "end"
+                # is lost) instead of decoding over the user's voice.
+                try:
+                    if message.get("state") == "start":
+                        wake_engine.hold(_WAKE_HOLD_MS)
+                    else:
+                        wake_engine.release()
+                except Exception:
+                    pass
+
             elif mtype == "audio":
                 # Browser sent a recorded clip (base64 WAV or WebM/Opus blob).
                 # mode == "scan" -> transcribe only (client-side wake-word check),
@@ -1668,8 +1719,10 @@ async def websocket_endpoint(websocket: WebSocket):
                     # Transcribe with Whisper, checked against the browser's live
                     # transcript when the HUD sent one (transcript_pick).
                     hint = "" if scan else " ".join(str(message.get("hint") or "").split())[:300]
+                    source = "whisper"
                     if hint:
-                        text, source, heard, conf = voice_engine.transcribe_with_hint(wav_path, hint)
+                        text, source, heard, conf = voice_engine.transcribe_with_hint(
+                            wav_path, hint, known=_known_names())
                         print(f"[STT] whisper: {heard[:120]!r} (conf {conf:.2f}) | browser: "
                               f"{hint[:120]!r} -> {source}", flush=True)
                     else:
@@ -1677,6 +1730,15 @@ async def websocket_endpoint(websocket: WebSocket):
                     _t["stt"] = time.time()
                     print(f"[STT] raw{' (scan)' if scan else ''}: {text!r}", flush=True)
                     os.unlink(wav_path)
+
+                    if source == "unsure" and not scan:
+                        # Neither transcript is trustworthy: ask, never answer
+                        # a sentence nobody said.
+                        line = "I didn't catch that, sir. Could you say it again?"
+                        await websocket.send_text(json.dumps({
+                            "type": "response", "text": line, "audio": await tts_to_b64(line)}))
+                        await websocket.send_text(json.dumps({"type": "status", "state": "idle"}))
+                        continue
 
                     if scan:
                         await websocket.send_text(json.dumps({

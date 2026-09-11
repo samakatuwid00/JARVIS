@@ -528,8 +528,38 @@ _PREF_RE = re.compile(
     r"\b(i prefer|i like|i love|i hate|i always|i never|i usually|i want|i need|"
     r"i don't|i dont|i do not|my (favorite|preferred|default)|i'm into|i am into|"
     r"please (always|default to)|keep it)\b", re.I)
+_COMMAND_LEAD_RE = re.compile(
+    r"^\s*(?:(?:please|jarvis|hey|ok(?:ay)?|now)[,\s]+)*"
+    r"(?:play|open|search|find|close|set|turn|show|launch|start|stop|pause|skip|go|"
+    r"put|switch|volume|mute|resume)\b", re.I)
+
+
+_OPEN_LEAD_RE = re.compile(
+    r"^(?:(?:please|jarvis|hey|ok(?:ay)?|now)[,!\s]+)*(?:open|launch|go\s+to|goto|visit)\s+(.+)$", re.I)
+
+
+def _fast_lane_opens(text):
+    """True when "open X" names an app or site the registries resolve: the
+    delegate fast lane opens it in ~0.3 s, so the router (3-7 s) stays out
+    of the way. "open new tab on brave" resolves nothing and goes to the
+    router, which knows Brave's abilities."""
+    m = _OPEN_LEAD_RE.match((text or "").strip())
+    if not m:
+        return False
+    try:
+        import tools
+        stripped, bword = tools._split_browser(m.group(1).rstrip(".!?"))
+        kind, _ = tools.resolve_open_target(stripped, browser=tools._browser_key(bword) if bword else None)
+        return kind in ("site", "app", "clarify")
+    except Exception:
+        return False
+
+
 def _looks_like_preference(t):
-    return bool(_PREF_RE.search(t or "")) and len((t or "").split()) <= 40
+    """A stated preference ("I prefer lo-fi"), not a command that mentions
+    one: "play some of my favorite on spotify" was being saved as a fact."""
+    t = t or ""
+    return bool(_PREF_RE.search(t)) and len(t.split()) <= 40 and not _COMMAND_LEAD_RE.match(t)
 
 
 def fast_path_answer(text: str):
@@ -1069,9 +1099,11 @@ TOOL_DECLARATIONS = [
     _make_tool("close_application",
         "Close a running application by name. Use for any request to close, quit, "
         "exit or kill an app: 'close Spotify', 'quit Word', 'close the calculator'. "
-        "Closes gracefully first and force-kills only if needed.",
+        "Closes gracefully; ends the process only with force=true (the user said "
+        "'force close' or 'kill'), since that loses unsaved work.",
         {"type": "object", "properties": {
-            "app": {"type": "STRING", "description": "The application name to close, e.g. 'Spotify' or 'Microsoft Word'"}
+            "app": {"type": "STRING", "description": "The application name to close, e.g. 'Spotify' or 'Microsoft Word'"},
+            "force": {"type": "BOOLEAN", "description": "true only when the user said force close / kill"}
         }, "required": ["app"]}),
 
     _make_tool("ask_ai",
@@ -1154,6 +1186,38 @@ for _consent_tool in ("desktop_control", "run_opencli", "delegate_to_hermes",
 # A bare confirm utterance: ONLY the confirm words, nothing else. Must never
 # match sentences that merely CONTAIN "yes"/"confirm" — those route normally.
 _BARE_CONFIRM_RE = re.compile(r"^(?:confirm(?:ed)?|proceed|go ahead|do it|yes)[.!\s]*$", re.I)
+# "no" / "no, cancel that" / "nope, don't do it": a no to the waiting confirm.
+# Only decline words may follow, so "no, I meant open spotify" stays a
+# correction and "No Time to Die" stays a title. A bare "stop" is left to the
+# music and job controls.
+_BARE_DECLINE_RE = re.compile(
+    r"^(?:no|nope|nah|cancel|don'?t|do\s+not|never\s*mind|forget\s+it)\b"
+    r"(?:[\s,.!]+(?:no|cancel|stop|don'?t|do\s+not|that|it|this|do\s+it|run\s+it|thanks|"
+    r"thank\s+you|please|sir|jarvis|never\s*mind|forget\s+it))*[\s,.!]*$", re.I)
+# A model reply that reports an action. Only true when a tool ran this turn.
+_ACTION_CLAIM_RE = re.compile(
+    r"^\s*(?:(?:okay|ok|done|alright|sure)[,.!]?\s+)?(?:sir[,.]?\s+)?(?:i(?:'ve|\s+have)\s+)?"
+    r"(?:opened|launched|closed|started|playing|now\s+playing|searching|searched|created|"
+    r"deleted|removed|sent|moved|saved|turned|paused|stopped|muted)\b", re.I)
+_MODEL_BACKENDS = {"router", "cerebras", "groq", "ollama", "gemini"}
+
+
+_QUESTION_RE = re.compile(
+    r"^\s*(?:(?:please|jarvis|hey|ok(?:ay)?|so|now)[,\s]+)*"
+    r"(?:what|which|who|how|why|when|where|did|do|does|have|has|is|are|can|could|tell me)\b", re.I)
+
+
+def honest_reply(reply, ran, backend, user_text=""):
+    """A model that answers "Opened notes app." when no tool ran this turn
+    (`ran`: this turn's audit entries) told the user something false. Say
+    what actually happened instead. A question ("how many things have you
+    opened?") is answered, not acted on: its reply is never a claim."""
+    asked = bool(_QUESTION_RE.match(user_text or "")) or (user_text or "").rstrip().endswith("?")
+    if backend in _MODEL_BACKENDS and not ran and not asked and isinstance(reply, str) \
+            and _ACTION_CLAIM_RE.match(reply):
+        return ("I didn't actually do that, sir: nothing ran. Tell me exactly which "
+                "app or site, like “open Obsidian”.")
+    return reply
 
 
 def _apply_consent_policy(name: str, args: dict, last_user_text: str) -> dict:
@@ -1258,7 +1322,15 @@ class JarvisBrain:
             where = ("LOCAL ONLY - no cloud fallback" if self._local_only
                      else ("primary" if self._prefer_local else "last resort before demo mode"))
             print(f"[JARVIS] Ollama backend enabled ({OLLAMA_MODEL}, {where}).", flush=True)
-            self._preload_ollama()
+            # Preload only when the local model is the brain (or is kept warm
+            # on purpose). As a last-resort fallback it stays cold: loading
+            # 3.9 GB at every start pushed a busy machine out of memory and
+            # Windows killed JARVIS itself (2026-09-11). The first cold
+            # fallback then costs ~47 s, which is the cheaper failure.
+            if self._prefer_local or OLLAMA_KEEP_WARM:
+                self._preload_ollama()
+            else:
+                print("[JARVIS] Ollama preload skipped (fallback only, keep-warm off).", flush=True)
         if self._use_groq:
             print(f"[JARVIS] Groq backend enabled ({GROQ_MODEL}).", flush=True)
         if self._use_cerebras:
@@ -1310,12 +1382,22 @@ class JarvisBrain:
             started = intent_router.turn_started(user_input)
         except Exception:
             pass
+        self._lead_record = None
         reply = self._think_turn(user_input, on_hermes_done=on_hermes_done,
                                  progress_cb=progress_cb)
         if started is not None:
             try:
+                fixed = honest_reply(reply, intent_router._audit_since(started["audit_pos"]),
+                                     (self.last_stats or {}).get("backend"), user_input)
+                if fixed != reply:
+                    if self.conversation and self.conversation[-1].get("content") == reply:
+                        self.conversation[-1]["content"] = fixed
+                    reply = fixed
+            except Exception:
+                pass
+            try:
                 intent_router.turn_finished(started, reply, backend=self.last_backend,
-                                            stats=self.last_stats)
+                                            stats=self.last_stats, decided=self._lead_record)
             except Exception as e:
                 print(f"[shadow] observer failed: {type(e).__name__}", flush=True)
         return reply
@@ -1342,6 +1424,37 @@ class JarvisBrain:
         self._last_turn_ts = time.time()
         self.conversation.append({"role": "user", "content": user_input})
         self._cap_conversation()
+
+        # The answer to the router's own "Should I ... in Spotify, sir?"
+        # (an ability the user marked ask): yes runs it, no drops it.
+        try:
+            import intent_router as _ir
+            _consent = _ir.answer_pending_ability(user_input)
+            if _consent is not None:
+                self.conversation.append({"role": "assistant", "content": _consent})
+                self.last_backend = "instant"
+                self.last_stats = {"backend": "instant", "intent": "ability_consent"}
+                return _consent
+        except Exception as e:
+            print(f"[JARVIS] ability consent failed ({e}); routing normally...")
+
+        # A no to the confirm JARVIS just asked for. Runs before the
+        # correction stripper, which would turn "no, cancel that" into a new
+        # task "cancel that". A multi-step rule's own question (and a rule's
+        # "Which movie?") keeps its answer.
+        if _BARE_DECLINE_RE.match((user_input or "").strip()):
+            try:
+                import rules_steps as _rs
+                import tools as _td
+                if not _rs.active() and not _td._PENDING_RULE_SLOT:
+                    _declined = _td.decline_pending()
+                    if _declined is not None:
+                        self.conversation.append({"role": "assistant", "content": _declined})
+                        self.last_backend = "instant"
+                        self.last_stats = {"backend": "instant", "intent": "decline"}
+                        return _declined
+            except Exception as e:
+                print(f"[JARVIS] decline failed ({e}); routing normally...")
 
         # Correction prefix / leading filler: "I mean visit X" and "Now visit
         # X" route exactly like "visit X". The conversation keeps the original
@@ -1502,6 +1615,27 @@ class JarvisBrain:
             _conversational = is_conversational(user_input)
         except Exception:
             _conversational = False
+        # Phase 5: the understand-first router leads where the old code was
+        # about to delegate or guess. It runs an ability or a rule it is
+        # confident about (asking first when the user marked it "ask");
+        # anything else falls through to the routing below, unchanged.
+        if intent in ("general", "app_reference") and not _conversational:
+            try:
+                import app_abilities as _aa
+                import dialogue_state as _ds
+                import intent_router as _ir
+                if _ir.MODE == "lead" and not _fast_lane_opens(user_input):
+                    _apps = _aa.load_apps()["apps"]
+                    _snap = _ds.snapshot()
+                    if _ir.worth_asking(user_input, _snap, _apps):
+                        _led, self._lead_record = _ir.route(user_input, _snap, _apps)
+                        if _led is not None:
+                            self.conversation.append({"role": "assistant", "content": _led})
+                            self.last_backend = "router-lead"
+                            self.last_stats = {"backend": "router-lead", "intent": intent}
+                            return _led
+            except Exception as e:
+                print(f"[JARVIS] router lead failed ({type(e).__name__}: {e}); old routing...")
         if intent in ("general", "app_reference") and not _conversational \
                 and _is_multistep_goal(user_input):
             try:
@@ -1675,7 +1809,12 @@ class JarvisBrain:
             try:
                 import tools as _tools_mod
                 _tools_mod.set_progress_cb(_progress_local.cb)
-                res = execute_tool("open_site", {"name": parse_open_site(user_input)},
+                # "open github in brave": the browser is where, not what.
+                # parse_open_site drops the phrase, so read it off the request.
+                _, _bword = _tools_mod._split_browser(user_input)
+                res = execute_tool("open_site", {"name": parse_open_site(user_input),
+                                                 "browser": _tools_mod._browser_key(_bword)
+                                                 if _bword else None},
                                    user_input)
                 self.conversation.append({"role": "assistant", "content": res})
                 self.last_backend = "instant"
@@ -1753,8 +1892,12 @@ class JarvisBrain:
                     r"\b(?:close|quit|exit|kill|shut down)\b\s+(?:the\s+|my\s+)*(.+)",
                     (user_input or "").lower())
                 app_name = m.group(1).strip() if m else user_input
+                # "force close notepad" / "kill notepad": the user accepts
+                # losing unsaved work; a plain close never ends the process.
+                force = bool(_re2.search(r"\b(?:force|kill)\b", (user_input or "").lower()))
                 _progress(f"Closing {app_name}...")
-                res = execute_tool("close_application", {"app": app_name}, user_input)
+                res = execute_tool("close_application", {"app": app_name, "force": force},
+                                   user_input)
                 self.conversation.append({"role": "assistant", "content": res})
                 self.last_backend = "instant"
                 self.last_stats = {"backend": "instant", "intent": "close_app"}
