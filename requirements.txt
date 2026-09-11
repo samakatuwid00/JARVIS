@@ -1,5 +1,5 @@
 # JARVIS - Just A Rather Very Intelligent System
-Voice-activated AI assistant with local STT/TTS and Google Gemini brain.
+# Voice-activated AI assistant with local STT/TTS and Google Gemini brain.
 
 # Voice
 sounddevice>=0.4.6
@@ -13,6 +13,11 @@ google-generativeai>=0.8.0
 
 # Browser automation (ask_chatgpt)
 playwright>=1.40.0
+# Clicking inside the user's own browser over its debugging port (browser_cdp)
+websockets>=13.0
+
+# Desktop app steps and deep window scans (desktop_driver, app_abilities)
+pywinauto>=0.6.9; sys_platform == "win32"
 
 # Utilities
 python-dotenv>=1.0.0
