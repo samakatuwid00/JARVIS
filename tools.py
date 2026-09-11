@@ -1029,6 +1029,31 @@ def _remember_site(result: str, name: str, url: str, browser: str) -> str:
     return result
 
 
+def _open_in_chrome(url: str, name: str) -> str:
+    """A Chrome tab for url in the user's own, signed-in Chrome: through its
+    control port when that is open (no Playwright), else by handing the
+    address to chrome.exe (it joins the running Chrome). The JARVIS Chrome
+    driver (browser_agent) is the last resort only: when Chrome is already
+    open without the port it falls back to a separate, signed-out profile —
+    wrong for "open my facebook"."""
+    import browser_cdp
+    import rules_engine as _rules
+    label = name or url
+    if not _rules.is_web_url(url):
+        return f"[Error] {url!r} is not a web address."
+    if browser_cdp.is_attached("chrome") and browser_cdp.open_tab("chrome", url):
+        return f"Opened {label} in Chrome."
+    exe = (_load_app_registry().get("chrome") or {}).get("bin") or ""
+    if exe and os.path.isfile(exe):
+        subprocess.Popen([exe, url], close_fds=True,
+                         creationflags=getattr(subprocess, "DETACHED_PROCESS", 0))
+        return f"Opened {label} in Chrome."
+    try:
+        return __import__("browser_agent").open_site(url, name=name)
+    except Exception as e:
+        return f"[Error] Opening {label} in Chrome failed: {type(e).__name__}"
+
+
 def _open_url_in_browser(url: str, name: str, browser: str | None = None,
                          remember: bool = True) -> str:
     """Open url in the requested browser (an app_registry key).
@@ -1038,14 +1063,13 @@ def _open_url_in_browser(url: str, name: str, browser: str | None = None,
     missing bin falls back to Chrome and says so. remember=False for search
     result pages, which are not a site the user visited.
     """
-    ba = __import__("browser_agent")
     keep = _remember_site if remember else (lambda r, *a: r)
     if not browser or browser in _CHROME_KEYS:
-        return keep(ba.open_site(url, name=name), name, url, "chrome")
+        return keep(_open_in_chrome(url, name), name, url, "chrome")
     label = _browser_label(browser)
     exe = (_load_app_registry().get(browser) or {}).get("bin") or ""
     if not exe or not os.path.isfile(exe):
-        return keep(f"{ba.open_site(url, name=name)}\n{label} isn't installed "
+        return keep(f"{_open_in_chrome(url, name)}\n{label} isn't installed "
                     f"where I expected it, so I used Chrome.", name, url, "chrome")
     try:
         subprocess.Popen([exe, url], close_fds=True,
@@ -1415,7 +1439,8 @@ _SLOT_LEAD_RE = re.compile(r"^(?:it'?s|it\s+is|the\s+one\s+called|called|named)\
 _TRAILING_VOCATIVE_RE = re.compile(r"[,\s]+(?:jarvis|sir)[.!?,\s]*$", re.I)
 
 
-def run_rule_action(rule: dict, owner: str, action: dict, slot: str = "") -> str:
+def run_rule_action(rule: dict, owner: str, action: dict, slot: str = "",
+                    entry: dict | None = None) -> str:
     """Carry out one runnable rule (search_site / open_site)."""
     import time as _time
     import rules_engine as _rules
@@ -1446,6 +1471,9 @@ def run_rule_action(rule: dict, owner: str, action: dict, slot: str = "") -> str
         used = "Chrome" if note else _browser_label(browser or "chrome")
         if searching:
             msg = f"Searching {site} for {slot} in {used}."
+            import rules_steps
+            rules_steps.remember("results", {"rule": rule, "owner": owner, "action": action,
+                                             "slot": slot, "entry": entry}, url=url)
         elif slot:
             msg = (f"Opened {site} in {used} — look for {slot} there; this rule "
                    f"has no search address yet.")
@@ -1469,7 +1497,9 @@ def try_rule_action(text: str):
     open, a reply that is not a new command is the missing name.
     """
     import time as _time
-    t = _TRAILING_VOCATIVE_RE.sub("", strip_fillers(text or "")).strip()
+    # "I mean search movie X" / "no, search movie X" is the same command.
+    t = strip_fillers(strip_correction_prefix(strip_fillers(text or "")))
+    t = _TRAILING_VOCATIVE_RE.sub("", t).strip()
     if not t:
         return None
     pend = dict(_PENDING_RULE_SLOT)
@@ -1488,12 +1518,19 @@ def try_rule_action(text: str):
             return rules_steps.start(m["rule"], m["owner"], m["action"], m["slot"],
                                      m.get("entry"))
         if m:
-            return run_rule_action(m["rule"], m["owner"], m["action"], m["slot"])
+            return run_rule_action(m["rule"], m["owner"], m["action"], m["slot"],
+                                   m.get("entry"))
+        # "play it" / "open number 2" right after a rule showed results.
+        if rules_steps.is_follow_up(t):
+            return rules_steps.follow_up(t)
         if pend and _time.time() - pend.get("ts", 0) <= _RULE_SLOT_TTL:
             if _RULE_CANCEL_RE.match(t):
                 return "Okay, cancelled."
-            if not _NEW_COMMAND_RE.match(t):
-                slot = _SLOT_LEAD_RE.sub("", t).strip(" .!?,")
+            # "search The Social Network" answers "Which movie?" for a search
+            # rule even though it starts like a new command.
+            answer = _rules.answer_slot(t, pend["rule"])
+            if answer or not _NEW_COMMAND_RE.match(t):
+                slot = answer or _SLOT_LEAD_RE.sub("", t).strip(" .!?,")
                 return run_rule_action(pend["rule"], pend["owner"], pend["action"], slot)
     except Exception as e:
         print(f"[JARVIS] action-rule check failed: {e}")

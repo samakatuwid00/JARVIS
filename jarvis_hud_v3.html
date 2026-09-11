@@ -2088,7 +2088,14 @@
 
     mode = 'busy'; busySince = Date.now();
     setState('transcribing', 'TRANSCRIBING…');
-    if (!send({ type: 'audio', data: data })) goIdle();
+    // The browser's own live transcript rides along: the server compares it
+    // with Whisper's and keeps the better one (Whisper alone misheard
+    // commands the live text had right).
+    if (!send({ type: 'audio', data: data, hint: interimText })) goIdle();
+    // The hint belongs to this clip only: if the next command's live text never
+    // arrives, this one must not be sent again as its hint. (The provisional
+    // bubble stays; commitInterim swaps in the final text.)
+    interimText = '';
   }
 
   // The ScriptProcessor is now only a tape recorder: it buffers PCM. Every

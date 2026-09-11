@@ -94,6 +94,13 @@ def add_listener(fn) -> None:
             _listeners.append(fn)
 
 
+def remove_listener(fn) -> None:
+    """Drop a listener (a HUD connection that closed must stop hearing jobs)."""
+    with _lock:
+        if fn in _listeners:
+            _listeners.remove(fn)
+
+
 def _emit(job: dict) -> None:
     event = {
         "type": "job",

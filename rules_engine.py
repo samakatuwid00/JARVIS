@@ -251,7 +251,7 @@ _MATCH_STOP = {"a", "an", "the", "some", "please", "jarvis", "sir", "hey", "ok",
                "using", "with", "via", "into"}
 # Trimmed off the ends of the name the user filled in.
 _SLOT_EDGE = _MATCH_STOP | {"named", "called", "titled", "about", "in", "on", "at",
-                            "to", "and", "of"}
+                            "to", "and", "of", "name", "title"}
 _VERB_WORDS = {"search", "find", "look", "lookup", "open", "launch", "visit", "go",
                "take", "play", "watch", "browse", "show"}
 _BROWSER_WORDS = {"brave", "chrome", "edge", "msedge", "firefox"}
@@ -449,6 +449,29 @@ def match_action(utterance, apps=None):
                     best = dict(m, rule=rule, owner=owner, action=action, trigger=trig,
                                 entry=entry)
     return best
+
+
+def answer_slot(text, rule):
+    """The name in a reply to our 'Which movie, sir?' that repeats the rule's
+    own words ('search The Social Network for me' for a 'search movie' rule),
+    or None when the reply doesn't open with the rule's verb.
+
+    Such a reply looks like a new command, so without this it went to a
+    generic web search instead of answering the question.
+    """
+    phrases = [rule.get("source_phrase") or ""] + list(rule.get("triggers") or [])
+    verb = next((k for _, k in _tokens(phrases[0]) if k), None)
+    toks = _tokens(text)
+    first = next((k for _, k in toks if k), None)
+    if not verb or first != verb:
+        return None
+    rule_words = {k for p in phrases for _, k in _tokens(p) if k}
+    words = [w for w, k in toks if not (k and k in rule_words)]
+    while words and words[0].lower() in _SLOT_EDGE:
+        words.pop(0)
+    while words and words[-1].lower() in _SLOT_EDGE:
+        words.pop()
+    return " ".join(words) or None
 
 
 def build_action_url(action, slot=""):

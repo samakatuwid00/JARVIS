@@ -20,8 +20,10 @@ import urllib.request
 import rules_engine
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-# One fixed port per browser, away from 9222/9223 (JARVIS debug Chrome).
-PORTS = {"brave": 9331, "chrome": 9332, "msedge": 9333}
+# One fixed port per browser. Chrome shares 9223 with browser_agent and the
+# "Chrome (JARVIS)" shortcut: one Chrome profile can only serve one port.
+PORTS = {"brave": 9331, "chrome": int(os.getenv("JARVIS_BROWSER_PORT", "9223")),
+         "msedge": 9333}
 _LABELS = {"brave": "Brave", "chrome": "Chrome", "msedge": "Edge"}
 _EXE_NAMES = {"brave": "brave.exe", "chrome": "chrome.exe", "msedge": "msedge.exe"}
 _ATTACH_WAIT = 12      # seconds for a launched browser to open its port

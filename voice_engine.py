@@ -225,33 +225,53 @@ class VoiceEngine:
 
         return (audio_float * gain).astype(np.float32)
 
-    def _transcribe_from_file(self, file_path):
-        """Transcribe audio from a file using Whisper."""
-        import soundfile as sf
+    def _load_audio(self, file_path):
+        """Mono float32 at the model's sample rate, normalized."""
         audio, sr = sf.read(file_path)
         if len(audio.shape) > 1:
             audio = audio[:, 0]  # mono
-        # Resample if needed
         if sr != self.sample_rate:
             import scipy.signal
             audio = scipy.signal.resample(audio, int(len(audio) * self.sample_rate / sr))
         audio_float = audio.astype(np.float32)
         if audio_float.max() > 1.0:
             audio_float = audio_float / 32768.0
-        audio_float = self._normalize(audio_float)
+        return self._normalize(audio_float)
 
-        segments, info = self.whisper.transcribe(
-            audio_float,
+    def _decode(self, audio, prompt):
+        """(text, mean segment log-prob); a log-prob near 0 means confident."""
+        segments, _ = self.whisper.transcribe(
+            audio,
             language="en",
             beam_size=WHISPER_BEAM_SIZE,
             vad_filter=True,
             vad_parameters=VAD_PARAMETERS,
-            initial_prompt=WHISPER_INITIAL_PROMPT,
+            initial_prompt=prompt,
             condition_on_previous_text=False
         )
+        segs = list(segments)
+        text = " ".join(s.text for s in segs).strip()
+        conf = sum(s.avg_logprob for s in segs) / len(segs) if segs else -9.0
+        return text, conf
 
-        text = " ".join(segment.text for segment in segments)
-        return text.strip()
+    def _transcribe_from_file(self, file_path):
+        """Transcribe audio from a file using Whisper."""
+        return self._decode(self._load_audio(file_path), WHISPER_INITIAL_PROMPT)[0]
+
+    def transcribe_with_hint(self, file_path, hint):
+        """Whisper's transcript checked against the browser's live one.
+
+        Returns (chosen text, source, Whisper's text, Whisper's confidence);
+        see transcript_pick for how the two are compared.
+        """
+        import transcript_pick
+        audio = self._load_audio(file_path)
+        heard, conf = self._decode(audio, WHISPER_INITIAL_PROMPT)
+        # Whisper keeps only the prompt's last ~223 tokens: cap the hint so the
+        # vocabulary bias ahead of it survives.
+        redecode = lambda h: self._decode(audio, f"{WHISPER_INITIAL_PROMPT} {h[:200]}")[0]
+        text, source = transcript_pick.pick(heard, conf, hint, redecode)
+        return text, source, heard, conf
 
 
 class TextInterface:

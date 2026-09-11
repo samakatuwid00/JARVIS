@@ -150,6 +150,16 @@
       "first_seen": "2026-09-11",
       "last_seen": "2026-09-11",
       "runs": 1
+    },
+    {
+      "id": "f5a1a740d161",
+      "path": "voice_engine.py",
+      "category": "confidence-averaging",
+      "summary": "mean segment log-prob can hide one badly heard segment among clear ones",
+      "tier": "WATCH",
+      "first_seen": "2026-09-11",
+      "last_seen": "2026-09-11",
+      "runs": 1
     }
   ]
 }

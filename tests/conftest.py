@@ -27,6 +27,9 @@ def offline_probe(monkeypatch):
     import rules_voice
     monkeypatch.setattr(rules_sim, "PROBE", OfflineProbe())
     monkeypatch.setattr(rules_steps, "_RUN", {})
+    monkeypatch.setattr(rules_steps, "_LAST", {})
     # module-level state must not leak between tests that reuse "brave"
     monkeypatch.setattr(rules_sim, "_PROGRESS", {})
     monkeypatch.setattr(rules_voice, "_PENDING", {})
+    import tools
+    tools._PENDING_RULE_SLOT.clear()

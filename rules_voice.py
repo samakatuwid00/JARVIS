@@ -23,6 +23,7 @@ no per-command / runtime hook.
 
 import json
 import os
+import re
 
 import rules_ai
 import rules_compiler as rc
@@ -115,6 +116,20 @@ def _app_entry(app_key, registry_path=None):
     return (_load_registry(registry_path).get("apps") or {}).get(app_key) or {}
 
 
+def _test_hint(rule):
+    """What the panel's Test needs from the user, per rule: a name only when
+    the rule searches for one (the box then suggests the rule's own example);
+    an open-a-site rule just opens."""
+    action = rule.get("action") or {}
+    needs = action.get("type") == "search_site" or any(
+        s.get("op") == "search" for s in action.get("steps") or [])
+    if not needs:
+        return {"needs_sample": False, "test_label": "Test: open it now"}
+    slot = re.sub(r"\s+name$", "", action.get("slot") or "") or "name"
+    return {"needs_sample": True, "test_label": "Test",
+            "sample_placeholder": f"Try it with a {slot}, e.g. {rules_sim.sample_for(rule)}"}
+
+
 def _verdict_line(report):
     """One plain sentence on what the simulation found."""
     status = report.get("status")
@@ -180,6 +195,7 @@ def _ai_step_inner(app_key, pending, registry_path=None):
         "verification": report,
         "notes": notes,
         "testable": (rule.get("action") or {}).get("type") in rules_ai.RUNNABLE_TYPES,
+        **_test_hint(rule),
     }
 
 

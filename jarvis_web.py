@@ -1382,6 +1382,9 @@ async def websocket_endpoint(websocket: WebSocket):
             pass
 
     async def _speak_proactive(text: str):
+        from starlette.websockets import WebSocketState
+        if websocket.client_state != WebSocketState.CONNECTED:
+            return
         try:
             print(f"[SPEAK_PROACTIVE] entering: {text!r}", flush=True)
             tts_b64 = await tts_to_b64(text)
@@ -1487,8 +1490,15 @@ async def websocket_endpoint(websocket: WebSocket):
                     wav_path = decode_audio_to_wav(audio_bytes)
                     _t["decode"] = time.time()
 
-                    # Transcribe with Whisper
-                    text = voice_engine._transcribe_from_file(wav_path)
+                    # Transcribe with Whisper, checked against the browser's live
+                    # transcript when the HUD sent one (transcript_pick).
+                    hint = "" if scan else " ".join(str(message.get("hint") or "").split())[:300]
+                    if hint:
+                        text, source, heard, conf = voice_engine.transcribe_with_hint(wav_path, hint)
+                        print(f"[STT] whisper: {heard[:120]!r} (conf {conf:.2f}) | browser: "
+                              f"{hint[:120]!r} -> {source}", flush=True)
+                    else:
+                        text = voice_engine._transcribe_from_file(wav_path)
                     _t["stt"] = time.time()
                     print(f"[STT] raw{' (scan)' if scan else ''}: {text!r}", flush=True)
                     os.unlink(wav_path)
@@ -1753,6 +1763,13 @@ async def websocket_endpoint(websocket: WebSocket):
     except Exception as e:
         print(f"[WS] error: {e}", flush=True)
         WS_CLIENTS.discard(websocket)
+    finally:
+        # This connection's job listener must not outlive it: stale listeners
+        # spoke every finished job into closed sockets (5x after 5 reconnects).
+        try:
+            _jobs.remove_listener(_on_job_event)
+        except Exception:
+            pass
 
 
 @app.get("/status")

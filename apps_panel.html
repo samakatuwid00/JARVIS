@@ -488,7 +488,7 @@
             <button class="btn btn-sm btn-primary" id="v-confirm">Confirm</button>
           </div>
           <div class="composer" id="v-testrow" hidden>
-            <input class="v-sample" placeholder="Try it with a name, e.g. Dune" />
+            <input class="v-sample" />
             <button class="btn btn-sm" id="v-test">Test</button>
           </div>
         </div>
@@ -1121,7 +1121,12 @@ function voiceStep(step) {
     answer.value = "";
     answer.placeholder = clarify ? "Your answer…" : "Save as is — or type what to change";
     $("#v-confirm").textContent = clarify ? "Send" : "Save";
+    // Test fits the rule: a name box only when the rule searches for a name.
     $("#v-testrow").hidden = !(step.status === "proposal" && step.testable);
+    $(".v-sample").hidden = !step.needs_sample;
+    $(".v-sample").value = "";
+    $(".v-sample").placeholder = step.sample_placeholder || "";
+    $("#v-test").textContent = step.test_label || "Test";
     showAsk(true);
     answer.focus({ preventScroll: true });
   } else if (step.status === "committed") {

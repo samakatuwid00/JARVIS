@@ -36,13 +36,15 @@ _ORDINALS = {"first": 1, "one": 1, "second": 2, "two": 2, "third": 3, "three": 3
              "tenth": 10, "ten": 10}
 _CHOICE_FILLER = {"the", "a", "an", "one", "movie", "film", "show", "please", "i", "want",
                   "watch", "open", "pick", "choose", "number", "no", "option", "that",
-                  "play", "give", "me", "lets", "let's", "go", "with", "sir", "jarvis"}
+                  "play", "give", "me", "lets", "let's", "go", "with", "sir", "jarvis",
+                  "it", "this", "start", "stream", "now"}
 _YES_RE = re.compile(r"^(yes|yeah|yep|yup|sure|ok(ay)?|go( ahead)?|do it|play( it)?|"
                      r"please|confirm|continue|restart( it)?)\b", re.I)
 _NO_RE = re.compile(r"^(no|nope|nah|don'?t|stop|cancel|never ?mind|skip|leave it)\b", re.I)
 # A reply that is only a stop word; "No Time to Die" is a title, not a no.
 _STOP_RE = re.compile(r"^(no|nope|nah|stop|cancel|never ?mind|forget it|leave it)[\s.!,]*$", re.I)
 _ANCHOR_RE = re.compile(r"<a\b([^>]*)>(.*?)</a>", re.I | re.S)
+_ARTICLES = {"the", "a", "an"}
 # Keys a desktop step may press: navigation and common edit shortcuts only —
 # never the Windows key, Alt combos or anything that reaches outside the app.
 SAFE_KEYS_RE = re.compile(
@@ -75,6 +77,14 @@ def _closeness(name, words):
     whole word, then partial matches ('The Dunes')."""
     base = re.sub(r"\s*[(\[]?(19|20)\d{2}[)\]]?\s*$", "", name.lower())
     toks = re.findall(r"[a-z0-9]+", base)
+    # A leading article never decides closeness: the matcher trims "The" off
+    # spoken names, so "The Social Network (2010)" must still be exact for
+    # "Social Network".
+    while toks and toks[0] in _ARTICLES:
+        toks = toks[1:]
+    words = list(words)
+    while words and words[0] in _ARTICLES:
+        words = words[1:]
     query = " ".join(words)
     whole = sum(1 for w in words if w in toks)
     joined = " ".join(toks)
@@ -148,6 +158,58 @@ def choose(answer, picks):
     return ordinal - 1 if ordinal and ordinal <= len(picks) else None
 
 
+# ------------------------------------------------------- follow-ups ("it") --
+# What the last rule left on screen, so "play it" / "open number 2" can pick
+# up from there: a search-results page ("results") or an opened title ("page").
+
+LAST_TTL = 900         # seconds "it" keeps pointing at the last result
+_LAST = {}
+_FOLLOW_VERB_RE = re.compile(r"^(play|watch|stream|open|pick|choose|start)\b", re.I)
+_FOLLOW_REF_RE = re.compile(
+    r"\b(it|that|this|one|number|first|second|third|fourth|fifth|last|\d{1,2})\b", re.I)
+_PLAY_RE = re.compile(r"\b(play|watch|stream|start)\b", re.I)
+
+
+def remember(kind, run, url, title=None):
+    """Record what a rule just showed; the next "play it" continues from it."""
+    _LAST.clear()
+    _LAST.update(kind=kind, url=url, title=title, ts=time.time(),
+                 rule=run["rule"], owner=run["owner"], action=run["action"],
+                 slot=run.get("slot", ""), entry=run.get("entry") or {})
+
+
+def is_follow_up(text):
+    """'play it', 'play the first one', 'open number 2' — short, a follow-up
+    verb, and a word pointing back at what is on screen."""
+    words = (text or "").split()
+    return (bool(_LAST) and time.time() - _LAST.get("ts", 0) <= LAST_TTL and len(words) <= 7
+            and bool(_FOLLOW_VERB_RE.match(text or "")) and bool(_FOLLOW_REF_RE.search(text or "")))
+
+
+def follow_up(text):
+    """Continue from the last rule's result. On a results page: top picks,
+    the user's choice (taken straight from the reply when it names one, e.g.
+    "play the first one"), open, and press play when asked to play. On an
+    opened title: press play. The explicit "play" is the consent — no second
+    'Should I press play?'."""
+    ctx = dict(_LAST)
+    wants_play = bool(_PLAY_RE.search(text))
+    play = [{"op": "click", "target": "play"}] if wants_play else []
+    steps = ([{"op": "pick", "count": PICK_COUNT}, {"op": "open"}] + play
+             if ctx["kind"] == "results" else play)
+    if not steps:
+        return f"It's already open: {ctx.get('title') or ctx['url']}."
+    run = {"rule": ctx["rule"], "owner": ctx["owner"], "slot": ctx["slot"], "i": 0,
+           "entry": ctx["entry"], "url": ctx["url"], "title": ctx.get("title"),
+           "action": dict(ctx["action"], type="steps", steps=steps)}
+    cancel()
+    out = _advance(run)
+    if active() and _RUN.get("awaiting") == "pick" \
+            and choose(text, _RUN.get("picks") or []) is not None:
+        return resume(text)
+    return out
+
+
 # --------------------------------------------------------------------- run --
 
 def active():
@@ -200,10 +262,14 @@ def _open(run, url, title):
                     f"back if it restores sessions. Say yes, or no to open it without clicks.",
                     "restart")
         if ok:
+            remember("page", run, url=url, title=title)
             return f"Opened {title} in {browser_cdp.label(browser)}.", None
         return f"[Error] {browser_cdp.label(browser)} didn't open its control port.", None
     out = tools._open_url_in_browser(url, title, browser, remember=False)
-    return (out if out.startswith("[Error]") else f"Opened {title}."), None
+    if out.startswith("[Error]"):
+        return out, None
+    remember("page", run, url=url, title=title)
+    return f"Opened {title}.", None
 
 
 def _do_web(run, step):
@@ -348,10 +414,11 @@ def resume(text, looks_new=False):
         cancel()
         return "Okay, I'll leave it there."
     if kind == "slot":
-        if looks_new:
+        answer = rules_engine.answer_slot(reply, run["rule"])
+        if looks_new and not answer:
             cancel()
             return None
-        run["slot"] = reply.strip(" .!?,")
+        run["slot"] = answer or reply.strip(" .!?,")
         return _advance(run)
     if kind == "pick":
         shown, everything = run.get("picks") or [], run.get("all_picks") or []

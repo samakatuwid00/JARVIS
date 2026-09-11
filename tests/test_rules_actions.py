@@ -298,6 +298,41 @@ def test_new_command_or_cancel_closes_the_question(spoken):
     assert opened == []
 
 
+# Shaped like the user's saved rule (2026-09-11): no browser word in the trigger.
+USER_RULE = {
+    "rule_id": "search_movie", "source_phrase": "search movie", "enforcement": "action",
+    "triggers": ["search movie", "search for movie in brave", "find movie on brave"],
+    "action": {"type": "search_site", "site": "hollymoviehd.cc", "url": "https://hollymoviehd.cc",
+               "search_url": "https://hollymoviehd.cc/?s={query}", "browser": "brave",
+               "slot": "movie name"},
+}
+
+
+def test_correction_prefix_still_reaches_the_rule(spoken):
+    tools, opened, tmp_path = spoken
+    _registry(tmp_path, [USER_RULE])
+    out = tools.try_rule_action("I mean search, movie, name, the social network.")
+    assert opened == [("https://hollymoviehd.cc/?s=social+network", "brave")]
+    assert out == "Searching hollymoviehd.cc for social network in Brave."
+
+
+def test_reply_that_repeats_the_rule_answers_the_question(spoken):
+    tools, opened, tmp_path = spoken
+    _registry(tmp_path, [USER_RULE])
+    assert tools.try_rule_action("search a movie") == "Which movie, sir?"
+    out = tools.try_rule_action("Search The Social Network for me.")
+    assert opened == [("https://hollymoviehd.cc/?s=Social+Network", "brave")]
+    assert out == "Searching hollymoviehd.cc for Social Network in Brave."
+
+
+def test_answer_slot_needs_the_rules_own_verb():
+    import rules_engine
+    rule = {"source_phrase": "search movie", "triggers": ["find movie on brave"]}
+    assert rules_engine.answer_slot("search, movie, name, the social network", rule) == \
+        "social network"
+    assert rules_engine.answer_slot("open youtube", rule) is None
+
+
 def test_search_query_drops_trailing_jarvis():
     import tools
     assert tools.parse_search_command("search movies in brave browser, Jarvis.")["query"] \
