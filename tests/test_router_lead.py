@@ -54,6 +54,22 @@ def test_a_confident_safe_ability_runs(monkeypatch):
     assert rec["executed"] is True and rec["mode"] == "lead"
 
 
+def test_the_reply_names_the_detail_it_used(monkeypatch):
+    monkeypatch.setattr(aa, "run_ability", lambda key, aid, args=None: "Done: Search Spotify.")
+    reply, _ = ir.route("search lo-fi beats on spotify", {}, APPS,
+                        llm=_llm("ability", "spotify", "spotify.search", args={"query": "lo-fi beats"}))
+    assert reply == "Search Spotify: “lo-fi beats”, sir (Spotify)."
+
+
+def test_questions_are_answered_not_acted_on():
+    import brain_gemini
+    assert brain_gemini._router_may_lead("what is the status of the sticky brain open source repo") is False
+    assert brain_gemini._router_may_lead("from what is the status of the repo") is False
+    assert brain_gemini._router_may_lead("how do I clear my cache") is False
+    assert brain_gemini._router_may_lead("turn the spotify volume down") is True
+    assert brain_gemini._router_may_lead("can you open hermes") is True
+
+
 def test_low_confidence_falls_through(monkeypatch):
     ran = _runs(monkeypatch)
     reply, rec = ir.route("play my favorite", {}, APPS,

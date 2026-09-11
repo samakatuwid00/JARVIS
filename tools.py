@@ -3321,12 +3321,32 @@ def _dispatch_opencli(task: str, confirm: bool) -> str:
     return run_opencli(t, confirm=confirm)
 
 
+_DESKTOP_VERB_RE = re.compile(
+    r"^(?:(?:please|jarvis|hey|ok(?:ay)?|now|so|just|i\s+mean|"
+    r"(?:can|could|would|will)\s+you)[,\s]+)*(open|launch|start|run|close|quit|exit)\s+(.+)$",
+    re.I)
+
+
+def _desktop_dispatch(task: str):
+    """Open or close the app a command names. A question that merely mentions
+    an app is not a desktop action: "what is the status of the sticky brain
+    on open source repo" opened Sticky Brain (2026-09-11), because the whole
+    sentence went to open_application and matched the app inside it. Returns
+    None for those, and delegate() hands them to Hermes."""
+    m = _DESKTOP_VERB_RE.match((task or "").strip().rstrip(".!?"))
+    if not m:
+        return None
+    tool = "close_application" if m.group(1).lower() in ("close", "quit", "exit") \
+        else "open_application"
+    return execute_tool(tool, {"app": m.group(2).strip()})
+
+
 _LOCAL_DISPATCH = {
     "music": lambda task: (
         execute_tool("stop_music", {}) if "stop" in task.lower()
         else execute_tool("play_music", {"query": task})
     ),
-    "desktop": lambda task: execute_tool("open_application", {"app": task}),
+    "desktop": lambda task: _desktop_dispatch(task),
     "web": lambda task: execute_tool("search_web", {"query": task}),
     "chatgpt": lambda task: execute_tool("ask_chatgpt",
                                          {"prompt": task, "submit": True}),
@@ -3531,9 +3551,12 @@ def delegate(
     # Fast path: local tools (no Hermes spawn) — includes registry-driven handles
     handler = _LOCAL_DISPATCH.get(backend)
     if handler:
-        # Phase 1 audit: local dispatches also logged
-        _audit_log(f"delegate:{backend}", task[:200], "local_dispatch", extra={"backend": backend})
-        return handler(task)
+        result = handler(task)
+        if result is not None:
+            # Phase 1 audit: local dispatches also logged
+            _audit_log(f"delegate:{backend}", task[:200], "local_dispatch", extra={"backend": backend})
+            return result
+        backend = "hermes"      # the local handler declined: not its kind of task
 
     # Phase 5: CLI delegates (gemini/claude/codex) — explicit or via registry handles
     if backend in ("gemini", "claude", "codex"):
@@ -4129,11 +4152,15 @@ def close_application(app: str, force: bool = False) -> str:
     # Strip the close verb itself — callers may pass the whole utterance
     # ('close it', 'close the spotify') rather than a bare app name.
     requested = re.sub(
-        r"^(?:please\s+)?(?:close|quit|exit|kill|shut down)\s+(?:the\s+|my\s+|a\s+)*",
+        r"^(?:please\s+)?(?:(?:can|could|would|will)\s+you\s+)?"
+        r"(?:close|quit|exit|kill|shut down)\s+(?:the\s+|my\s+|a\s+)*",
         "", requested, flags=re.IGNORECASE).strip()
     if requested.lower() in {"it", "this", "that", "app", "application",
                              "the", "a", "my", ""}:
         return "[Error] Which app should I close? Name it, e.g. 'close Spotify'."
+    if requested.lower() in {"yourself", "you", "jarvis", "yourself jarvis"}:
+        return ("I can't close myself, sir. Close the JARVIS tab, or say "
+                "\"go to sleep\" to end the session.")
 
     # Resolve through the same chain as open_application.
     entry = None

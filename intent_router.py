@@ -209,7 +209,10 @@ def _run_ability(app, ability_id, args, apps):
     if out.startswith("[Error]"):
         return out, False
     name = out[len("Done: "):].rstrip(".") if out.startswith("Done: ") else out
-    return f"{name}, sir ({_display(app, apps)}).", True
+    # Say what was used: "Search the web, sir (Chrome)." hid the query.
+    detail = ", ".join(str(v) for v in (args or {}).values() if str(v).strip())
+    what = f"{name}: “{detail}”" if detail else name
+    return f"{what}, sir ({_display(app, apps)}).", True
 
 
 def _run_rule(app, rule_id, args, apps):

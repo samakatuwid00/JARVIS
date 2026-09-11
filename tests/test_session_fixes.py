@@ -209,6 +209,34 @@ def test_set_the_system_volume(monkeypatch):
     assert "spotify.set_volume" in ids
 
 
+def test_a_question_that_names_an_app_does_not_open_it(monkeypatch):
+    import tools
+    ran = []
+    monkeypatch.setattr(tools, "execute_tool", lambda name, args, *a: ran.append((name, args)) or "ok")
+    assert tools._desktop_dispatch("from what is the status of the sticky brain on open source repo") is None
+    assert tools._desktop_dispatch("what are the ai agents installed in the computer right now") is None
+    assert ran == []
+    tools._desktop_dispatch("can you open hermes")
+    tools._desktop_dispatch("close notepad.")
+    assert ran == [("open_application", {"app": "hermes"}), ("close_application", {"app": "notepad"})]
+
+
+@pytest.mark.parametrize("text, job", [
+    ("what's the status?", True), ("what is the status of the task", True),
+    ("any update on it", True), ("how is the job going", True),
+    ("what is the status of the sticky brain open source repo", False),
+    ("what's the progress on my thesis", False)])
+def test_only_job_questions_get_the_job_status(text, job):
+    import brain_gemini
+    assert (brain_gemini.classify_intent(text) == "job_status") is job
+
+
+def test_jarvis_does_not_try_to_close_itself():
+    import tools
+    assert tools.close_application("yourself").startswith("I can't close myself")
+    assert tools.close_application("can you close yourself").startswith("I can't close myself")
+
+
 # ------------------------------------------------------- honesty guard --
 
 def test_honesty_guard_leaves_questions_alone():

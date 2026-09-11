@@ -373,10 +373,13 @@ def classify_intent(text: str) -> str:
     # not a music stop nor an app close, and "status" alone is not a search.
     # Both require an explicit task/job/goal noun (or a bare status question)
     # so ordinary sentences never hijack here.
+    # The bare form must END there: "what is the status of the sticky brain
+    # repo" is a question about a repo, not about JARVIS's jobs (2026-09-11).
     if re.search(
             r"\b(status|progress|update)\b.{0,30}\b(tasks?|jobs?|goals?|hermes)\b|"
             r"\b(tasks?|jobs?|goal)\b.{0,30}\b(status|progress|done|finished|going)\b|"
-            r"^(what'?s|what is|any|is there an?)\s+(the\s+)?(status|progress|update)\b",
+            r"^(what'?s|what is|any|is there an?)\s+(the\s+)?(status|progress|update)"
+            r"(\s+(on|of)\s+(it|that|this))?\s*[?.!]*$",
             t):
         return "job_status"
     if re.search(r"\b(stop|cancel|abort|halt)\b.{0,20}\b(tasks?|jobs?|goal)s?\b", t):
@@ -548,6 +551,18 @@ def play_favorites(text):
     if out.startswith("Done"):
         return "Playing your liked songs on Spotify, sir."
     return None if "isn't one of" in out else out
+
+
+_WH_QUESTION_RE = re.compile(
+    r"^\s*(?:(?:jarvis|hey|ok(?:ay)?|so|now|and|from)[,\s]+)*"
+    r"(?:what|which|who|whose|how|why|when|where)\b", re.I)
+
+
+def _router_may_lead(text):
+    """Questions are answered, not acted on: "what is the status of the sticky
+    brain repo" ran a Chrome web search (2026-09-11). "can you open hermes" is
+    a command in question form and still leads."""
+    return not _WH_QUESTION_RE.match(text or "")
 
 
 _OPEN_LEAD_RE = re.compile(
@@ -1650,7 +1665,8 @@ class JarvisBrain:
                 import app_abilities as _aa
                 import dialogue_state as _ds
                 import intent_router as _ir
-                if _ir.MODE == "lead" and not _fast_lane_opens(user_input):
+                if _ir.MODE == "lead" and not _fast_lane_opens(user_input) \
+                        and _router_may_lead(user_input):
                     _apps = _aa.load_apps()["apps"]
                     _snap = _ds.snapshot()
                     if _ir.worth_asking(user_input, _snap, _apps):
