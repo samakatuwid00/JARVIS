@@ -4868,6 +4868,14 @@ def execute_tool(name: str, arguments: dict) -> str:
         return result
     dur = time.monotonic() - start
     print(f"[TOOL] {name} done in {dur:.1f}s", flush=True)
+    # An app JARVIS just opened can be read in under a second: learn its
+    # buttons in the background (at most once a day per app).
+    if name == "open_application" and not str(result).startswith("[Error]"):
+        try:
+            import app_abilities
+            app_abilities.scan_soon(arguments.get("app"))
+        except Exception:
+            pass
     _audit_log(f"execute_tool:{name}", json.dumps(arguments, default=str)[:500], "executed", result=result, confirm=confirmed, extra={"duration_ms": int(dur*1000)})
     try:
         import audit

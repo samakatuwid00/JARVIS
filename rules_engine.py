@@ -270,12 +270,20 @@ def bare_host(url_or_domain):
 
 
 _WEB_URL_RE = re.compile(r"^https?://[^\s\"'<>]+$", re.I)
+# A real host: dotted name with a letter TLD, localhost, or an IPv4 address.
+_HOST_RE = re.compile(
+    r"^(?:(?!-)[a-z0-9-]+(?:\.(?!-)[a-z0-9-]+)*\.[a-z]{2,24}|localhost|\d{1,3}(?:\.\d{1,3}){3})$",
+    re.I)
 
 
 def is_web_url(url):
-    """http(s) addresses only: a rule's url ends up on browser command lines,
-    where anything starting with '-' would be read as a switch."""
-    return bool(_WEB_URL_RE.match(url or ""))
+    """http(s) addresses with a real host only: a rule's url ends up on browser
+    command lines, where anything starting with '-' would be read as a switch,
+    and "https://--flag" must not pass as an address either."""
+    if not _WEB_URL_RE.match(url or ""):
+        return False
+    host = urllib.parse.urlsplit(url).hostname or ""
+    return bool(_HOST_RE.match(host))
 
 
 def same_site(url, site):

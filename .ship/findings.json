@@ -160,6 +160,26 @@
       "first_seen": "2026-09-11",
       "last_seen": "2026-09-11",
       "runs": 1
+    },
+    {
+      "id": "6fbec6b85ba3",
+      "path": "app_abilities.py",
+      "category": "privacy",
+      "summary": "the AI sorting pass sends app names and install folders to the cloud model through 9router",
+      "tier": "WATCH",
+      "first_seen": "2026-09-11",
+      "last_seen": "2026-09-11",
+      "runs": 1
+    },
+    {
+      "id": "0d8f582d2739",
+      "path": "app_abilities.py",
+      "category": "clean-code",
+      "summary": "_run_op handles eleven step kinds in one long function",
+      "tier": "CLEAN CODE",
+      "first_seen": "2026-09-11",
+      "last_seen": "2026-09-11",
+      "runs": 1
     }
   ]
 }

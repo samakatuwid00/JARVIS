@@ -798,8 +798,8 @@ async def get_apps():
     extras = websites + capabilities
     reg = load_registry()
     if not reg:
-        return JSONResponse({"error": "no registry",
-                             "apps": list(extras), "curated": list(extras),
+        # A fresh machine: no apps yet. The panel offers Add app / Full scan.
+        return JSONResponse({"apps": list(extras), "curated": list(extras),
                              "all": list(extras), "count": len(extras),
                              "curated_count": len(extras),
                              "all_count": len(extras),
@@ -832,6 +832,9 @@ async def get_apps():
             "hidden": False,
             "rule_drafts": entry.get("rule_drafts") or [],
             "compiled_rules": entry.get("compiled_rules") or [],
+            "abilities": entry.get("abilities") or [],
+            "app_kind": entry.get("app_kind"),
+            "deep_scan": entry.get("deep_scan"),
         }
         all_apps.append(item)
         if registered:
@@ -1149,6 +1152,106 @@ async def post_apps_rules_test(message: Request):
     result = await asyncio.to_thread(tools.run_rule_action, rule, key, action, sample)
     return JSONResponse({"ok": not result.startswith("[Error]"), "result": result,
                          "url": rules_engine.build_action_url(action, sample)})
+
+
+def _apps_job(progress_key, work):
+    """Run a slow Apps job (scan, AI sorting, launching an app) with progress
+    published under progress_key for the panel's progress bar."""
+    import rules_sim
+    try:
+        return work(rules_sim.reporter(progress_key))
+    finally:
+        rules_sim.finish_progress(progress_key)
+
+
+async def _json_body(message):
+    try:
+        return await message.json()
+    except Exception:
+        return None
+
+
+@app.post("/apps/add")
+async def post_apps_add(message: Request):
+    """Add one app by name or program path: register it, work out what it is,
+    create its predefined rules, and deep-scan it (opening it once)."""
+    body = await _json_body(message)
+    query = ((body or {}).get("query") or "").strip()
+    if not query:
+        return JSONResponse({"error": "Type an app name or its program path."}, status_code=400)
+    import app_abilities
+    out = await asyncio.to_thread(
+        _apps_job, "apps", lambda say: app_abilities.add_app(query, progress=say))
+    return JSONResponse(dict(out, ok="error" not in out), status_code=400 if "error" in out else 200)
+
+
+@app.post("/apps/fullscan")
+async def post_apps_fullscan(message: Request):
+    """Find every launchable app on this computer, hide noise, register the rest.
+    Keeps every rule and choice the user already made."""
+    import app_abilities
+    out = await asyncio.to_thread(
+        _apps_job, "apps", lambda say: app_abilities.full_scan(progress=say))
+    return JSONResponse(dict(out, ok=True))
+
+
+@app.post("/apps/abilities/generate")
+async def post_apps_abilities_generate(message: Request):
+    """Create predefined rules for all registered apps (or body.keys), without
+    launching anything."""
+    body = await _json_body(message) or {}
+    keys = body.get("keys") if isinstance(body.get("keys"), list) else None
+    import app_abilities
+    out = await asyncio.to_thread(
+        _apps_job, "apps", lambda say: app_abilities.generate(keys=keys, progress=say))
+    return JSONResponse(dict(out, ok=True))
+
+
+@app.post("/apps/abilities/scan")
+async def post_apps_abilities_scan(message: Request):
+    """Deep-scan one app's window ("Scan this app"). launch=true opens it if
+    needed and closes it again afterwards."""
+    body = await _json_body(message) or {}
+    key = (body.get("key") or "").strip()
+    if not key:
+        return JSONResponse({"error": "missing key"}, status_code=400)
+    import app_abilities
+    launch = bool(body.get("launch", True))
+    out = await asyncio.to_thread(
+        _apps_job, key, lambda say: app_abilities.scan_app(key, launch=launch, progress=say))
+    return JSONResponse(dict(out, ok="error" not in out), status_code=400 if "error" in out else 200)
+
+
+@app.post("/apps/abilities/update")
+async def post_apps_abilities_update(message: Request):
+    """The user's on/off switch and consent level for one ability."""
+    body = await _json_body(message) or {}
+    import app_abilities
+    ability = app_abilities.set_choice((body.get("key") or "").strip(),
+                                       (body.get("id") or "").strip(),
+                                       enabled=body.get("enabled"), level=body.get("level"))
+    if ability is None:
+        return JSONResponse({"error": "unknown ability"}, status_code=404)
+    return JSONResponse({"ok": True, "ability": ability})
+
+
+@app.post("/apps/abilities/test")
+async def post_apps_abilities_test(message: Request):
+    """Run one ability for real from the panel. `value` fills the ability's
+    one needed detail (a website, a folder, a search), when it has one."""
+    body = await _json_body(message) or {}
+    key, aid = (body.get("key") or "").strip(), (body.get("id") or "").strip()
+    import app_abilities
+    entry = app_abilities.load_apps()["apps"].get(key) or {}
+    ability = next((a for a in entry.get("abilities") or [] if a.get("id") == aid), None)
+    if ability is None:
+        return JSONResponse({"error": "unknown ability"}, status_code=404)
+    args = {}
+    needs = list((ability.get("needs") or {}).keys())
+    if needs and str(body.get("value") or "").strip():
+        args[needs[0]] = str(body["value"]).strip()[:300]
+    result = await asyncio.to_thread(app_abilities.run_ability, key, aid, args)
+    return JSONResponse({"ok": not result.startswith("[Error]"), "result": result})
 
 
 @app.get("/apps/rules/progress")

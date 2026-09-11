@@ -324,6 +324,25 @@
   }
   .rule-x:hover { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-ring); }
   .rule-x.is-busy { opacity: .5; cursor: progress; }
+  .head-acts { display: flex; flex-wrap: wrap; gap: 6px; }
+  .add-row { display: flex; gap: 6px; margin-top: 10px; }
+  .add-row input, .ab-val {
+    flex: 1; min-width: 0; height: 28px; padding: 0 10px; border-radius: 7px;
+    background: var(--surface-2); border: 1px solid var(--border); color: var(--text); font: inherit; font-size: 12.5px;
+  }
+  .add-row input:focus-visible, .ab-val:focus-visible, .ab-level:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 1px; }
+  .ab-list { display: grid; }
+  .ab { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 9px 0; border-bottom: 1px solid var(--border); }
+  .ab:last-child { border-bottom: 0; }
+  .ab-main { flex: 1 1 180px; min-width: 0; }
+  .ab-name { font-size: 13px; color: var(--text); overflow-wrap: anywhere; }
+  .ab-src { font: 11px/1.4 var(--mono); color: var(--text-3); }
+  .ab-val { flex: 1 1 140px; }
+  .ab-level {
+    height: 26px; padding: 0 6px; border-radius: 6px; font: inherit; font-size: 12px;
+    background: var(--surface-2); color: var(--text-2); border: 1px solid var(--border);
+  }
+  .ab.is-off .ab-name { color: var(--text-3); }
   .progress { margin: 8px 0 12px; }
   .progress-bar {
     height: 4px; border-radius: 99px; overflow: hidden;
@@ -419,6 +438,11 @@
           <span class="stat"><b id="st-rules">0</b>rules</span>
           <span class="stat warn" id="st-broken-wrap" hidden><b id="st-broken">0</b>broken</span>
         </div>
+        <div class="head-acts">
+          <button class="btn btn-sm" id="h-add">Add app</button>
+          <button class="btn btn-sm" id="h-scan" title="Find every app on this computer">Full scan</button>
+          <button class="btn btn-sm btn-primary" id="h-gen" title="Give every registered app its predefined abilities">Create predefined rules for all</button>
+        </div>
         <button class="icon-btn" id="refresh" title="Refresh" aria-label="Refresh"></button>
       </div>
       <div class="controls">
@@ -433,6 +457,14 @@
           <button class="seg-btn" data-filter="website" aria-pressed="false">Websites <span class="n" id="f-website"></span></button>
           <button class="seg-btn" data-filter="capability" aria-pressed="false">Capabilities <span class="n" id="f-capability"></span></button>
         </div>
+      </div>
+      <form class="add-row" id="add-row" hidden>
+        <input id="add-q" placeholder="App name or program path, e.g. Figma or C:\Program Files\Figma\Figma.exe" autocomplete="off" spellcheck="false" aria-label="App to add" />
+        <button class="btn btn-sm btn-primary" id="add-go" type="submit">Add and scan</button>
+        <button class="btn btn-sm btn-quiet" id="add-cancel" type="button">Cancel</button>
+      </form>
+      <div class="progress" id="h-progress" role="status" aria-live="polite" hidden>
+        <div class="progress-bar"><span></span></div><div class="progress-text"></div>
       </div>
       <nav class="tabs" role="tablist" aria-label="View">
         <button id="tab-curated" class="tab active" role="tab" aria-selected="true" data-tab="curated">
@@ -469,6 +501,15 @@
     </div>
     <div class="dr-body">
       <div id="app-secs">
+      <section class="sec" id="sec-abilities">
+        <div class="sec-h"><h3>What JARVIS can do here</h3><span class="count" id="ab-count"></span>
+          <button class="link-btn" id="ab-scan" title="Opens the app if needed, reads its buttons, then closes it again">Scan this app</button></div>
+        <div class="progress" id="ab-progress" role="status" aria-live="polite" hidden>
+          <div class="progress-bar"><span></span></div><div class="progress-text"></div>
+        </div>
+        <div class="ab-list" id="ab-list"></div>
+      </section>
+
       <section class="sec" id="sec-voice">
         <div class="sec-h">
           <h3>Voice Rule Setup</h3>
@@ -730,7 +771,7 @@ function render() {
     if (q || S.filter !== "all") {
       list.innerHTML = emptyState("No matches", q ? `Nothing matches “${q}” in this view.` : "Nothing of this type in this view.", "clear", "Clear filters");
     } else if (S.tab === "curated") {
-      list.innerHTML = emptyState("No curated apps yet", "Register apps from the full scan to pin them here.", "browse", "Browse all detected");
+      list.innerHTML = emptyState("No apps yet", "Add an app, or run a Full scan to find the apps on this computer.", "add", "Add app");
     } else {
       list.innerHTML = emptyState("No apps found", "The last scan came back empty.", "retry", "Refresh");
     }
@@ -775,6 +816,7 @@ function rowHtml(a) {
       <span class="meta">${escapeHtml(metaOf(a))}</span>
     </button>
     <div class="aux">
+      ${(a.abilities || []).length ? `<span class="rules-chip" title="What JARVIS can do here">${(a.abilities || []).length} abilities</span>` : ""}
       ${rules ? `<span class="rules-chip" title="Active rules">${svg("shield", 12)}${rules} rule${rules > 1 ? "s" : ""}</span>` : ""}
       ${k !== "app" || a.broken ? `<span class="pill ${st.cls}"${brokenWhy ? ` title="${escapeHtml(brokenWhy)}"` : ""}>${st.label}</span>` : ""}
     </div>
@@ -944,6 +986,7 @@ function fillDrawer(a) {
     DR.proposed = [];
     DR.filledKey = a.key;
   }
+  if (isApp) renderAbilities(a);
   if (isApp) renderCurrentRules(a.compiled_rules || []);
   else renderInfo(a, k);
 }
@@ -1238,6 +1281,124 @@ async function recheckRule(key, rid, btn) {
   await refreshRules(key);
 }
 
+// ------------------------------------------- abilities: what JARVIS can do --
+
+const LEVEL_LABEL = { safe: "Safe", ask: "Ask first", never: "Never" };
+const SOURCE_LABEL = { universal: "every app", template: "for this kind of app",
+                       profile: "known app", scan: "from its window", user: "yours" };
+
+function renderAbilities(a) {
+  const list = a.abilities || [];
+  $("#ab-count").textContent = list.length || "";
+  const box = $("#ab-list");
+  if (!list.length) {
+    box.innerHTML = '<div class="empty-mini">No abilities yet. Press Scan this app, or Create predefined rules for all.</div>';
+    return;
+  }
+  box.innerHTML = list.map(x => {
+    const need = Object.keys(x.needs || {})[0];
+    const off = x.enabled === false;
+    return `<div class="ab${off ? " is-off" : ""}" data-id="${escapeHtml(x.id)}">
+      <div class="ab-main"><div class="ab-name">${escapeHtml(x.name)}</div>
+        <div class="ab-src">${escapeHtml(SOURCE_LABEL[x.source] || x.source || "")}</div></div>
+      ${need ? `<input class="ab-val" id="abv-${escapeHtml(x.id)}" placeholder="${escapeHtml(need)}" aria-label="${escapeHtml(need)} for ${escapeHtml(x.name)}" />` : ""}
+      <select class="ab-level" id="abl-${escapeHtml(x.id)}" aria-label="When ${escapeHtml(x.name)} may run">
+        ${Object.keys(LEVEL_LABEL).map(l => `<option value="${l}"${l === x.level ? " selected" : ""}>${LEVEL_LABEL[l]}</option>`).join("")}
+      </select>
+      <span class="switch"><input type="checkbox" role="switch" data-ab="toggle" ${off ? "" : "checked"} aria-label="Allow ${escapeHtml(x.name)}" /><span class="track"></span></span>
+      <button class="btn btn-sm" data-ab="test"${x.level === "never" || off ? " disabled" : ""}>Test</button>
+    </div>`;
+  }).join("");
+}
+
+async function updateAbility(id, change) {
+  let res = null, d = {};
+  try {
+    res = await fetch("/apps/abilities/update", post(Object.assign({ key: DR.key, id }, change)));
+    d = await res.json().catch(() => ({}));
+  } catch (e) {}
+  if (!res || !res.ok) { toast(d.error || "Couldn't save that change", "err"); return; }
+  const a = findApp(DR.key);
+  if (a) {
+    a.abilities = (a.abilities || []).map(x => x.id === id ? d.ability : x);
+    renderAbilities(a);
+  }
+  toast("Saved");
+}
+
+async function testAbility(id, btn) {
+  const row = btn.closest(".ab");
+  const val = row.querySelector(".ab-val");
+  setBusy(btn, true);
+  let res = null, d = {};
+  try {
+    res = await fetch("/apps/abilities/test", post({ key: DR.key, id, value: val ? val.value : "" }));
+    d = await res.json().catch(() => ({}));
+  } catch (e) {}
+  setBusy(btn, false);
+  toast(d.result || d.error || "Test failed", d.ok ? "ok" : "err");
+}
+
+// One Apps job at a time from the header: add, full scan, or create for all.
+async function appsJob(url, body, label, btn) {
+  setBusy(btn, true);
+  const stop = startProgress("#h-progress", "apps", label);
+  let res = null, d = {};
+  try {
+    res = await fetch(url, post(body));
+    d = await res.json().catch(() => ({}));
+  } catch (e) {}
+  stop();
+  setBusy(btn, false);
+  if (!res || !res.ok) { toast(d.error || "That didn't work. Check that JARVIS is running.", "err"); return null; }
+  await loadApps();
+  return d;
+}
+
+function showAddRow(on) {
+  $("#add-row").hidden = !on;
+  if (on) $("#add-q").focus();
+}
+
+async function addApp(e) {
+  e.preventDefault();
+  const q = ($("#add-q").value || "").trim();
+  if (!q) { toast("Type an app name or its program path", "err"); return; }
+  const d = await appsJob("/apps/add", { query: q }, "Finding the app...", $("#add-go"));
+  if (!d) return;
+  $("#add-q").value = "";
+  showAddRow(false);
+  const scanned = d.scan && !d.scan.error ? `, ${d.scan.found} from its window` : "";
+  toast(`Added ${d.key}: ${d.abilities} abilities${scanned}`);
+  openDrawer(d.key);
+}
+
+async function fullScan(btn) {
+  const d = await appsJob("/apps/fullscan", {}, "Scanning the computer for apps...", btn);
+  if (d) toast(`Found ${d.found} apps · ${d.newly_registered} new · ${d.hidden} hidden as noise`);
+}
+
+async function generateAll(btn) {
+  const d = await appsJob("/apps/abilities/generate", {}, "Creating predefined rules...", btn);
+  if (d) toast(`${d.abilities} abilities across ${d.apps} apps`);
+}
+
+async function scanThisApp(btn) {
+  const key = DR.key;
+  setBusy(btn, true);
+  const stop = startProgress("#ab-progress", key, "Reading the app's buttons...");
+  let res = null, d = {};
+  try {
+    res = await fetch("/apps/abilities/scan", post({ key, launch: true }));
+    d = await res.json().catch(() => ({}));
+  } catch (e) {}
+  stop();
+  setBusy(btn, false);
+  if (!res || !res.ok) { toast(d.error || "Couldn't scan this app", "err"); return; }
+  toast(`Found ${d.found} buttons and boxes${d.opened ? " (opened it and closed it again)" : ""}`);
+  await loadApps();
+}
+
 // Runs the proposed rule once for real (opens the browser), before saving.
 async function voiceTest(key, btn) {
   const sample = ($(".v-sample").value || "").trim();
@@ -1316,6 +1477,7 @@ function init() {
     const act = actEl ? actEl.dataset.act : "";
     if (act === "retry") return loadApps();
     if (act === "browse") return setTab("all");
+    if (act === "add") return showAddRow(true);
     if (act === "clear") { $("#search").value = ""; return setFilter("all"); }
     const row = e.target.closest(".row");
     if (!row || e.target.closest(".switch")) return;
@@ -1344,6 +1506,22 @@ function init() {
   $("#d-compile").addEventListener("click", e => compileRules(DR.key, e.currentTarget));
   $("#d-accept").addEventListener("click", e => acceptProposal(DR.key, e.currentTarget));
   $("#rules-clear").addEventListener("click", e => removeRule(DR.key, "", e.currentTarget));
+  $("#h-add").addEventListener("click", () => showAddRow($("#add-row").hidden));
+  $("#add-cancel").addEventListener("click", () => showAddRow(false));
+  $("#add-row").addEventListener("submit", addApp);
+  $("#h-scan").addEventListener("click", e => fullScan(e.currentTarget));
+  $("#h-gen").addEventListener("click", e => generateAll(e.currentTarget));
+  $("#ab-scan").addEventListener("click", e => scanThisApp(e.currentTarget));
+  $("#ab-list").addEventListener("change", e => {
+    const row = e.target.closest(".ab");
+    if (!row) return;
+    if (e.target.matches(".ab-level")) updateAbility(row.dataset.id, { level: e.target.value });
+    if (e.target.matches('[data-ab="toggle"]')) updateAbility(row.dataset.id, { enabled: e.target.checked });
+  });
+  $("#ab-list").addEventListener("click", e => {
+    const b = e.target.closest('[data-ab="test"]');
+    if (b) testAbility(b.closest(".ab").dataset.id, b);
+  });
   $("#v-current").addEventListener("click", e => {
     const rc = e.target.closest("[data-recheck]");
     if (rc) return recheckRule(DR.key, rc.dataset.recheck, rc);
