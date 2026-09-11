@@ -39,6 +39,7 @@ MAX_SCANNED = 40         # abilities kept from one deep scan
 SCAN_WAIT = 15           # seconds to wait for a launched app's window
 MAX_CONTROLS = 1500      # UI elements read per window (big apps have thousands)
 FIND_WAIT = 3            # seconds a click/type ability waits for its control
+VOLUME_STEPS = 50        # volume-key presses from 100% to 0% (2% each)
 SCAN_SOON_DELAY = 6      # seconds after JARVIS opens an app before reading it
 RESCAN_AFTER = 86400     # one opportunistic deep scan per app per day
 
@@ -140,6 +141,10 @@ def _template(key, name, kind):
                 [{"op": "media", "key": "volume_up"}], "volume rises"),
             _ab(key, "volume_down", "Volume down", ["quieter", "volume down"],
                 [{"op": "media", "key": "volume_down"}], "volume drops"),
+            _ab(key, "set_volume", "Set the system volume", ["set the volume to {percent}",
+                                                              "make it {percent} percent"],
+                [{"op": "volume_set", "percent": "{percent}"}], "the volume is at that level",
+                needs={"percent": "number"}),
         ],
         "office": [
             _ab(key, "new_document", "New document", [f"new document in {name}"],
@@ -771,6 +776,16 @@ def _run_op(key, entry, op, args):
         return out if str(out).startswith("[Error]") else ""
     if kind == "media":
         _press_media(op["key"])
+        return ""
+    if kind == "volume_set":
+        digits = re.sub(r"\D", "", _fill(op.get("percent") or "", args))
+        if not digits or int(digits) > 100:
+            return "[Error] Say a volume from 0 to 100 percent."
+        # Windows volume keys move 2% a press: all the way down, then up.
+        for _ in range(VOLUME_STEPS):
+            _press_media("volume_down")
+        for _ in range(round(int(digits) / 2)):
+            _press_media("volume_up")
         return ""
     if kind == "uri":
         uri = _fill(op["uri"], {k: urllib.parse.quote(str(v)) for k, v in args.items()})

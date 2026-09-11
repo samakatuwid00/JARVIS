@@ -1185,6 +1185,20 @@
   // final for the life of the session — concatenating all of them made each new
   // command render appended to the previous one. null = not yet established.
   var interimBase = null;
+  // Words the continuous recognizer has reported so far, and how many of them
+  // came before the current capture began: only the rest is this command.
+  var wordsHeard = 0, capWordsBefore = 0;
+  function allHeardWords(ev) {
+    var s = '';
+    for (var k = 0; k < ev.results.length; k++) s += ' ' + ev.results[k][0].transcript;
+    return s.split(/\s+/).filter(Boolean);
+  }
+  // Where the command starts: the last wake word heard. The recognizer may
+  // hold the previous command and this one in a single still-open result.
+  function lastWakeAt(words) {
+    for (var j = words.length - 1; j >= 0; j--) if (wakeWordIn(words[j])) return j;
+    return words.length;
+  }
   // One user line per turn. The server emits a transcript for typed input too,
   // and that line was already logged locally when it was sent.
   var userLoggedThisTurn = false;
@@ -1896,26 +1910,26 @@
       // appends the wake word to real commands, so block during active turns.
       // R3a: while a command capture is open, the interims are live user text.
       // The wake-word branch below still only runs when JARVIS is resting.
+      var heardWords = allHeardWords(ev);
       if (mode === 'command') {
-        // Establish the start of this utterance on the first event of the turn.
-        // Also re-establish it if the recognizer restarted (Chrome auto-stops
-        // every ~60s), which resets ev.results and would leave the base past
-        // the end of the array — producing a permanently empty live line.
-        if (interimBase === null || interimBase > ev.results.length - 1) {
-          interimBase = ev.resultIndex;
-        }
-        var live = '';
-        for (var k = interimBase; k < ev.results.length; k++) {
-          live += ev.results[k][0].transcript;
-        }
-        showInterim(live);
+        // The live line is what was said SINCE this capture began. A result
+        // index was not enough: Chrome keeps extending a still-open result,
+        // so "…volume up on spotify" and the next command "make it 100%"
+        // arrived as one line and JARVIS turned the volume up twice
+        // (2026-09-11). Count words instead. A recognizer restart (Chrome
+        // stops every ~60s) resets the results: then everything is new.
+        if (heardWords.length < capWordsBefore) capWordsBefore = 0;
+        showInterim(heardWords.slice(capWordsBefore).join(' '));
+        wordsHeard = heardWords.length;
         return;
       }
+      wordsHeard = heardWords.length;
       if (mode !== 'off' && mode !== 'idle') return;
       for (var i = ev.resultIndex; i < ev.results.length; i++) {
         var txt = ev.results[i][0].transcript;
         if (wakeWordIn(txt)) {
           console.log('[wake] detected: ' + txt);
+          wordsHeard = lastWakeAt(heardWords);
           beginCapture('command', false);
           cue('What is it, sir?');
           return;
@@ -2074,6 +2088,7 @@
     capHeard = false;
     if (seed) { for (var i = 0; i < ring.length; i++) { cap.push(ring[i]); capLen += ring[i].length; } }
     ring = []; ringLen = 0;
+    capWordsBefore = wordsHeard;       // earlier commands are not this one
     setState('listening', 'LISTENING…');
     // The server's wake fallback holds off while we own the mic: its decodes
     // were competing with this capture for the CPU.

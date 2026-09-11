@@ -170,6 +170,45 @@ def test_pinning_takes_the_scan_lock(tmp_path, monkeypatch):
     assert json.loads(path.read_text(encoding="utf-8"))["apps"]["vlc"]["pinned_by"] == "user"
 
 
+# ------------------------------------------------------ voice session 2 --
+
+def test_my_favorites_on_spotify_plays_liked_songs(monkeypatch):
+    import app_abilities as aa
+    import brain_gemini
+    ran = []
+    monkeypatch.setattr(aa, "run_ability",
+                        lambda key, aid, args=None: ran.append((key, aid)) or "Done: Play liked songs.")
+    assert brain_gemini.play_favorites("can you play a song on spotify my favorites") == \
+        "Playing your liked songs on Spotify, sir."
+    assert ran == [("spotify", "spotify.play_liked")]
+    assert brain_gemini.play_favorites("play my favorites") is None           # no platform named
+    assert brain_gemini.play_favorites("play lo-fi on spotify") is None       # not favorites
+
+
+def test_an_unconfigured_manus_is_never_picked(monkeypatch):
+    import manus_agent
+    import tools
+    monkeypatch.setattr(tools, "_detect_backend_by_task", lambda task: "manus")
+    monkeypatch.setattr(manus_agent, "_cookies_present", lambda: False)
+    assert tools._detect_backend("make it 100% volume") == "hermes"
+    monkeypatch.setattr(manus_agent, "_cookies_present", lambda: True)
+    assert tools._detect_backend("make an image of a cat") == "manus"
+
+
+def test_set_the_system_volume(monkeypatch):
+    import app_abilities as aa
+    presses = []
+    monkeypatch.setattr(aa, "_press_media", lambda name: presses.append(name))
+    op = {"op": "volume_set", "percent": "{percent}"}
+    assert aa._run_op("spotify", {}, op, {"percent": "100%"}) == ""
+    assert presses.count("volume_down") == aa.VOLUME_STEPS and presses.count("volume_up") == 50
+    presses.clear()
+    assert aa._run_op("spotify", {}, op, {"percent": "30"}) == "" and presses.count("volume_up") == 15
+    assert aa._run_op("spotify", {}, op, {"percent": "150"}).startswith("[Error]")
+    ids = [a["id"] for a in aa.build_abilities("spotify", {}, "media")]
+    assert "spotify.set_volume" in ids
+
+
 # ------------------------------------------------------- honesty guard --
 
 def test_honesty_guard_leaves_questions_alone():

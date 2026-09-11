@@ -2479,6 +2479,21 @@ def _load_delegate_registry():
         return None
 
 def _detect_backend(task: str) -> str:
+    """The backend for a delegated task; see _detect_backend_by_task. Manus is
+    never picked while it has no cookie file: "make it 100% volume" was sent
+    there and answered "[Manus] Not configured" (2026-09-11)."""
+    backend = _detect_backend_by_task(task)
+    if backend == "manus":
+        try:
+            import manus_agent
+            if not manus_agent._cookies_present():
+                return "hermes"
+        except Exception:
+            return "hermes"
+    return backend
+
+
+def _detect_backend_by_task(task: str) -> str:
     """Auto-detect backend using declarative delegate_registry.json + intake verb map.
     Coding intent (code/website/html/react) routes to opencode before generic fallback."""
     # Phase 3.6: OpenCLI ("turn any website into a CLI" via logged-in Chrome).

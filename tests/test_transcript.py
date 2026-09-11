@@ -42,6 +42,22 @@ def test_the_transcript_naming_a_known_app_wins():
                    known=known) == ("Open Spotify.", "whisper")
 
 
+def test_the_one_differing_word_comes_from_the_live_text():
+    # 2026-09-11: "clothing" was "coding"; the two agree on everything else.
+    heard = "Set up my clothing and AI environment."
+    live = "jarvis set up my coding and ai environment"
+    assert tp.pick(heard, -0.70, live, _never) == (live, "browser")
+    # A confident Whisper keeps its word.
+    assert tp.pick("Search movie Dune.", -0.3, "search movie june",
+                   lambda h: "Search movie Dune.") == ("Search movie Dune.", "whisper")
+
+
+def test_an_unconfident_whisper_loses_a_real_disagreement():
+    heard = "Open Spotify and search for this online option."
+    live = "jarvis open spotify and search for a song"
+    assert tp.pick(heard, -0.66, live, lambda h: heard) == (live, "browser")
+
+
 def test_garbage_with_nothing_to_fall_back_on_is_unsure():
     garbage = "Be a part of it."
     assert tp.pick(garbage, -0.97, "", lambda h: garbage) == (garbage, "unsure")

@@ -534,6 +534,22 @@ _COMMAND_LEAD_RE = re.compile(
     r"put|switch|volume|mute|resume)\b", re.I)
 
 
+_FAVORITES_RE = re.compile(
+    r"\b(?:favou?rites?|favou?rite\s+songs?|liked\s+songs?|my\s+likes|saved\s+songs?)\b", re.I)
+
+
+def play_favorites(text):
+    """Spotify's Liked Songs for "play my favorites on spotify", via its
+    ability. None when the command isn't that, or Spotify has no such ability."""
+    if not (_FAVORITES_RE.search(text or "") and re.search(r"\bspotify\b", text or "", re.I)):
+        return None
+    import app_abilities
+    out = app_abilities.run_ability("spotify", "spotify.play_liked")
+    if out.startswith("Done"):
+        return "Playing your liked songs on Spotify, sir."
+    return None if "isn't one of" in out else out
+
+
 _OPEN_LEAD_RE = re.compile(
     r"^(?:(?:please|jarvis|hey|ok(?:ay)?|now)[,!\s]+)*(?:open|launch|go\s+to|goto|visit)\s+(.+)$", re.I)
 
@@ -1567,6 +1583,16 @@ class JarvisBrain:
             self.last_backend = "instant"
             self.last_stats = {"backend": "instant", "intent": intent}
             return ans
+
+        # "Play my favorites on Spotify": the user's Liked Songs, not a search
+        # the model makes up ("lo-fi", 2026-09-11).
+        if intent == "music":
+            _fav = play_favorites(user_input)
+            if _fav is not None:
+                self.conversation.append({"role": "assistant", "content": _fav})
+                self.last_backend = "instant"
+                self.last_stats = {"backend": "instant", "intent": "music_favorites"}
+                return _fav
 
         # P1.5 (Tiered Router — Phase 1): general + app-reference tasks go to the
         # Hermes harness (the EXECUTOR) instead of the cloud brain. Hermes has the
