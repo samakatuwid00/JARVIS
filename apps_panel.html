@@ -324,6 +324,17 @@
   }
   .rule-x:hover { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-ring); }
   .rule-x.is-busy { opacity: .5; cursor: progress; }
+  .progress { margin: 8px 0 12px; }
+  .progress-bar {
+    height: 4px; border-radius: 99px; overflow: hidden;
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+  }
+  .progress-bar span {
+    display: block; height: 100%; width: 0; border-radius: inherit;
+    background: var(--accent); transition: width .45s ease;
+  }
+  .progress-text { margin-top: 6px; font-size: 12px; opacity: .75; overflow-wrap: anywhere; }
+  @media (prefers-reduced-motion: reduce) { .progress-bar span { transition: none; } }
   .link-btn {
     border: 0; background: transparent; padding: 0; cursor: pointer;
     font-size: 12px; font-weight: 500; color: var(--accent);
@@ -464,6 +475,9 @@
           <span class="sub">Type a command, then tell JARVIS what it should do. JARVIS works out the rule with AI.</span>
         </div>
         <div class="thread" id="v-thread"></div>
+        <div class="progress" id="v-progress" role="status" aria-live="polite" hidden>
+          <div class="progress-bar"><span></span></div><div class="progress-text"></div>
+        </div>
         <div class="ask" id="v-clarify" hidden>
           <div class="ask-top"><span class="who">JARVIS</span><span class="ask-state" id="v-state"></span></div>
           <div class="v-question question"></div>
@@ -488,6 +502,9 @@
       <section class="sec" id="sec-rules">
         <div class="sec-h"><h3>Current Rules</h3><span class="count" id="rules-count"></span>
           <button class="link-btn" id="rules-clear" hidden>Clear all</button></div>
+        <div class="progress" id="r-progress" role="status" aria-live="polite" hidden>
+          <div class="progress-bar"><span></span></div><div class="progress-text"></div>
+        </div>
         <div class="v-current" id="v-current"></div>
       </section>
 
@@ -497,6 +514,9 @@
         <div class="btn-row">
           <button class="btn btn-sm" id="d-save">Save rules</button>
           <button class="btn btn-sm btn-quiet" id="d-compile">Compile with JARVIS</button>
+        </div>
+        <div class="progress" id="d-progress" role="status" aria-live="polite" hidden>
+          <div class="progress-bar"><span></span></div><div class="progress-text"></div>
         </div>
         <div class="proposal" id="proposal" hidden>
           <div class="sec-h"><h3>JARVIS proposal</h3></div>
@@ -954,6 +974,19 @@ function renderInfo(a, k) {
 }
 
 // Mirror of the committed rules; each row can be removed, or all at once.
+function verifyTag(r) {
+  const v = r.verification || {};
+  if (!v.status) return "";
+  const label = { verified: "verified", failed: "check failed", unverified: "not verified", simulated: "simulated" }[v.status] || v.status;
+  return `<span class="tag${v.status === "failed" ? " tag-hard" : ""}" title="Checked ${escapeHtml(v.checked || "")}">${escapeHtml(label)}</span>`;
+}
+
+function verifyNote(r) {
+  const steps = (r.verification || {}).steps || [];
+  const last = steps[steps.length - 1];
+  return last ? `<div class="rule-intent muted">${escapeHtml(last)}</div>` : "";
+}
+
 function renderCurrentRules(rules) {
   const box = $("#v-current");
   $("#rules-count").textContent = rules.length || "";
@@ -967,10 +1000,13 @@ function renderCurrentRules(rules) {
       <span class="rid">${escapeHtml(r.rule_id || "rule")}</span>
       <span class="tag${r.enforcement === "hard" ? " tag-hard" : ""}">${escapeHtml(r.enforcement || "soft")}</span>
       <span class="tag">${escapeHtml((r.scope || "all_sessions").replace(/_/g, " "))}</span>
+      ${verifyTag(r)}
+      ${r.rule_id ? `<button class="link-btn" data-recheck="${escapeHtml(r.rule_id)}" title="Test this rule again in a hidden browser">Re-check</button>` : ""}
       ${r.rule_id ? `<button class="rule-x" data-rid="${escapeHtml(r.rule_id)}" aria-label="Remove rule ${escapeHtml(r.rule_id)}" title="Remove rule">${svg("close", 13)}</button>` : ""}
     </div>
     ${(r.summary || r.intent) ? `<div class="rule-intent">${escapeHtml(r.summary || r.intent)}</div>` : ""}
     ${(r.triggers || []).length > 1 ? `<div class="rule-intent muted">Also works for: ${escapeHtml(r.triggers.slice(1).join(" · "))}</div>` : ""}
+    ${verifyNote(r)}
     ${r.adapter_check ? `<code class="rule-check">${escapeHtml(r.adapter_check)}</code>` : ""}
   </div>`).join("");
 }
@@ -1000,11 +1036,13 @@ async function compileRules(key, btn) {
   const drafts = readDrafts();
   if (!drafts.length) { toast("Add at least one draft first", "err"); $("#drafts").focus(); return; }
   setBusy(btn, true);
+  const stop = startProgress("#d-progress", key, "Understanding your rules...");
   let d = null;
   try {
     const res = await fetch("/apps/compile", post({ key, rule_drafts: drafts }));
     if (res.ok) d = await res.json();
   } catch (e) {}
+  stop();
   setBusy(btn, false);
   if (!d) { toast("Compile failed", "err"); return; }
   DR.proposed = d.proposed || [];
@@ -1106,11 +1144,13 @@ async function voiceBegin(key, btn) {
   const phrase = (input.value || "").trim();
   if (!phrase) { toast("Describe a rule first", "err"); input.focus(); return; }
   setBusy(btn, true);
+  const stop = startProgress("#v-progress", key, "Reading your command...");
   let res = null, d = {};
   try {
     res = await fetch("/apps/rules/begin", post({ app_key: key, phrase }));
     d = await res.json().catch(() => ({}));
   } catch (e) {}
+  stop();
   setBusy(btn, false);
   if (!res || !res.ok) { toast(d.error || "JARVIS couldn't read that rule", "err"); return; }
   input.value = "";
@@ -1124,11 +1164,14 @@ async function voiceClarify(key, btn, answerOverride) {
   const answer = answerOverride || (input.value || "").trim() || (DR.voiceStatus === "proposal" ? "yes" : "");
   if (!answer) { toast("Answer the question first", "err"); input.focus(); return; }
   setBusy(btn, true);
+  const stop = answer === "cancel" ? () => {}
+    : startProgress("#v-progress", key, DR.voiceStatus === "proposal" ? "Saving..." : "Understanding your rule...");
   let res = null, d = {};
   try {
     res = await fetch("/apps/rules/clarify", post({ app_key: key, rule_id: DR.voiceRuleId || "", answer }));
     d = await res.json().catch(() => ({}));
   } catch (e) {}
+  stop();
   setBusy(btn, false);
   if (!res || !res.ok) { toast(d.error || "Couldn't send the answer", "err"); return; }
   if (DR.thread.length && $(".v-question").textContent) say("jarvis", $(".v-question").textContent);
@@ -1137,15 +1180,70 @@ async function voiceClarify(key, btn, answerOverride) {
   if (d.status === "committed") await refreshRules(key);
 }
 
+// Progress bar for slow rule work (AI compile, real page checks). Shows the
+// server's actual stage from /apps/rules/progress; creeps between stages so
+// it never looks frozen. Returns stop().
+function startProgress(sel, key, label) {
+  const box = $(sel);
+  if (!box) return () => {};
+  const bar = box.querySelector(".progress-bar span");
+  const txt = box.querySelector(".progress-text");
+  let alive = true, shown = 4;
+  box.hidden = false;
+  bar.style.width = shown + "%";
+  txt.textContent = label || "Working...";
+  const tick = async () => {
+    if (!alive) return;
+    try {
+      const r = await fetch("/apps/rules/progress?key=" + encodeURIComponent(key));
+      if (r.ok && alive) {
+        const p = await r.json();
+        if (!p.done && p.stage) {
+          txt.textContent = p.stage;
+          if (p.pct > shown) shown = p.pct;
+        }
+      }
+    } catch (e) {}
+    if (!alive) return;
+    shown = Math.min(shown + 0.5, 97);
+    bar.style.width = shown + "%";
+    setTimeout(tick, 500);
+  };
+  tick();
+  return () => {
+    alive = false;
+    bar.style.width = "100%";
+    setTimeout(() => { box.hidden = true; bar.style.width = "0"; }, 350);
+  };
+}
+
+async function recheckRule(key, rid, btn) {
+  setBusy(btn, true);
+  const stop = startProgress("#r-progress", key, "Re-checking your rule...");
+  let res = null, d = {};
+  try {
+    res = await fetch("/apps/rules/recheck", post({ key, rule_id: rid }));
+    d = await res.json().catch(() => ({}));
+  } catch (e) {}
+  stop();
+  setBusy(btn, false);
+  if (!res || !res.ok) { toast(d.error || "Re-check failed", "err"); return; }
+  const verdict = { verified: "Rule verified", failed: "Re-check failed: see the rule", unverified: "Couldn't verify: press Test" }[d.status] || "Rule re-checked";
+  toast(verdict, d.status === "failed" ? "err" : undefined);
+  await refreshRules(key);
+}
+
 // Runs the proposed rule once for real (opens the browser), before saving.
 async function voiceTest(key, btn) {
   const sample = ($(".v-sample").value || "").trim();
   setBusy(btn, true);
+  const stop = startProgress("#v-progress", key, "Opening it in your browser...");
   let res = null, d = {};
   try {
     res = await fetch("/apps/rules/test", post({ app_key: key, sample }));
     d = await res.json().catch(() => ({}));
   } catch (e) {}
+  stop();
   setBusy(btn, false);
   if (!res || !res.ok) { toast(d.error || "Test failed", "err"); return; }
   say("jarvis", "Test: " + (d.result || "done") + (d.url ? " — " + d.url : ""), d.ok ? "ok" : "");
@@ -1242,6 +1340,8 @@ function init() {
   $("#d-accept").addEventListener("click", e => acceptProposal(DR.key, e.currentTarget));
   $("#rules-clear").addEventListener("click", e => removeRule(DR.key, "", e.currentTarget));
   $("#v-current").addEventListener("click", e => {
+    const rc = e.target.closest("[data-recheck]");
+    if (rc) return recheckRule(DR.key, rc.dataset.recheck, rc);
     const x = e.target.closest("[data-rid]");
     if (x && x.dataset.rid) removeRule(DR.key, x.dataset.rid, x);
   });

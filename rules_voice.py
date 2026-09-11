@@ -26,6 +26,7 @@ import os
 
 import rules_ai
 import rules_compiler as rc
+import rules_sim
 
 CONFIG_TIME_ONLY = True  # setup-time only, never per spoken command.
 
@@ -114,8 +115,33 @@ def _app_entry(app_key, registry_path=None):
     return (_load_registry(registry_path).get("apps") or {}).get(app_key) or {}
 
 
+def _verdict_line(report):
+    """One plain sentence on what the simulation found."""
+    status = report.get("status")
+    line = {
+        "verified": f"I tested it for real: {report.get('url')} works.",
+        "failed": "My test failed (details below).",
+        "unverified": "I couldn't test it in the hidden browser. Press Test to try it in yours.",
+        "simulated": "I simulated it (details below).",
+    }.get(status, "")
+    judge = report.get("judge") or {}
+    if judge and not judge.get("match"):
+        line += f" Heads up, it may not match what you asked: {judge.get('reason', '')}"
+    return f"{line} Save it? Or tell me what to change.".strip()
+
+
 def _ai_step(app_key, pending, registry_path=None):
-    """Compile the pending command rule with AI and return the next step."""
+    """Compile the pending command rule with AI, simulate it, and return the
+    next step. Publishes progress for the panel's progress bar."""
+    try:
+        return _ai_step_inner(app_key, pending, registry_path)
+    finally:
+        rules_sim.finish_progress(app_key)
+
+
+def _ai_step_inner(app_key, pending, registry_path=None):
+    say = rules_sim.reporter(app_key)
+    say("Understanding your rule...", 12)
     rule, notes = rules_ai.compile_rule(
         app_key, pending["phrase"], pending.get("action_text", ""),
         feedback=pending.get("feedback", ""), entry=_app_entry(app_key, registry_path))
@@ -133,6 +159,14 @@ def _ai_step(app_key, pending, registry_path=None):
         return {"status": "clarify", "key": app_key, "rule_id": ACTION_Q_ID,
                 "question": rule["clarification_question"], "remaining": 1,
                 "notes": notes}
+    say("Simulating your rule...", 50)
+    user_text = (f'When I say "{pending["phrase"]}": {pending.get("action_text", "")} '
+                 f'{pending.get("feedback", "")}').strip()
+    rule, report = rules_sim.simulate(app_key, rule, _app_entry(app_key, registry_path),
+                                      progress=say, user_text=user_text)
+    if report["status"] == "verified":
+        notes = [n for n in notes if "guessed" not in n]
+    pending["proposed_rule"] = rule
     pending["stage"] = "proposal"
     summary = rule.get("summary") or rule.get("intent", "")
     return {
@@ -142,7 +176,8 @@ def _ai_step(app_key, pending, registry_path=None):
         "proposed": [rule],
         "summary": summary,
         "proposal": rules_ai.propose_markdown(app_key, [rule], notes),
-        "question": f"{summary} Save it? Or tell me what to change.",
+        "question": f"{summary} {_verdict_line(report)}",
+        "verification": report,
         "notes": notes,
         "testable": (rule.get("action") or {}).get("type") in rules_ai.RUNNABLE_TYPES,
     }

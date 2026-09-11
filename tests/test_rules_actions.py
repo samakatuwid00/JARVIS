@@ -233,7 +233,7 @@ def test_voice_setup_asks_for_the_action_then_adds_the_rule(tmp_path, monkeypatc
     step = rules_voice.handle_clarification("brave", "", "use the site's search page",
                                             registry_path=str(path))
     assert step["status"] == "proposal"
-    assert "CORRECTION FROM THE USER" in seen[-1]
+    assert any("CORRECTION FROM THE USER" in p for p in seen)
 
     step = rules_voice.handle_clarification("brave", "", "yes", registry_path=str(path))
     assert step["status"] == "committed" and step["total"] == 2

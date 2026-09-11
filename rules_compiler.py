@@ -206,10 +206,14 @@ def commit_rules(app_id, compiled_rules, registry_path, accept=False, merge=Fals
     app_entry = data["apps"].setdefault(app_id, {})
     compiled_rules = list(compiled_rules)
     if merge:
-        incoming = {r.get("rule_id") for r in compiled_rules}
-        kept = [r for r in (app_entry.get("compiled_rules") or [])
-                if isinstance(r, dict) and r.get("rule_id") not in incoming]
-        compiled_rules = kept + compiled_rules
+        # An updated rule keeps its place in the list; new rules go last.
+        incoming = {r.get("rule_id"): r for r in compiled_rules}
+        merged = []
+        for r in app_entry.get("compiled_rules") or []:
+            if not isinstance(r, dict):
+                continue
+            merged.append(incoming.pop(r.get("rule_id"), r))
+        compiled_rules = merged + [r for r in compiled_rules if r.get("rule_id") in incoming]
     app_entry["rule_drafts"] = [r["source_phrase"] for r in compiled_rules
                                 if r.get("source_phrase")]
     app_entry["compiled_rules"] = compiled_rules

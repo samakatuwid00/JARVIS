@@ -26,6 +26,8 @@ may structure the user's words, not invent destinations.
 import json
 import re
 
+import rules_engine
+
 CONFIG_TIME_ONLY = True
 
 ACTION_TYPES = ("search_site", "open_site", "block", "reminder")
@@ -72,6 +74,7 @@ Work out what the user really means and return ONLY one JSON object:
   "site": the website domain the user wrote (e.g. "example.com"), or null,
   "search_url": for search_site, the site's search address with {query} where the search words go, or null if unsure,
   "slot": for search_site, a short name for what the user fills in (e.g. "movie name"), or null,
+  "sample": for search_site, one realistic example of what the user would fill in (e.g. "Inception" for a movie), or null,
   "browser": "brave" | "chrome" | "msedge" | "firefox" | null,
   "applies_to": for block only: "launch" | "play" | "close" | "all",
   "adapter_check": for music limits only, exactly "pre_play: skip if track.explicit" or "pre_play: cap {app} volume at N%", otherwise ""
@@ -181,12 +184,19 @@ def _ask_llm(prompt):
         import config
     except Exception as e:
         return None, f"no LLM client ({type(e).__name__})"
-    tries = [
-        (config.ROUTER_BASE_URL, config.ROUTER_API_KEY or "dummy", config.ROUTER_MODEL, 20),
-        (config.OLLAMA_BASE_URL, config.OLLAMA_API_KEY or "ollama", config.OLLAMA_MODEL, 90),
-    ]
+    # Cloud models through 9router first (the brain's model, then two of its
+    # fallbacks), then the local Ollama model.
+    router_models = [config.ROUTER_MODEL] + list(
+        getattr(config, "ROUTER_FALLBACK_MODELS", []) or [])[:2]
+    tries = [(config.ROUTER_BASE_URL, config.ROUTER_API_KEY or "dummy", m, 20)
+             for m in dict.fromkeys(router_models)]
+    tries.append((config.OLLAMA_BASE_URL, config.OLLAMA_API_KEY or "ollama",
+                  config.OLLAMA_MODEL, 90))
     errors = []
+    router_down = False
     for base, key, model, timeout in tries:
+        if router_down and base == config.ROUTER_BASE_URL:
+            continue
         try:
             client = OpenAI(base_url=base, api_key=key, timeout=timeout, max_retries=0)
             r = client.chat.completions.create(
@@ -198,6 +208,9 @@ def _ask_llm(prompt):
             errors.append(f"{model}: no JSON")
         except Exception as e:
             errors.append(f"{model}: {type(e).__name__}")
+            # 9router not running: its other models would fail the same way.
+            if base == config.ROUTER_BASE_URL and "Connection" in type(e).__name__:
+                router_down = True
     return None, "; ".join(errors)
 
 
@@ -221,8 +234,9 @@ def _fallback_raw(trigger, action_text):
 def _summary(rule_type, trigger, site, slot, browser, app_key, action_text, applies_to):
     where = browser_label(browser)
     if rule_type == "search_site":
-        return (f'When you say "{trigger}" with a {slot}, I\'ll search {site} for it '
-                f"in {where}.")
+        article = "an" if slot[:1].lower() in "aeiou" else "a"
+        return (f'When you say "{trigger}" with {article} {slot}, I\'ll search {site} '
+                f"for it in {where}.")
     if rule_type == "open_site":
         return f'When you say "{trigger}", I\'ll open {site} in {where}.'
     if rule_type == "block":
@@ -298,9 +312,9 @@ def compile_rule(app_key, trigger, action_text="", feedback="", entry=None, llm=
     if rule_type == "search_site":
         slot = str(raw.get("slot") or "").strip().lower()[:30] or _slot_guess(clean_trigger)
         search_url = str(raw.get("search_url") or "").strip()
-        if not (search_url.lower().startswith(("http://", "https://"))
-                and "{query}" in search_url
-                and site and _bare_host(search_url).endswith(site)):
+        if not ("{query}" in search_url
+                and rules_engine.is_web_url(search_url.replace("{query}", "q"))
+                and rules_engine.same_site(search_url, site)):
             search_url = f"https://{site}/?s={{query}}" if site else ""
         # Only an address the user typed is known good; the model's is a guess.
         typed = search_url.split("{query}", 1)[0].lower()
@@ -309,6 +323,9 @@ def compile_rule(app_key, trigger, action_text="", feedback="", entry=None, llm=
         if guessed:
             notes.append(f"Search address guessed as {search_url} - press Test to check it.")
         action.update(slot=slot, search_url=search_url, search_url_guessed=guessed)
+        sample = str(raw.get("sample") or "").strip()[:60]
+        if sample:
+            action["sample"] = sample
 
     applies_to = str(raw.get("applies_to") or "launch").lower()
     if applies_to not in _APPLIES_TO:
@@ -424,6 +441,17 @@ def propose_markdown(app_key, rules, notes=None):
                          f"{r.get('adapter_check') or '(none)'}")
         if r.get("compiled_by"):
             lines.append(f"    compiled by: {r['compiled_by']}")
+        v = r.get("verification") or {}
+        if v.get("steps"):
+            label = {"verified": "VERIFIED", "failed": "FAILED CHECK",
+                     "unverified": "NOT VERIFIED", "simulated": "SIMULATED"}.get(
+                         v.get("status"), str(v.get("status", "")).upper())
+            lines.append(f"    simulation: {label}")
+            lines.extend(f"      {s}" for s in v["steps"])
+            j = v.get("judge") or {}
+            if j:
+                lines.append(f"      intent check: {'matches' if j.get('match') else 'MISMATCH'}"
+                             f" - {j.get('reason', '')}")
     for n in notes or []:
         lines.append(f"Note: {n}")
     return "\n".join(lines)

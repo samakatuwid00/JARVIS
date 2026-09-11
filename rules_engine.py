@@ -269,6 +269,22 @@ def bare_host(url_or_domain):
     return h[4:] if h.startswith("www.") else h
 
 
+_WEB_URL_RE = re.compile(r"^https?://[^\s\"'<>]+$", re.I)
+
+
+def is_web_url(url):
+    """http(s) addresses only: a rule's url ends up on browser command lines,
+    where anything starting with '-' would be read as a switch."""
+    return bool(_WEB_URL_RE.match(url or ""))
+
+
+def same_site(url, site):
+    """url is on site or one of its subdomains — never a lookalike
+    ('evilexample.com' is not 'example.com')."""
+    host, site = bare_host(url), bare_host(site)
+    return bool(site) and (host == site or host.endswith("." + site))
+
+
 def _stem(word):
     """Plural and singular share one key: movies/movie -> movie,
     stories/story -> storie. Only ever compared with other stems."""
@@ -349,8 +365,10 @@ def action_of(rule, owner, entry=None):
         out = dict(act)
         if not out.get("url") and out.get("site"):
             out["url"] = "https://" + out["site"]
-        if not out.get("url"):
+        if not is_web_url(out.get("url")):
             return None
+        if out.get("search_url") and not is_web_url(out["search_url"].replace("{query}", "q")):
+            out["search_url"] = None
         if not out.get("browser") and is_browser:
             out["browser"] = owner
         return out

@@ -34,6 +34,23 @@ from config import (GEMINI_MODEL, ROUTER_BASE_URL, ROUTER_MODEL, WHISPER_MODEL,
 
 app = FastAPI(title="JARVIS Voice Interface")
 
+
+@app.middleware("http")
+async def _guard_apps_writes(request: Request, call_next):
+    """Apps-panel writes (rules, toggles, re-checks) come only from JARVIS's
+    own pages. The server binds 0.0.0.0 with no login and the handlers parse
+    the body as JSON whatever its type, so without this any web page the user
+    visits could post a rule (a text/plain POST skips the CORS preflight)."""
+    if request.method in ("POST", "PUT", "PATCH", "DELETE") \
+            and request.url.path.startswith("/apps"):
+        ctype = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        origin = request.headers.get("origin")
+        same_origin = not origin or \
+            origin.split("://", 1)[-1].rstrip("/") == request.headers.get("host", "")
+        if ctype != "application/json" or not same_origin:
+            return JSONResponse({"error": "forbidden"}, status_code=403)
+    return await call_next(request)
+
 # Connected voice clients (JARVIS HUD tabs) — the server-side wake engine alerts
 # all of them so a wake detected on the server opens the command window in the UI.
 WS_CLIENTS = set()
@@ -1000,9 +1017,25 @@ async def post_apps_compile(message: Request):
             entry = (json.load(f).get("apps") or {}).get(key) or {}
     except Exception:
         pass
-    # The model call can take seconds: keep it off the event loop.
-    proposed, notes = await asyncio.to_thread(
-        rules_ai.compile_drafts, key, drafts, entry.get("compiled_rules") or [], entry)
+    import rules_sim
+
+    def _compile():
+        say = rules_sim.reporter(key)
+        try:
+            say("Understanding your rules...", 10)
+            rules, notes = rules_ai.compile_drafts(
+                key, drafts, entry.get("compiled_rules") or [], entry)
+            rules = rules_sim.simulate_all(key, rules, entry, progress=say)
+            searches = [r for r in rules if (r.get("action") or {}).get("type") == "search_site"]
+            if searches and all((r.get("verification") or {}).get("status") == "verified"
+                                for r in searches):
+                notes = [n for n in notes if "guessed" not in n]
+            return rules, notes
+        finally:
+            rules_sim.finish_progress(key)
+
+    # Model calls and real page checks take seconds: keep them off the event loop.
+    proposed, notes = await asyncio.to_thread(_compile)
     return JSONResponse({
         "ok": True,
         "key": key,
@@ -1115,6 +1148,64 @@ async def post_apps_rules_test(message: Request):
     result = await asyncio.to_thread(tools.run_rule_action, rule, key, action, sample)
     return JSONResponse({"ok": not result.startswith("[Error]"), "result": result,
                          "url": rules_engine.build_action_url(action, sample)})
+
+
+@app.get("/apps/rules/progress")
+async def get_apps_rules_progress(key: str = ""):
+    """What rule setup is doing right now, for the panel's progress bar:
+    {"stage": "Checking https://...", "pct": 70, "done": false}."""
+    import rules_sim
+    return JSONResponse(dict(rules_sim.get_progress((key or "").strip()), ok=True))
+
+
+@app.post("/apps/rules/recheck")
+async def post_apps_rules_recheck(message: Request):
+    """Simulate a saved rule again in a hidden browser and save what it finds.
+
+    Body: {"key": "brave", "rule_id": "search_a_movie"}. A broken search
+    address is replaced by a working one when the check finds it (the site's
+    own search box, a common pattern, or the AI's repair).
+    """
+    try:
+        body = await message.json()
+    except Exception:
+        return JSONResponse({"error": "bad json"}, status_code=400)
+    key = (body.get("key") or body.get("app_key") or "").strip()
+    rid = (body.get("rule_id") or "").strip()
+    if not key or not rid:
+        return JSONResponse({"error": "missing key or rule_id"}, status_code=400)
+    import rules_compiler
+    import rules_engine
+    import rules_sim
+    import rules_voice
+    from machine_capabilities import REGISTRY_PATH
+    entry = rules_voice._app_entry(key)
+    rule = next((r for r in entry.get("compiled_rules") or [] if r.get("rule_id") == rid), None)
+    if not rule:
+        return JSONResponse({"error": "unknown rule_id"}, status_code=404)
+    rule = dict(rule)
+    if not isinstance(rule.get("action"), dict):
+        # An older plain rule that names a site gets its derived action saved.
+        derived = rules_engine.action_of(rule, key, entry)
+        if derived:
+            rule["action"] = derived
+            rule["enforcement"] = "action"
+
+    def _run():
+        say = rules_sim.reporter(key)
+        try:
+            say("Re-checking your rule...", 10)
+            return rules_sim.simulate(key, rule, entry, progress=say,
+                                      user_text=rule.get("action_text")
+                                      or rule.get("intent") or rule.get("source_phrase", ""))
+        finally:
+            rules_sim.finish_progress(key)
+
+    new_rule, report = await asyncio.to_thread(_run)
+    rules_compiler.commit_rules(key, [new_rule], REGISTRY_PATH, accept=True, merge=True)
+    return JSONResponse({"ok": True, "key": key, "status": report["status"],
+                         "steps": report["steps"], "judge": report["judge"],
+                         "rule": new_rule})
 
 
 @app.get("/apps/rules/list")

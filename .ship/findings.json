@@ -70,6 +70,36 @@
       "first_seen": "2026-09-09",
       "last_seen": "2026-09-09",
       "runs": 1
+    },
+    {
+      "id": "d09d8200f8c5",
+      "path": "apps_panel.html",
+      "category": "ux-race",
+      "summary": "overlapping flows share #v-progress; the first stop() hides the bar while the second still runs",
+      "tier": "WATCH",
+      "first_seen": "2026-09-11",
+      "last_seen": "2026-09-11",
+      "runs": 2
+    },
+    {
+      "id": "366d91546872",
+      "path": "apps_panel.html",
+      "category": "clean-code",
+      "summary": "busy/progress/fetch/stop boilerplate repeated in five handlers",
+      "tier": "CLEAN CODE",
+      "first_seen": "2026-09-11",
+      "last_seen": "2026-09-11",
+      "runs": 2
+    },
+    {
+      "id": "388ebe7bdeca",
+      "path": "rules_sim.py",
+      "category": "clean-code",
+      "summary": "simulate and _simulate_search each run several responsibilities over ~55 lines",
+      "tier": "CLEAN CODE",
+      "first_seen": "2026-09-11",
+      "last_seen": "2026-09-11",
+      "runs": 2
     }
   ]
 }
