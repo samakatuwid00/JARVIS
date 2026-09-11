@@ -23,8 +23,10 @@ class OfflineProbe:
 @pytest.fixture(autouse=True)
 def offline_probe(monkeypatch):
     import rules_sim
+    import rules_steps
     import rules_voice
     monkeypatch.setattr(rules_sim, "PROBE", OfflineProbe())
+    monkeypatch.setattr(rules_steps, "_RUN", {})
     # module-level state must not leak between tests that reuse "brave"
     monkeypatch.setattr(rules_sim, "_PROGRESS", {})
     monkeypatch.setattr(rules_voice, "_PENDING", {})

@@ -196,6 +196,76 @@ def _simulate_search(action, sample, steps, say, probe, llm):
     return "failed", None
 
 
+def describe_step(step):
+    """Plain words for one step, for proposals and simulation reports."""
+    op, target = step.get("op"), step.get("target") or ""
+    return {
+        "search": "search the site for the name",
+        "pick": "show you the top picks to choose from",
+        "open": "open your pick",
+        "click": ("ask you, then " if step.get("confirm") else "") + f'click "{target}"',
+        "launch": "open the app",
+        "type": f'type "{step.get("text", "")}" into "{target}"',
+        "key": f"press {step.get('keys', '')}",
+        "wait": f"wait {step.get('seconds', 1)}s",
+        "ask": f'ask "{step.get("question", "")}"',
+    }.get(op, str(op))
+
+
+def _simulate_steps(app_key, rule, entry, steps, say, probe, llm):
+    """Dry-run a multi-step rule: the matcher, the real search page, the top
+    picks, and whether each click target is on the first pick's page. Desktop
+    steps would open the app, so they are listed, not run. Returns (status, url)."""
+    import rules_steps
+    action = rule["action"]
+    ops = [s.get("op") for s in action["steps"]]
+    sample = sample_for(rule) if ops[0] == "search" else ""
+    spoken = spoken_example(rule.get("source_phrase", ""), sample) if sample \
+        else rule.get("source_phrase", "")
+    say(f'Simulating "{spoken}" ...', 50)
+    m = rules_engine.match_action(
+        spoken, apps={app_key: dict(entry or {}, enabled=True, compiled_rules=[rule])})
+    if not m or (sample and m["slot"].lower() != sample.lower()):
+        steps.append(f'FAILED "{spoken}" does not match the rule with the name "{sample}"')
+        return "failed", None
+    steps.append(f'OK "{spoken}" matches the rule' + (f', name = "{m["slot"]}"' if sample else ""))
+    if not (action.get("url") or action.get("site")):
+        plan = "; ".join(describe_step(s) for s in action["steps"])
+        steps.append(f"Planned in {app_key}: {plan}. Desktop steps run for real when you "
+                     "use the command.")
+        return "simulated", None
+
+    url = action.get("url")
+    if ops[0] == "search":
+        status, url = _simulate_search(action, sample, steps, say, probe, llm)
+        if status != "verified":
+            return status, url
+    page_url = url
+    load = getattr(probe, "load", None)
+    if "pick" in ops and callable(load):
+        say("Reading the top picks...", 80)
+        picks = rules_steps.extract_picks(url, sample, dom=load(url)["dom"])
+        if not picks:
+            steps.append(f"FAILED no top picks found on {url}")
+            return "failed", url
+        steps.append("OK top picks: " + "; ".join(p["title"] for p in picks))
+        page_url = picks[0]["url"]
+    targets = [s.get("target") or "play" for s in action["steps"] if s.get("op") == "click"]
+    finder = getattr(probe, "click_target_in_dom", None)
+    if targets and callable(load) and callable(finder):
+        say(f"Checking {page_url} for what to click...", 88)
+        page = load(page_url)
+        for target in targets:
+            if page["blocked"]:
+                steps.append(f'Could not check "{target}": the page is behind a bot check.')
+            elif finder(page["dom"], target):
+                steps.append(f'OK "{target}" is on {page_url}')
+            else:
+                steps.append(f'FAILED "{target}" is not on {page_url}')
+                return "failed", page_url
+    return "verified", page_url
+
+
 def simulate(app_key, rule, entry=None, progress=None, llm=None, probe=None,
              user_text=""):
     """Simulate `rule` for real. Returns (rule, report).
@@ -218,12 +288,16 @@ def simulate(app_key, rule, entry=None, progress=None, llm=None, probe=None,
     action = rule.get("action") or {}
     kind = action.get("type")
 
-    if kind in ("search_site", "open_site") and not rules_engine.action_of(rule, app_key, entry):
+    if kind in ("search_site", "open_site", "steps") \
+            and not rules_engine.action_of(rule, app_key, entry):
         kind = "invalid"
 
     if kind == "invalid":
-        steps.append("FAILED the rule has no valid http(s) web address")
+        steps.append("FAILED the rule has no valid http(s) web address or runnable steps")
         report["status"] = "failed"
+    elif kind == "steps":
+        report["status"], report["url"] = _simulate_steps(
+            app_key, rule, entry, steps, say, probe, llm)
     elif kind in ("search_site", "open_site"):
         sample = sample_for(rule) if kind == "search_site" else ""
         spoken = spoken_example(rule.get("source_phrase", ""), sample) if sample \

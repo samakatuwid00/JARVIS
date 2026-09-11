@@ -30,8 +30,13 @@ import rules_engine
 
 CONFIG_TIME_ONLY = True
 
-ACTION_TYPES = ("search_site", "open_site", "block", "reminder")
-RUNNABLE_TYPES = ("search_site", "open_site")
+ACTION_TYPES = ("search_site", "open_site", "steps", "block", "reminder")
+RUNNABLE_TYPES = ("search_site", "open_site", "steps")
+MAX_STEPS = 12
+# Clicks that spend, send, remove or start playback always ask first.
+_CONSEQUENTIAL_RE = re.compile(
+    r"play|watch|stream|buy|pay|purchase|order|checkout|send|post|delete|remove|"
+    r"submit|download|install|subscribe", re.I)
 
 _BROWSER_KEYS = {"brave": "brave", "chrome": "chrome", "google chrome": "chrome",
                  "edge": "msedge", "msedge": "msedge", "microsoft edge": "msedge",
@@ -68,7 +73,7 @@ WHAT JARVIS SHOULD DO: "{action}"{feedback}
 
 Work out what the user really means and return ONLY one JSON object:
 {
-  "type": "search_site" | "open_site" | "block" | "reminder",
+  "type": "search_site" | "open_site" | "steps" | "block" | "reminder",
   "trigger": the command phrase, cleaned up (lowercase, no filler words),
   "triggers": 3 to 6 other natural ways to say the same command, keeping its key words (the browser name and the kind of thing, e.g. "movies"),
   "site": the website domain the user wrote (e.g. "example.com"), or null,
@@ -77,11 +82,16 @@ Work out what the user really means and return ONLY one JSON object:
   "sample": for search_site, one realistic example of what the user would fill in (e.g. "Inception" for a movie), or null,
   "browser": "brave" | "chrome" | "msedge" | "firefox" | null,
   "applies_to": for block only: "launch" | "play" | "close" | "all",
-  "adapter_check": for music limits only, exactly "pre_play: skip if track.explicit" or "pre_play: cap {app} volume at N%", otherwise ""
+  "adapter_check": for music limits only, exactly "pre_play: skip if track.explicit" or "pre_play: cap {app} volume at N%", otherwise "",
+  "steps": for steps only, the ordered list of steps (see below)
 }
 Meaning of type:
 - search_site: the command searches a website for something the user names.
 - open_site: the command just opens a website.
+- steps: the user wants more than one action in a row (e.g. search, choose a result, open it, press play), or actions inside a desktop app.
+Steps for a website: {"op": "search"}, {"op": "pick", "count": 5} (show the top results and let the user choose), {"op": "open"}, {"op": "click", "target": "play"} (target = the button or thing to click, in words), {"op": "wait", "seconds": 2}.
+Steps for a desktop app: {"op": "launch"}, {"op": "click", "target": "<button name>"}, {"op": "type", "target": "<box name>", "text": "{query}"}, {"op": "key", "keys": "{ENTER}"}.
+Add "confirm": true to any step the user would want to approve first. After a search, always add a pick step so the user chooses.
 - block: the user wants something prevented (never / don't / no).
 - reminder: a preference JARVIS should keep in mind.
 Only use a site the user actually wrote. Never invent one.
@@ -245,6 +255,56 @@ def _summary(rule_type, trigger, site, slot, browser, app_key, action_text, appl
     return f"I'll keep this in mind for {app_key}: {action_text or trigger}."
 
 
+def _clean_steps(raw_steps, web):
+    """The model's steps, made safe: allowed ops only, bounded fields, a pick
+    after every search (the user chooses), an open before any page click, and
+    "confirm" forced on clicks that play, buy, send or delete."""
+    import rules_steps
+    allowed = rules_steps.WEB_OPS if web else rules_steps.DESKTOP_OPS
+    out = []
+    for s in raw_steps if isinstance(raw_steps, list) else []:
+        if not isinstance(s, dict) or s.get("op") not in allowed:
+            continue
+        step = {"op": s["op"]}
+        for key, cap in (("target", 60), ("text", 100), ("keys", 30), ("question", 120)):
+            if s.get(key):
+                step[key] = str(s[key])[:cap]
+        try:
+            if step["op"] == "pick":
+                step["count"] = min(max(int(s.get("count") or 5), 2), 10)
+            if step["op"] == "wait":
+                step["seconds"] = min(max(float(s.get("seconds") or 1), 0), 10)
+        except (TypeError, ValueError):
+            step.setdefault("count" if step["op"] == "pick" else "seconds",
+                            5 if step["op"] == "pick" else 1)
+        if step["op"] == "click" and (s.get("confirm") is True
+                                      or _CONSEQUENTIAL_RE.search(step.get("target", ""))):
+            step["confirm"] = True
+        if step["op"] == "key" and not rules_steps.SAFE_KEYS_RE.match(step.get("keys", "")):
+            continue
+        out.append(step)
+    ops = [s["op"] for s in out]
+    if web and "search" in ops and "pick" not in ops:
+        out.insert(ops.index("search") + 1, {"op": "pick", "count": 5})
+    ops = [s["op"] for s in out]
+    if web and "click" in ops and "open" not in ops:
+        out.insert(ops.index("click"), {"op": "open"})
+    return out[:MAX_STEPS]
+
+
+def _steps_summary(trigger, action, app_key):
+    import rules_sim
+    slot = action.get("slot") or ""
+    article = "an" if slot[:1].lower() in "aeiou" else "a"
+    said = f'When you say "{trigger}"' + (f" with {article} {slot}" if slot else "")
+    where = (f"{action['site']} in {browser_label(action.get('browser'))}" if action.get("site")
+             else app_key)
+    parts = [rules_sim.describe_step(s).replace("the site", action.get("site") or "the site")
+             for s in action["steps"]]
+    plan = parts[0] if len(parts) == 1 else f"{', '.join(parts[:-1])}, then {parts[-1]}"
+    return f"{said}, I'll {plan} ({where})."
+
+
 def compile_rule(app_key, trigger, action_text="", feedback="", entry=None, llm=None):
     """Compile one rule. Returns (rule, notes), or (None, notes) when no model
     answered and the text names no site - the caller keeps its legacy path.
@@ -261,7 +321,9 @@ def compile_rule(app_key, trigger, action_text="", feedback="", entry=None, llm=
     is_browser_app = entry.get("category") == "browser"
     prompt = (_PROMPT
               .replace("{app}", app_key)
-              .replace("{browser_note}", " It is a web browser." if is_browser_app else "")
+              .replace("{browser_note}", " It is a web browser." if is_browser_app
+                       else " It is a desktop app, not a web browser." if entry.get("bin")
+                       else "")
               .replace("{trigger}", trigger)
               .replace("{action}", action_text)
               .replace("{feedback}",
@@ -301,15 +363,26 @@ def compile_rule(app_key, trigger, action_text="", feedback="", entry=None, llm=
         browser = None
     browser = browser or typed_browser or (app_key if is_browser_app else None)
 
+    steps = []
+    web = rule_type != "steps" or bool(site) or is_browser_app
+    if rule_type == "steps":
+        steps = _clean_steps(raw.get("steps"), web)
+        if not steps:
+            rule_type = ("search_site" if site and _SEARCH_RE.search(user_text)
+                         else "open_site" if site else "reminder")
+    has_search = rule_type == "search_site" or any(s["op"] == "search" for s in steps)
+
     action = {"type": rule_type}
     needs_q = None
-    if rule_type in RUNNABLE_TYPES:
+    if rule_type in RUNNABLE_TYPES and web:
         if site:
             action.update(site=site, url=f"https://{site}")
         else:
             needs_q = "Which website should I use? Type its address, like example.com."
         action["browser"] = browser
-    if rule_type == "search_site":
+    if steps:
+        action["steps"] = steps
+    if has_search:
         slot = str(raw.get("slot") or "").strip().lower()[:30] or _slot_guess(clean_trigger)
         search_url = str(raw.get("search_url") or "").strip()
         if not ("{query}" in search_url
@@ -353,9 +426,10 @@ def compile_rule(app_key, trigger, action_text="", feedback="", entry=None, llm=
             triggers.append(t)
     triggers = triggers[:8]
 
-    summary = _summary(rule_type, clean_trigger, site or "the site",
-                       action.get("slot", ""), browser, app_key,
-                       action_text, applies_to)
+    summary = (_steps_summary(clean_trigger, action, app_key) if steps
+               else _summary(rule_type, clean_trigger, site or "the site",
+                             action.get("slot", ""), browser, app_key,
+                             action_text, applies_to))
     rule = {
         "rule_id": _slug(clean_trigger),
         "source_phrase": clean_trigger,
@@ -433,6 +507,10 @@ def propose_markdown(app_key, rules, notes=None):
             lines.append(f"    type: {a['type']} | browser: {browser_label(a.get('browser'))}")
             if a.get("search_url"):
                 lines.append(f"    search address: {a['search_url']}")
+            if a.get("steps"):
+                import rules_sim
+                lines.extend(f"    step {i}: {rules_sim.describe_step(s)}"
+                             for i, s in enumerate(a["steps"], 1))
             others = [t for t in r.get("triggers") or [] if t != r.get("source_phrase")]
             if others:
                 lines.append("    also works for: " + "; ".join(others))

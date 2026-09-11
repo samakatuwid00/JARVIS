@@ -100,6 +100,56 @@
       "first_seen": "2026-09-11",
       "last_seen": "2026-09-11",
       "runs": 2
+    },
+    {
+      "id": "46f7a33ea175",
+      "path": "browser_cdp.py",
+      "category": "trust-boundary",
+      "summary": "debugging port on 127.0.0.1 lets any local program control the user's browser while it is open (user accepted option a)",
+      "tier": "WATCH",
+      "first_seen": "2026-09-11",
+      "last_seen": "2026-09-11",
+      "runs": 1
+    },
+    {
+      "id": "5ce723fb71fd",
+      "path": "rules_steps.py",
+      "category": "choice-matching",
+      "summary": "a reply shaped like a number skips the full-list title search, so a numbered title beyond the top list is missed",
+      "tier": "WATCH",
+      "first_seen": "2026-09-11",
+      "last_seen": "2026-09-11",
+      "runs": 1
+    },
+    {
+      "id": "f067dbf045b6",
+      "path": "rules_ai.py",
+      "category": "fragile-logic",
+      "summary": "web flag is computed before the steps fallback can change rule_type",
+      "tier": "WATCH",
+      "first_seen": "2026-09-11",
+      "last_seen": "2026-09-11",
+      "runs": 1
+    },
+    {
+      "id": "90bb28da1ac6",
+      "path": "tests/test_rules_steps.py",
+      "category": "test-coverage",
+      "summary": "no tests for wait and ask steps, run expiry, the restart yes path, or an open failure",
+      "tier": "WATCH",
+      "first_seen": "2026-09-11",
+      "last_seen": "2026-09-11",
+      "runs": 1
+    },
+    {
+      "id": "d54ebb10092e",
+      "path": "tests/test_rules_steps.py",
+      "category": "clean-code",
+      "summary": "audit mock setup repeated across tests",
+      "tier": "CLEAN CODE",
+      "first_seen": "2026-09-11",
+      "last_seen": "2026-09-11",
+      "runs": 1
     }
   ]
 }

@@ -234,6 +234,24 @@ def probe_search(search_url, sample):
     return {"status": status, "evidence": evidence, "url": url, "title": page["title"]}
 
 
+_PLAY_TARGET_RE = re.compile(r"play|player|video|watch|movie|stream", re.I)
+_MEDIA_RE = re.compile(r"<(iframe|video)\b([^>]*)>", re.I)
+_NOT_PLAYER_RE = re.compile(r"captcha|trailer|javascript:false|doubleclick|googlesyndication", re.I)
+
+
+def click_target_in_dom(dom, target):
+    """Is there something on the page that browser_cdp.click would hit for
+    `target`? A player (iframe/video that is not a captcha or trailer) for
+    play-like targets, else visible text containing every word of the target."""
+    if _PLAY_TARGET_RE.search(target or ""):
+        for _, attrs in _MEDIA_RE.findall(dom or ""):
+            if not _NOT_PLAYER_RE.search(attrs) and 'display: none' not in attrs.lower():
+                return True
+    words = [w for w in re.findall(r"[a-z0-9]+", (target or "").lower()) if len(w) > 2]
+    text = visible_text(dom).lower()
+    return bool(words) and all(w in text for w in words)
+
+
 def probe_open(url):
     """Does the page load (not a 404, not a bot check)?"""
     page = load(url)

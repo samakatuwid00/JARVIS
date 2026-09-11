@@ -1143,8 +1143,9 @@ async def post_apps_rules_test(message: Request):
     if not action:
         return JSONResponse({"error": "this rule doesn't open anything to test"},
                             status_code=400)
-    if action.get("type") == "search_site" and not sample:
-        sample = "test"
+    if action.get("type") in ("search_site", "steps") and not sample:
+        import rules_sim
+        sample = rules_sim.sample_for(rule)
     result = await asyncio.to_thread(tools.run_rule_action, rule, key, action, sample)
     return JSONResponse({"ok": not result.startswith("[Error]"), "result": result,
                          "url": rules_engine.build_action_url(action, sample)})

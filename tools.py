@@ -1419,6 +1419,9 @@ def run_rule_action(rule: dict, owner: str, action: dict, slot: str = "") -> str
     """Carry out one runnable rule (search_site / open_site)."""
     import time as _time
     import rules_engine as _rules
+    if action.get("type") == "steps":
+        import rules_steps
+        return rules_steps.start(rule, owner, action, slot)
     t0 = _time.time()
     slot = (slot or "").strip().strip(".,!?")
     site = action.get("site") or _rules.bare_host(action.get("url") or "") or owner
@@ -1473,7 +1476,17 @@ def try_rule_action(text: str):
     _PENDING_RULE_SLOT.clear()
     try:
         import rules_engine as _rules
+        import rules_steps
         m = _rules.match_action(t)
+        # A multi-step rule waiting on this user ("Which one?", "Press play?")
+        # gets the reply first, unless the reply is itself a rule command.
+        if rules_steps.active() and not m:
+            out = rules_steps.resume(t, looks_new=bool(_NEW_COMMAND_RE.match(t)))
+            if out is not None:
+                return out
+        if m and m["action"].get("type") == "steps":
+            return rules_steps.start(m["rule"], m["owner"], m["action"], m["slot"],
+                                     m.get("entry"))
         if m:
             return run_rule_action(m["rule"], m["owner"], m["action"], m["slot"])
         if pend and _time.time() - pend.get("ts", 0) <= _RULE_SLOT_TTL:

@@ -360,6 +360,8 @@ def action_of(rule, owner, entry=None):
     is_browser = (entry or {}).get("category") == "browser"
     act = rule.get("action")
     if isinstance(act, dict):
+        if act.get("type") == "steps":
+            return _steps_action(dict(act), owner, is_browser)
         if act.get("type") not in ("search_site", "open_site"):
             return None
         out = dict(act)
@@ -386,6 +388,34 @@ def action_of(rule, owner, entry=None):
     if out["type"] == "search_site":
         out.update(search_url=f"https://{site}/?s={{query}}", search_url_guessed=True,
                    slot=_slot_name(rule.get("source_phrase") or ""))
+    return out
+
+
+_STEP_OPS = {"search", "pick", "open", "click", "type", "key", "launch", "wait", "ask"}
+_WEB_STEP_OPS = {"search", "pick", "open"}
+
+
+def _steps_action(out, owner, is_browser):
+    """Validated multi-step action (rules_steps runs it), or None.
+
+    Web steps need a valid http(s) site; desktop-only steps (launch, click,
+    type, key) run in the owner app's window and need no address.
+    """
+    steps = [s for s in out.get("steps") or []
+             if isinstance(s, dict) and s.get("op") in _STEP_OPS]
+    if not steps:
+        return None
+    out["steps"] = steps
+    if any(s["op"] in _WEB_STEP_OPS for s in steps):
+        if not out.get("url") and out.get("site"):
+            out["url"] = "https://" + out["site"]
+        if not is_web_url(out.get("url")):
+            return None
+        search_url = out.get("search_url") or ""
+        if search_url and not is_web_url(search_url.replace("{query}", "q")):
+            out["search_url"] = None
+        if not out.get("browser") and is_browser:
+            out["browser"] = owner
     return out
 
 
@@ -416,7 +446,8 @@ def match_action(utterance, apps=None):
                     continue
                 m = _match_trigger(trig, toks)
                 if m and (best is None or m["score"] > best["score"]):
-                    best = dict(m, rule=rule, owner=owner, action=action, trigger=trig)
+                    best = dict(m, rule=rule, owner=owner, action=action, trigger=trig,
+                                entry=entry)
     return best
 
 
