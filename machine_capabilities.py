@@ -370,15 +370,40 @@ def write_registry() -> str:
                     manifest[k] = v
         except Exception:
             pass
+    manifest = _keep_user_data(manifest, load_registry() or {})
     payload = {
         "generated": __import__("datetime").datetime.now().isoformat(timespec="seconds"),
         "os": platform.system(),
         "count": len(manifest),
         "apps": manifest,
     }
-    with open(REGISTRY_PATH, "w", encoding="utf-8") as f:
+    tmp = REGISTRY_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, REGISTRY_PATH)
     return f"Scanned {len(manifest)} apps -> {REGISTRY_PATH}"
+
+
+# What the user (or the panel) set on an app. A rescan refreshes where and
+# what an app is; it must never drop these. Before 2026-09-11 it rewrote the
+# registry from the scan alone, so "rescan my apps" deleted every rule.
+USER_FIELDS = ("compiled_rules", "rule_drafts", "enabled", "registered", "hidden",
+               "abilities", "added_by_user")
+
+
+def _keep_user_data(manifest, old_registry):
+    """The fresh scan, with every user-set field carried over from the old
+    registry. An app the user added by hand stays even when the scan misses it."""
+    old_apps = (old_registry or {}).get("apps") or {}
+    for key, old in old_apps.items():
+        if not isinstance(old, dict):
+            continue
+        mine = {f: old[f] for f in USER_FIELDS if f in old}
+        if key in manifest:
+            manifest[key].update(mine)
+        elif mine.get("added_by_user") or mine.get("compiled_rules"):
+            manifest[key] = old
+    return manifest
 
 
 def load_registry():
