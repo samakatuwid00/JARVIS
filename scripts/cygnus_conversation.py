@@ -184,17 +184,19 @@ def _print_run(session, rows):
 
 async def run(base, args, sessions):
     report = {"sessions": {}, "consistency": {}}
-    async with connect(base) as ws:
-        for session in sessions:
-            runs = []
-            for k in range(args.repeat):
+    for session in sessions:
+        runs = []
+        for k in range(args.repeat):
+            # A fresh connection per run: a late reply from a timed-out turn
+            # must not be read as the next run's reply.
+            async with connect(base) as ws:
                 rows = await run_session(ws, session, args.pause)
-                if k == 0 or any(r["problems"] for r in rows):
-                    _print_run(session, rows)
-                runs.append(rows)
-            report["sessions"][session["name"]] = runs
-            if args.repeat > 1:
-                report["consistency"][session["name"]] = consistency(runs)
+            if k == 0 or any(r["problems"] for r in rows):
+                _print_run(session, rows)
+            runs.append(rows)
+        report["sessions"][session["name"]] = runs
+        if args.repeat > 1:
+            report["consistency"][session["name"]] = consistency(runs)
     report["overlap"] = await overlap(base)
     if args.concurrent:
         report["concurrent"] = await concurrent_sessions(base, args.concurrent)

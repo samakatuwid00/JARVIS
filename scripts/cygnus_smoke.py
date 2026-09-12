@@ -31,7 +31,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from cygnus_client import ask, audit_mark, connect, find_server, report_path, tools_since  # noqa: E402
+from cygnus_client import Turn, ask, audit_mark, connect, find_server, report_path, tools_since  # noqa: E402
 
 TIERS = ("safe", "live", "agent")
 # Tools that change something on the machine or hand work to an agent.
@@ -149,8 +149,12 @@ def check_step(expect, turn, tools):
 
 
 async def run_step(ws, expect):
+    import websockets
     mark = audit_mark()
-    turn = await ask(ws, expect["say"], expect.get("timeout", 60))
+    try:
+        turn = await ask(ws, expect["say"], expect.get("timeout", 60))
+    except websockets.ConnectionClosed as e:
+        turn = Turn(said=expect["say"], error=f"connection closed: {e}")
     await asyncio.sleep(0.5)                      # tool audit lines land just after the reply
     tools = tools_since(mark)
     problems = check_step(expect, turn, tools)
@@ -173,15 +177,17 @@ def _print_step(case, result):
 
 
 async def run(base, cases):
+    """Each case on its own connection: a reply that arrives after its step
+    timed out must not be read as the next case's reply."""
     results = []
-    async with connect(base) as ws:
-        for case in cases:
+    for case in cases:
+        async with connect(base) as ws:
             for expect in case["steps"]:
                 result = await run_step(ws, expect)
                 _print_step(case, result)
                 results.append({"case": case["name"], "tier": case["tier"], **result})
-            if case.get("cleanup"):
-                case["cleanup"]()
+        if case.get("cleanup"):
+            case["cleanup"]()
     return results
 
 
