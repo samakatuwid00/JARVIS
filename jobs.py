@@ -280,7 +280,14 @@ def find_work(query: str, limit: int = 3) -> list[dict]:
     need = 1 if len(words) == 1 else 2
     scored = [(len(words & content_words(j.get("task") or "")), j.get("started") or 0, j) for j in rows]
     scored = sorted((s for s in scored if s[0] >= need), key=lambda s: (s[0], s[1]), reverse=True)
-    return [j for _, _, j in scored[:limit]]
+    if not scored:
+        return []
+    # Among the best matches, the oldest is the one that made the thing:
+    # three later "redesign the website" jobs pushed out the job that built
+    # the hello world site, and Cygnus said no agent was used (2026-09-12).
+    best = [s for s in scored if s[0] == scored[0][0]]
+    first = min(best, key=lambda s: s[1])[2]
+    return [first] + [j for _, _, j in scored if j is not first][:limit - 1]
 
 
 def format_jobs(jobs: list[dict], max_notes: int = 6) -> str:

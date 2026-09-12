@@ -42,6 +42,19 @@ def test_a_morning_job_is_found_by_what_it_built(job_log):
     assert jobs.find_work("what did you do?") == []                  # nothing named, nothing matched
 
 
+def test_the_job_that_made_it_outranks_later_ones_about_it(job_log):
+    for k, at in (("r1", 1000.0), ("r2", 1100.0), ("r3", 1200.0)):
+        job_log[k] = {"id": k, "task": "Redesign the website in Documents\\hello-world-website",
+                      "tier": "hermes", "state": "done", "started": at, "progress": []}
+    found = [j["id"] for j in jobs.find_work("What coding agent did you use to create the hello world website?")]
+    assert found[0] == "a1" and found[1:] == ["r3", "r2"]
+
+
+@pytest.mark.parametrize("text", ["anong oras na ngayon?", "anong petsa ngayon?", "ano ang araw ngayon"])
+def test_tagalog_time_and_date_are_instant(text):
+    assert b.classify_intent(text) == "time"
+
+
 def test_recent_work_leaves_out_what_was_already_shown(job_log):
     assert "a1" not in jobs.recent_work(exclude={"a1"}) and "b2" in jobs.recent_work(exclude={"a1"})
 

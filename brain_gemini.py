@@ -375,7 +375,10 @@ def classify_intent(text: str) -> str:
             r"\b(what|which) (day|date) (is it|is today)\b|"
             r"\b(today'?s|current) (date|day|time)\b|"
             r"\b(tell me|say) the (time|clock|date)\b|"
-            r"^time\s*(please)?\??$", t):
+            r"^time\s*(please)?\??$|"
+            # Tagalog: "anong oras na ngayon?" went to the model, which
+            # tried to delegate it and gave the date with the wrong year.
+            r"\bano(ng| ang)\s+(oras|petsa|araw)\b", t):
             return "time"
     if re.fullmatch(r"(help|what can you do\??|commands\??|options\??)", t):
         return "help"
