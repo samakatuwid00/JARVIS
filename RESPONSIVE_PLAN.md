@@ -100,6 +100,12 @@ Tablet and desktop keep the artifact as today.
 1. **Foundation** — replace `100vh` with `100dvh` (with `100vh` fallback),
    let columns/drawer scroll internally, one-line status, topbar overflow
    rules. Fixes desktop/small-laptop clipping on its own.
+   *Done 2026-09-12.* Shell has a fixed `dvh` height with rows
+   `auto minmax(0, 1fr)`; columns scroll; status is one line with the full
+   text in `title`; brain pill ellipsizes; Voice/FB pills hide below
+   1280px. Probe: 1280/1400/1920 boxes identical to before; status 1 line
+   and Apps on-screen at every size; 1024x700 columns scroll instead of
+   clipping. TALK still covers the input at 768px and in landscape (step 4).
 2. **Phone portrait** — full-height column, flexible transcript, bottom dock,
    44px targets, placeholder, background option (decision).
 3. **Panel drawer** — markup for the sheet + Panels button + task badge;
