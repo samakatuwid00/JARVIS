@@ -1,0 +1,18 @@
+{
+  "name": "jarvis-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Tray icon, Ctrl+Alt+J and one window for the JARVIS HUD. The backend stays in the repo.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "unpack-electron": "powershell -NoProfile -Command \"Expand-Archive -Force -LiteralPath $env:LOCALAPPDATA\\electron\\Cache\\electron-v33.4.11-win32-x64.zip -DestinationPath node_modules\\electron\\dist; Set-Content -NoNewline -Encoding ascii node_modules\\electron\\path.txt electron.exe\""
+  },
+  "devDependencies": {
+    "electron": "33.4.11"
+  },
+  "allowScripts": {
+    "electron@33.4.11": true
+  }
+}

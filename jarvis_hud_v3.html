@@ -665,6 +665,32 @@
       transform: translateY(-50%); }
     #jv-talk:active { transform: translateY(-50%) scale(.95); }
   }
+
+  /* Desktop app (Electron): one window, three sizes (ELECTRON_PLAN.md,
+     decision 2). The shell sets data-desk on <html>; the page only lays
+     itself out for it. */
+  #jv-desk-ctl { display: inline-flex; gap: 6px; }
+  #jv-desk-ctl[hidden] { display: none; }
+  #jv-desk-ctl .jv-btn { width: 32px; height: 32px; padding: 0; font-size: 16px; line-height: 1; }
+  html[data-desk] #jv-topbar { -webkit-app-region: drag; }
+  html[data-desk] #jv-topbar button { -webkit-app-region: no-drag; }
+  html[data-desk="expanded"] #jv-talk { display: none; }
+  /* Sticky panel: the status dot and the tray already show the link, and
+     row one must fit two more buttons at 380px. */
+  @media (max-width: 700px) { html[data-desk] #jv-pill-net { display: none; } }
+  #jv-mini-orb { display: none; }
+  html[data-desk="mini"], html[data-desk="mini"] body { background: transparent !important; }
+  html[data-desk="mini"] body > * { display: none !important; }
+  html[data-desk="mini"] body > #jv-mini-orb { display: block !important; position: fixed; inset: 10px;
+    border-radius: 50%; cursor: pointer; touch-action: none;
+    background: radial-gradient(circle at 50% 38%, color-mix(in srgb, var(--holo) 40%, #05070c), #05070c 72%);
+    border: 2px solid var(--holo); box-shadow: 0 0 18px color-mix(in srgb, var(--holo) 50%, transparent);
+    animation: jvOrb 3s ease-in-out infinite; }
+  #jv-mini-orb.listening { border-color: #9dff8a; box-shadow: 0 0 22px #9dff8a; animation-duration: .9s; }
+  #jv-mini-orb.thinking, #jv-mini-orb.transcribing { border-color: #6ec3ff; box-shadow: 0 0 22px #6ec3ff;
+    animation-duration: 1.4s; }
+  #jv-mini-orb.speaking { box-shadow: 0 0 28px var(--holo); animation-duration: .7s; }
+  @keyframes jvOrb { 50% { transform: scale(1.06); } }
 </style>
 </head>
 <body>
@@ -700,6 +726,9 @@
         <button id="jv-panels" class="jv-btn" type="button" aria-label="Panels" aria-controls="jv-drawer"
                 aria-expanded="false"><svg class="jv-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg><span class="jv-btn-label">Panels</span><span id="jv-panels-badge" hidden></span></button>
         <button id="jv-apps" class="jv-btn" type="button" aria-label="Apps" title="Apps JARVIS can open"><svg class="jv-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg><span class="jv-btn-label">Apps</span></button>
+        <span id="jv-desk-ctl" hidden><button id="jv-desk-expand" class="jv-btn" type="button" aria-label="Full HUD"
+                title="Full HUD">&#x2922;</button><button id="jv-desk-mini" class="jv-btn" type="button"
+                aria-label="Mini orb" title="Mini orb">&minus;</button></span>
         <button id="jv-unlock" class="jv-btn">Activate audio</button>
         <button id="jv-retry" class="jv-btn">Enable mic</button>
       </span>
@@ -802,6 +831,8 @@
 
   <button id="jv-talk" type="button" aria-label="Tap to talk">Talk</button>
 
+  <div id="jv-mini-orb" role="button" aria-label="Open JARVIS panel"></div>
+
   <div id="jv-drawer" role="dialog" aria-modal="true" aria-label="Panels">
     <div id="jv-drawer-card">
       <div id="jv-drawer-head">
@@ -882,6 +913,7 @@
   var retryBtn = document.getElementById('jv-retry');
   var unlockBtn = document.getElementById('jv-unlock');
   var endBtn = document.getElementById('jv-end');
+  var miniOrb = document.getElementById('jv-mini-orb');
   var hud = document.getElementById('hud');
   // Transcript now renders in the HUD's right column; #jv-log is kept in the
   // DOM (hidden) so nothing that references it breaks.
@@ -895,12 +927,13 @@
   var IS_MOBILE = /Android|iPhone|iPad/i.test(navigator.userAgent) ||
                   (window.matchMedia && matchMedia('(pointer: coarse) and (max-width: 900px)').matches);
   var talkBtn = document.getElementById('jv-talk');
-  if (IS_MOBILE && talkBtn) talkBtn.classList.add('show');
-  if (IS_MOBILE) { PLACEHOLDER = 'TYPE TO JARVIS…'; chatInput.placeholder = PLACEHOLDER; }
   // Inside the desktop app (Electron) Chrome's cloud speech recognition is
   // unavailable, so the server's Whisper wake word is the wake word, and the
   // app's global hotkey opens a capture the way a TALK tap does.
   var IS_DESKTOP = /\bElectron\//.test(navigator.userAgent);
+  if ((IS_MOBILE || IS_DESKTOP) && talkBtn) talkBtn.classList.add('show');
+  // The phone and the desktop panel are narrow; the long hint gets cut off.
+  if (IS_MOBILE || IS_DESKTOP) { PLACEHOLDER = 'TYPE TO JARVIS…'; chatInput.placeholder = PLACEHOLDER; }
 
   // ---------------------------------------------------------------- hud link
   // The HUD artifact re-sets `--spd` on ITS OWN documentElement on every render,
@@ -939,6 +972,7 @@
       : (st === 'thinking' || st === 'transcribing') ? 'think' : '';
     if (txt) { statusEl.textContent = txt; statusEl.title = txt; }
     statusEl.className = (st === 'listening' || st === 'speaking') ? 'live' : '';
+    if (miniOrb) miniOrb.className = st;         // the desktop app's mini orb mirrors it
     // The HUD artifact is read-only; it ignores this, but forward anyway so a
     // future HUD build can react without touching hud_artifact.html.
     try { hud.contentWindow.postMessage({ source: 'jarvis', type: 'state', state: st }, '*'); } catch (e) {}
@@ -1259,6 +1293,46 @@
         else setVal(stWake, 'Server off', 'warn');
       })
       .catch(function () { setVal(stBrain, 'unreachable', 'bad'); syncBrainPill(); });
+  }
+
+  // ---------------------------------------------------------------- desktop app
+  // The shell tells the page which of its three sizes it is in; the page lays
+  // itself out for it and asks for a change with the two topbar buttons. The
+  // orb opens the panel on a click and is dragged by hand, not with a drag
+  // region, which would swallow that click (Sticky Brain's pet works the same).
+  function bindOrb(orb) {
+    var start = null;
+    orb.addEventListener('pointerdown', function (e) {
+      start = [e.screenX, e.screenY];
+      orb.setPointerCapture(e.pointerId);
+      jarvisDesktop.dragStart();
+    });
+    orb.addEventListener('pointermove', function (e) {
+      if (start) jarvisDesktop.dragMove(e.screenX - start[0], e.screenY - start[1]);
+    });
+    orb.addEventListener('pointerup', function (e) {
+      var moved = start && Math.hypot(e.screenX - start[0], e.screenY - start[1]) > 4;
+      start = null;
+      jarvisDesktop.dragEnd();
+      if (!moved) jarvisDesktop.setMode('sticky');
+    });
+  }
+
+  if (IS_DESKTOP && window.jarvisDesktop) {
+    var expandBtn = document.getElementById('jv-desk-expand');
+    document.getElementById('jv-desk-ctl').hidden = false;
+    jarvisDesktop.onMode(function (m) {
+      document.documentElement.setAttribute('data-desk', m);
+      var label = m === 'expanded' ? 'Panel' : 'Full HUD';
+      expandBtn.title = label;
+      expandBtn.setAttribute('aria-label', label);
+    });
+    expandBtn.onclick = function () {
+      var expanded = document.documentElement.getAttribute('data-desk') === 'expanded';
+      jarvisDesktop.setMode(expanded ? 'sticky' : 'expanded');
+    };
+    document.getElementById('jv-desk-mini').onclick = function () { jarvisDesktop.setMode('mini'); };
+    bindOrb(miniOrb);
   }
 
   // ---------------------------------------------------------------- panel drawer
@@ -1595,6 +1669,7 @@
     // engines can't both open a capture for one "jarvis".
     if (m.type === 'wake') {
       if (IS_MOBILE) return;   // the PC's room said "jarvis", not this phone
+      if (IS_DESKTOP && window.jarvisDesktop) jarvisDesktop.surface();   // orb or hidden: panel back
       var src = (m.source === 'server') ? 'SERVER' : 'BROWSER';
       console.log('[wake] ' + src + ' engine detected wake word');
       var now = Date.now();

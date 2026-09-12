@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<title>JARVIS</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #05070c; color: #ffd9a0;
+    font: 600 13px/1.5 system-ui, sans-serif; -webkit-app-region: drag; }
+  body { display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 14px; text-align: center; padding: 0 20px; box-sizing: border-box;
+    border: 1px solid rgba(255, 180, 84, .35); border-radius: 14px; }
+  .brand { font-size: 20px; letter-spacing: .3em; color: #ffb454; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; background: #ffb454;
+    box-shadow: 0 0 14px #ffb454; animation: pulse 1.2s infinite; }
+  @keyframes pulse { 50% { transform: scale(1.4); opacity: .6; } }
+</style>
+</head>
+<body>
+  <div class="brand">J.A.R.V.I.S.</div>
+  <div class="dot"></div>
+  <div id="msg">Starting JARVIS…</div>
+  <script>
+    var msg = new URLSearchParams(location.search).get('msg');
+    if (msg) document.getElementById('msg').textContent = msg;
+  </script>
+</body>
+</html>

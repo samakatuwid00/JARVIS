@@ -1,7 +1,7 @@
 # ELECTRON_PLAN.md — JARVIS as an installed desktop app with a tray icon
 
-Status: planned, not started (2026-09-12). Discussed in chat on 2026-09-12;
-this file is the first written version.
+Status (2026-09-12): phases 0–2 done; the shell runs with `npm run dev` in
+`desktop/`. Phases 3 (staying healthy) and 4 (installer) open.
 
 ## Goal
 
@@ -188,35 +188,60 @@ Chrome tab also open, only the desktop window reacts.
 
 ## Phase 2 — Electron shell (`desktop/`)
 
-- [ ] `package.json`, `main.js`, `preload.js`; Electron pinned.
-- [ ] Single instance (`app.requestSingleInstanceLock()`); a second launch
+- [x] `package.json`, `main.js`, `preload.js`; Electron pinned.
+- [x] Single instance (`app.requestSingleInstanceLock()`); a second launch
       focuses the first.
-- [ ] Backend supervisor: spawn `.venv\Scripts\python.exe jarvis_web.py`
+- [x] Backend supervisor: spawn `.venv\Scripts\python.exe jarvis_web.py`
       with the repo as cwd; stdout/stderr to `logs/desktop-backend.log`;
       pid file; wait for `GET /` (timeout ~180 s); attach instead of spawn
       when 8001 already serves JARVIS (caveat 6, and "attach mode" in the
       development workflow: tray says so, "Restart backend" greyed out).
-- [ ] Window: loads the HUD, closes to the tray, `backgroundThrottling:
+- [x] Window: loads the HUD, closes to the tray, `backgroundThrottling:
       false`, hardening from caveat 14.
-- [ ] Sticky/expanded window (decision 2), modelled on Sticky Brain:
+- [x] Sticky/expanded window (decision 2), modelled on Sticky Brain:
       frameless, `alwaysOnTop` at `'floating'`, `skipTaskbar`, docked
       top-right; a drag strip and expand / collapse / hide controls in the
       HUD topbar (`-webkit-app-region: drag`, buttons `no-drag`); the TALK
       button shows in the desktop app too, since the phone layout it uses
       at sticky width is where TALK lives.
-- [ ] Reuse what Sticky Brain already learned (vault note "Sticky Brain —
+- [x] Reuse what Sticky Brain already learned (vault note "Sticky Brain —
       Installer, Tray and Autostart"): tray icon from a real file (an empty
       image is an invisible tray entry), single-instance lock, `--hidden`
       at login, the close button hides instead of quitting, Electron ^33.
-- [ ] Tray: Show, Restart backend, Open logs, Quit. Tooltip shows
+- [x] Tray: Show, Restart backend, Open logs, Quit. Tooltip shows
       Starting / Ready / Backend stopped.
-- [ ] Global hotkey (see decisions) shows the window and opens a capture;
+- [x] Global hotkey (see decisions) shows the window and opens a capture;
       failure to register is reported.
-- [ ] Quit kills the backend tree (`taskkill /PID <pid> /T /F`).
+- [x] Quit kills the backend tree (`taskkill /PID <pid> /T /F`).
 
 Done when: tray icon appears; hotkey shows the window and opens a capture;
 Quit leaves nothing listening on 8001; killing Electron from Task Manager
 and relaunching recovers (stale backend cleaned up).
+
+*Done 2026-09-12* (`npm run dev` in `desktop/`). Verified in the real window
+over the DevTools protocol: sticky panel 383x720 at the top-right; expanded
+fills the work area (1536x912) with the side columns; collapse returns to
+the same spot; mini is a 96x96 orb at the bottom-right; clicking the orb
+reopens the panel; the real Ctrl+Alt+J switches the HUD to LISTENING; no
+browser wake word runs. Attach mode against 8001: quitting the app left the
+backend running. Spawn mode on a spare port: backend up and HUD loaded in
+about 10 s, output in `logs/desktop-backend.log`; relaunch after a crash
+came back in about 8 s.
+
+Findings:
+- npm 11 skips Electron's postinstall unless approved; the approval is
+  recorded project-locally as `allowScripts` in `desktop/package.json`.
+- Under Node 26, Electron 33's `install.js` exits with code 0 after
+  unpacking the first file (`extract-zip`), leaving no `electron.exe`.
+  `npm run unpack-electron` unpacks the cached zip with PowerShell instead.
+- The venv's `python.exe` is a launcher; the real server is its child, so
+  stopping must kill the tree (it does).
+- Force-killing the shell took the backend down with it (the Windows job
+  object libuv puts children in; inferred), so no orphan was left. The
+  pid-file cleanup stays as a fallback and was not exercised.
+
+Not yet tried by hand: the tray menu items, Quit from the tray, the mic
+permission on first launch, the hotkey while another app has focus.
 
 ## Phase 3 — Staying healthy
 
@@ -271,6 +296,13 @@ hard-coded `C:\Users\deped` paths (8 in `tools.py`, 3 in
      layout (transcript, input, TALK), so this needs no new HUD layout.
    - **Expanded mode**: the full HUD with its side columns, toggled from the
      panel and restored to the sticky bounds afterwards.
+   - **Mini mode** (confirmed 2026-09-12, like Sticky Brain's niko mode): a
+     tiny orb in the bottom-right corner that only shows JARVIS's state
+     (idle, listening, thinking, speaking). The wake word, the hotkey or a
+     click brings back the sticky panel.
+   One window switches between the three modes (main process resizes it,
+   the HUD gets a mode class), as Sticky Brain does; owner confirmed the
+   sticky + expand reading and asked for the mini mode on top.
 3. At login: **tray only**; the window appears on the hotkey or the wake
    word.
 4. Chrome tab alongside the app: **allowed, the desktop window wins** server
