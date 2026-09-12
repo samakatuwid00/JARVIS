@@ -274,6 +274,16 @@ def test_the_router_lead_never_waits_on_the_local_model(monkeypatch):
     assert seen == [False]
 
 
+@pytest.mark.parametrize("spoken, routed, reply", [
+    ("Cygnus?", "?", "I'm here, sir. What can I do for you?"),
+    ("jarvis?", "?", "I'm here, sir. What can I do for you?"),
+    ("ok", "ok", "Alright, sir."),
+    ("open notepad", "open notepad", None),
+    ("?", "?", None)])
+def test_a_check_in_is_judged_on_the_words_as_spoken(spoken, routed, reply):
+    assert b._check_in_for(spoken, routed) == reply
+
+
 def test_a_real_request_is_not_a_check_in():
     assert b._is_bare_check_in("test the login page") is False
     assert b._is_bare_check_in("open notepad") is False

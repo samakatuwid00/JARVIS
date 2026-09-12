@@ -735,6 +735,17 @@ def _check_in_reply(text):
     return "I'm here, sir. What can I do for you?"
 
 
+def _check_in_for(spoken, routed):
+    """The instant reply to a lone "test", "ok" or "Cygnus?", judged on the
+    routed text and on the words as spoken: the routing strip turns
+    "Cygnus?" into "?", which is not a check-in, and the turn waited out the
+    model budget (2026-09-12). None when it is not a check-in."""
+    for text in (routed, spoken):
+        if _is_bare_check_in(text):
+            return _check_in_reply(text)
+    return None
+
+
 # "can you / do you / is there ..." ending in a question mark.
 _YES_NO_RE = re.compile(r"^\s*(?:(?:jarvis|cygnus|so|and|hey)[,\s]+)*"
                         r"(?:can|could|would|will|do|does|did|is|are|have|has)\s+"
@@ -1853,6 +1864,9 @@ class JarvisBrain:
             except Exception as e:
                 print(f"[JARVIS] decline failed ({e}); routing normally...")
 
+        # The words as spoken, before the routing strip below turns "Cygnus?"
+        # into "?" - the check-in test needs them.
+        _spoken = user_input
         # Correction prefix / leading filler: "I mean visit X" and "Now visit
         # X" route exactly like "visit X". The conversation keeps the original
         # wording; only routing sees the stripped form. Search commands keep
@@ -1968,8 +1982,9 @@ class JarvisBrain:
         # "test", "ok", "jarvis?" on their own: someone checking Cygnus is
         # listening, not a task. They used to cost a full model turn (48 s
         # with the online model down) before delegate() turned them away.
-        if intent == "general" and _is_bare_check_in(user_input):
-            reply = _check_in_reply(user_input)
+        _check_in = _check_in_for(_spoken, user_input) if intent == "general" else None
+        if _check_in:
+            reply = _check_in
             self.conversation.append({"role": "assistant", "content": reply})
             self.last_backend = "instant"
             self.last_stats = {"backend": "instant", "intent": "check_in"}
