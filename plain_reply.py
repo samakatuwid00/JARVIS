@@ -183,6 +183,51 @@ def announce_job(event: dict) -> str | None:
     return None
 
 
+def _detail(note: str) -> str:
+    """A running job's last note as a short line for its card."""
+    step = _step(note)
+    if step:
+        return step[0].upper() + step[1:]
+    if "look-only job ran" in (note or ""):
+        return note
+    return "Started"
+
+
+def card(job: dict) -> dict:
+    """What the Active Tasks card shows for a job or job event: a short title,
+    a state label, a tone for its look, a one-line detail, and whether it waits
+    on a confirm. Tone "gone" means the card should disappear (a job replaced
+    by its re-confirmed run)."""
+    state = job.get("state")
+    note = job.get("note") or ((job.get("progress") or [""])[-1] or "")
+    out = {"title": short_task(job.get("task")), "confirm": False}
+    if state in ("queued", "running"):
+        return {**out, "label": "Working", "tone": "run", "detail": _detail(note)}
+    if state == "waiting-on-confirm":
+        return {**out, "label": "Needs you", "tone": "ask", "confirm": True,
+                "detail": "Say confirm to start it, or no to cancel."}
+    if state == "done":
+        body = _full_result(job)
+        ask = pending_ask(body)
+        if ask:
+            return {**out, "label": "Needs you", "tone": "ask", "detail": ask}
+        return {**out, "label": "Done", "tone": "ok", "detail": _first_sentence(body)}
+    if state == "unverified":
+        return {**out, "label": "Done, not checked", "tone": "warn",
+                "detail": "It finished, but the result wasn't double-checked."}
+    if state == "error":
+        why = _reason(job.get("error") or job.get("summary"))
+        return {**out, "label": "Didn't finish", "tone": "bad", "detail": why[0].upper() + why[1:] + "."}
+    if state == "timeout":
+        if "superseded" in note:
+            return {**out, "label": "Replaced", "tone": "gone", "detail": ""}
+        if note.startswith("expired"):
+            return {**out, "label": "Not confirmed", "tone": "muted",
+                    "detail": "Nobody confirmed it, so it never started."}
+        return {**out, "label": "Ran out of time", "tone": "bad", "detail": "It took too long and was stopped."}
+    return {**out, "label": str(state or "").capitalize(), "tone": "run", "detail": ""}
+
+
 def _step(note: str) -> str | None:
     m = _STEP.search(note or "")
     if not m:

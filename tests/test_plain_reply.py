@@ -99,6 +99,26 @@ def test_end_states_in_plain_words(monkeypatch):
     assert pr.announce_job(_job(monkeypatch, task="fix it", state="running")) is None
 
 
+def test_cards_have_one_plain_state_each(monkeypatch):
+    def c(**rec):
+        return pr.card(_job(monkeypatch, **rec))
+    run = c(task="Create the smoke page. Delegate it to Claude.", state="running",
+            note="[STEP 2] … Dispatching creation task to Claude Code | claude -p")
+    assert (run["title"], run["label"], run["tone"], run["detail"]) == \
+        ("Create the smoke page", "Working", "run", "Step 2, dispatching creation task to claude code")
+    wait = c(task="test", state="waiting-on-confirm")
+    assert (wait["label"], wait["tone"], wait["confirm"]) == ("Needs you", "ask", True)
+    ask = c(task=MOBILE, state="done", result="Analysis done.\nSay **proceed** to launch the fix.")
+    assert (ask["label"], ask["tone"], ask["detail"], ask["confirm"]) == \
+        ("Needs you", "ask", "Say proceed to launch the fix.", False)
+    assert c(task="x", state="done", result="The page is ready.")["tone"] == "ok"
+    assert c(task="x", state="unverified")["label"] == "Done, not checked"
+    bad = c(task="x", state="error", error="[Error] Hermes did not finish within 300s.")
+    assert (bad["label"], bad["detail"]) == ("Didn't finish", "It ran out of time after 5 minutes.")
+    assert c(task="x", state="timeout", note="superseded — re-confirmed, running as a new job")["tone"] == "gone"
+    assert c(task="x", state="timeout", note="expired — no confirm within 10 min")["tone"] == "muted"
+
+
 def test_status_while_a_job_runs(monkeypatch):
     now = time.time()
     monkeypatch.setattr(jobs, "active", lambda: [

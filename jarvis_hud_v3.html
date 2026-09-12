@@ -80,14 +80,38 @@
   .job-card.is-timeout { border-color: rgba(239, 123, 100, .4); }
   .job-card.is-error .job-icon,
   .job-card.is-timeout .job-icon { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ef7b64' stroke-width='3' stroke-linecap='round'%3E%3Cpath d='M6 6l12 12M18 6L6 18'/%3E%3C/svg%3E"); color: #ef7b64; background: rgba(239, 123, 100, .1); }
-  .job-title { color: #d8b98a; text-transform: uppercase; white-space: nowrap;
-      overflow: hidden; text-overflow: ellipsis; font: 500 11.5px/1.5 var(--font-body);
-      letter-spacing: .04em; flex: 1; }
-    .job-state { font-family: var(--font-data); font-size: 11px;
+  /* Plain words from the server (plain_reply.card): a short title, a state
+     label, a sentence of detail. States: working, needs you, done, done but
+     not checked, didn't finish, never confirmed. */
+  .job-title { color: #d8b98a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      font: 600 12px/1.5 var(--font-body); letter-spacing: .01em; flex: 1; }
+    .job-state { font: 700 10px/1.5 var(--font-display); letter-spacing: .14em; text-transform: uppercase;
       color: #ffe1bb; text-align: right; white-space: nowrap; }
-    .job-note  { font-size: 11.5px; color: #ffe1bb; margin-top: 3px;
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right;
-      font-family: var(--font-data); font-size: 11px; }
+    .job-note { font: 500 12px/1.45 var(--font-body); color: #e8d9bd; margin-top: 4px;
+      display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+    .job-note:empty { display: none; }
+  .job-card.is-done .job-state { color: #9fe6ba; }
+  .job-card.is-error .job-state { color: #ef7b64; }
+  .job-card.is-ask { border-color: rgba(255, 193, 77, .55); }
+  .job-card.is-ask .job-state, .job-card.is-warn .job-state { color: #ffc14d; }
+  .job-card.is-ask .job-icon { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffc14d' stroke-width='3' stroke-linecap='round'%3E%3Cpath d='M12 5v9M12 19h.01'/%3E%3C/svg%3E"); color: #ffc14d; background: rgba(255, 193, 77, .12); }
+  .job-card.is-warn { border-color: rgba(255, 193, 77, .3); }
+  .job-card.is-warn .job-icon { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffc14d' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4.5 12.5l5 5 10-11'/%3E%3C/svg%3E"); color: #ffc14d; background: rgba(255, 193, 77, .1); }
+  .job-card.is-muted { opacity: .62; }
+  .job-card.is-muted .job-icon { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23d8b98a' stroke-width='3' stroke-linecap='round'%3E%3Cpath d='M6 12h12'/%3E%3C/svg%3E"); color: #d8b98a; }
+  .job-x { flex: 0 0 auto; align-self: center; background: none; border: 0; cursor: pointer;
+    color: #8a7a5e; font: 400 15px/1 var(--font-body); padding: 0 2px; }
+  .job-x:hover { color: #ffe7c4; }
+  .job-card.is-running .job-x { display: none; }
+  .job-actions { display: flex; gap: 8px; margin-top: 9px; }
+  .job-actions:empty { display: none; }
+  .job-btn { cursor: pointer; border-radius: 8px; padding: 6px 14px; font: 700 10.5px/1 var(--font-display);
+    letter-spacing: .14em; text-transform: uppercase; border: 1px solid var(--hairline);
+    background: transparent; color: #d8b98a; }
+  .job-btn.confirm { border-color: rgba(125, 219, 160, .6); background: rgba(125, 219, 160, .14); color: #9fe6ba; }
+  .job-btn:disabled { opacity: .5; cursor: default; }
+  .job-btn:focus-visible, .job-x:focus-visible { outline: 2px solid var(--holo); outline-offset: 2px; }
+  @media (pointer: coarse) { .job-btn { min-height: 40px; } .job-x { min-width: 32px; min-height: 32px; } }
 
   /* Page = HUD only. The glow and the status strip float over it; the glow is
      pointer-events:none, the strip is a thin non-blocking overlay. */
@@ -1518,6 +1542,8 @@
         if (wk.healthy) setVal(stWake, 'Server live', 'ok');
         else if (wk.error) setVal(stWake, 'Server off: ' + wk.error, 'warn');
         else setVal(stWake, 'Server off', 'warn');
+        // Active Tasks from before this page opened (cards arrive live after).
+        if (!jobsLoaded && s.job_cards) { jobsLoaded = true; s.job_cards.forEach(renderJobCard); }
       })
       .catch(function () { setVal(stBrain, 'unreachable', 'bad'); syncBrainPill(); });
   }
@@ -2169,19 +2195,62 @@
   }
 
   // ------------------------------------------------- background job cards
-  // One card per background task (specialist/Hermes). States: queued/running
-  // (spinner + last note), done (auto-dismiss), error/timeout (sticky red).
+  // One card per background task, in the plain words the server sends with
+  // each job event (plain_reply.card): title, label, tone, detail. Tones: run
+  // (working), ask (needs you), ok (done), warn (done, not checked), bad
+  // (didn't finish), muted (never confirmed), gone (replaced: card removed).
+  // Done cards stay a minute; the rest stay until dismissed or replaced by a
+  // retry of the same task, so a failed first try no longer outlives the
+  // second one that worked (it did on 2026-09-12).
   var jobCards = {};                      // id -> card element
+  var JOB_TONE_CLASS = { run: 'is-running', ask: 'is-ask', ok: 'is-done', warn: 'is-warn',
+                         bad: 'is-error', muted: 'is-muted' };
+  var JOB_KEEP_MS = { ok: 60000, muted: 20000 };
+  var jobsLoaded = false;
 
+  function legacyJobTone(state) {         // an event without the plain fields
+    return state === 'done' ? 'ok' : state === 'waiting-on-confirm' ? 'ask'
+      : (state === 'error' || state === 'timeout') ? 'bad' : 'run';
+  }
+  // The Active Tasks pill (and the Panels badge that mirrors it): tasks that
+  // are working or waiting on the user.
+  function syncTaskCount() {
+    var n = 0;
+    for (var id in jobCards) {
+      var t = jobCards[id].dataset.tone;
+      if (t === 'run' || t === 'ask') n++;
+    }
+    taskCountEl.textContent = String(n);
+  }
+  function dropJobCard(id) {
+    var c = jobCards[id];
+    if (!c) return;
+    clearTimeout(c._keep);
+    c.remove(); delete jobCards[id];
+    syncTaskCount();
+  }
+  function answerJob(card, word) {
+    card.querySelectorAll('.job-btn').forEach(function (b) { b.disabled = true; });
+    chatInput.value = word; autosizeInput(); sendTyped();
+  }
   function renderJobCard(ev) {
+    var tone = ev.tone || legacyJobTone(ev.state);
+    if (tone === 'gone') { dropJobCard(ev.id); return; }
+    var name = ev.title || ev.task || 'Task';
+    for (var other in jobCards) {        // a retry replaces the earlier attempt
+      if (other !== ev.id && jobCards[other].dataset.title === name &&
+          jobCards[other].dataset.tone !== 'run') dropJobCard(other);
+    }
     var card = jobCards[ev.id];
     if (!card) {
       card = document.createElement('div');
       card.className = 'job-card';
       card.innerHTML =
         '<div class="job-head"><span class="job-icon"></span>' +
-        '<span class="job-title"></span><span class="job-state"></span></div>' +
-        '<div class="job-note"></div>';
+        '<span class="job-title"></span><span class="job-state"></span>' +
+        '<button class="job-x" type="button" aria-label="Dismiss" title="Dismiss">×</button></div>' +
+        '<div class="job-note"></div><div class="job-actions"></div>';
+      card.querySelector('.job-x').onclick = function () { dropJobCard(ev.id); };
       var host = document.getElementById('job-tray');
       if (!host) {                        // lazy-create the tray once
         host = document.createElement('div');
@@ -2191,35 +2260,28 @@
       host.appendChild(card);
       jobCards[ev.id] = card;
     }
-    var icon   = card.querySelector('.job-icon');
-    var state  = card.querySelector('.job-state');
-    var note   = card.querySelector('.job-note');
-    var title  = card.querySelector('.job-title');
-    title.textContent = ev.task || '(untitled task)';
-    note.textContent  = ev.note || ev.summary || ev.error || '';
-    card.classList.remove('is-running', 'is-done', 'is-error', 'is-timeout');
-    if (ev.state === 'done') {
-      card.classList.add('is-done');
-      icon.textContent  = '✓';
-      state.textContent = 'DONE' + (ev.elapsed ? ' · ' + Math.round(ev.elapsed) + 's' : '');
-      setTimeout(function () {          // auto-dismiss completed cards
-        card.remove(); delete jobCards[ev.id];
-      }, 8000);
-    } else if (ev.state === 'error') {
-      card.classList.add('is-error');
-      icon.textContent  = '✕';
-      state.textContent = 'ERROR';
-      note.textContent  = ev.error || ev.note || 'failed';
-    } else if (ev.state === 'timeout') {
-      card.classList.add('is-timeout');
-      icon.textContent  = 'â±';
-      state.textContent = 'TIMEOUT';
-      note.textContent  = ev.error || 'timed out';
-    } else {                            // queued / running
-      card.classList.add('is-running');
-      icon.textContent  = 'â—';          // spins via CSS animation
-      state.textContent = ev.state.toUpperCase();
+    card.dataset.title = name;
+    card.dataset.tone = tone;
+    for (var t in JOB_TONE_CLASS) card.classList.remove(JOB_TONE_CLASS[t]);
+    card.classList.add(JOB_TONE_CLASS[tone] || 'is-running');
+    var titleEl = card.querySelector('.job-title');
+    titleEl.textContent = name;
+    titleEl.title = ev.task || name;      // the whole request on hover
+    card.querySelector('.job-state').textContent = ev.label || ev.state || '';
+    card.querySelector('.job-note').textContent = ev.detail != null ? ev.detail : (ev.note || '');
+    var actions = card.querySelector('.job-actions');
+    actions.innerHTML = '';
+    if (ev.confirm) {
+      [['Confirm', 'confirm', 'confirm'], ['Cancel', 'no', 'cancel']].forEach(function (b) {
+        var btn = document.createElement('button');
+        btn.type = 'button'; btn.className = 'job-btn ' + b[2]; btn.textContent = b[0];
+        btn.onclick = function () { answerJob(card, b[1]); };
+        actions.appendChild(btn);
+      });
     }
+    clearTimeout(card._keep);
+    if (JOB_KEEP_MS[tone]) card._keep = setTimeout(function () { dropJobCard(ev.id); }, JOB_KEEP_MS[tone]);
+    syncTaskCount();
   }
 
   // ------------------------------------------------- speech-reactive visuals

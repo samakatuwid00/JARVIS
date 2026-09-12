@@ -702,6 +702,26 @@ def _known_names():
     return {n for n in names if len(n) >= 3}
 
 
+def _job_cards(recent_s: float = 900) -> list[dict]:
+    """Active jobs and jobs that ended in the last `recent_s` seconds, shaped
+    like job events plus their plain card fields (plain_reply.card)."""
+    import jobs
+    import plain_reply
+    now = time.time()
+    rows, seen = [], set()
+    for j in jobs.active() + jobs.recent(8):
+        ended = (j.get("started") or 0) + (j.get("elapsed") or 0)
+        if j["id"] in seen or (j.get("state") not in ("queued", "running", "waiting-on-confirm")
+                               and now - ended > recent_s):
+            continue
+        seen.add(j["id"])
+        ev = {"type": "job", "id": j["id"], "task": j.get("task", ""), "state": j.get("state"),
+              "note": (j.get("progress") or [None])[-1], "error": j.get("error"),
+              "summary": j.get("summary"), "elapsed": j.get("elapsed")}
+        rows.append({**ev, **plain_reply.card(ev)})
+    return rows
+
+
 async def deliver_result(websocket: WebSocket, text: str, speak: bool):
     """Phase 4: deliver a deferred Hermes answer (called from the background thread
     via run_coroutine_threadsafe once Hermes returns). Sends it as a fresh
@@ -1682,7 +1702,10 @@ async def websocket_endpoint(websocket: WebSocket):
 
     async def _broadcast_job(event):
         try:
-            await websocket.send_text(json.dumps(event))
+            # Plain title / label / tone / detail for the Active Tasks card;
+            # the raw fields stay for anything that reads them.
+            import plain_reply
+            await websocket.send_text(json.dumps({**event, **plain_reply.card(event)}))
         except Exception:
             pass
 
@@ -2167,6 +2190,9 @@ async def get_status():
         "jobs_active": __import__("jobs").active(),
         "jobs_recent": __import__("jobs").recent(8),
         "jobs_status_line": __import__("jobs").status_line(),
+        # The same cards the job events carry, so a page that just opened
+        # shows what is running and what ended in the last 15 minutes.
+        "job_cards": _job_cards(),
         # Server-side wake-word fallback health (music-proof). 'healthy': mic live
         # and listening; false just means the fallback is off — the browser's own
         # Web Speech WakeListener still works on its own.

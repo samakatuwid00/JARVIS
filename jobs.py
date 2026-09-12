@@ -33,8 +33,11 @@ _loaded = False
 # queued / waiting-on-confirm jobs never reach a terminal state on their own,
 # so without expiry they pile up in active() forever (real case: 26 stale
 # waiting-on-confirm jobs from a broken confirm latch). Anything in these two
-# states older than the TTL is marked timeout on the next status read.
-STALE_TTL_SECONDS = float(os.getenv("JARVIS_JOB_STALE_TTL", "3600"))
+# states older than the TTL is marked timeout on the next status read. Ten
+# minutes: a confirm is answered right away or not at all, and an hour of
+# "waiting for you to say confirm" for long-forgotten asks was noise in
+# Active Tasks and in "status?" (2026-09-12).
+STALE_TTL_SECONDS = float(os.getenv("JARVIS_JOB_STALE_TTL", "600"))
 _STALE_STATES = ("queued", "waiting-on-confirm")
 
 
