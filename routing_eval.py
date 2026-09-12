@@ -60,6 +60,8 @@ ANSWER_OK = {"math", "greeting", "thanks", "help"}
 FOLDS = 5
 TWIN_SIMILARITY = 0.9
 THRESHOLDS = (0.0, 0.5, 0.6, 0.7, 0.8)
+# The best plain-hybrid minimum from the sweep on 2026-09-12.
+TRUST_MIN_SCORE = 0.7
 
 _OPEN_RE = re.compile(r"^\W*(?:(?:please|jarvis|hey|ok(?:ay)?|now)\b\W*)*"
                       r"(?:open|launch|go\s+to|goto|visit|browse|take\s+me\s+to)\s+(.+)$", re.I | re.S)
@@ -254,6 +256,12 @@ def _groups(vectors):
     return group
 
 
+def fold_ids(gold):
+    """Fold per row; near-duplicates share one."""
+    import semantic_route as sr
+    return [g % FOLDS for g in _groups(sr.embed([r["text"] for r in gold]))]
+
+
 def cross_validate(gold):
     """(row, route, score) per row, each routed with no threshold by a router
     built from the folds it is not in."""
@@ -283,6 +291,32 @@ def semantic_table(cv, keyword):
     return rows
 
 
+def trusted_routes(triples):
+    """Semantic labels worth trusting: those where, over these (row, semantic
+    label, keyword route) triples, the semantic pick was right more often
+    than the keyword route on the same rows."""
+    tally = {}
+    for row, label, kw in triples:
+        sem, key = tally.get(label, (0, 0))
+        tally[label] = (sem + hit(label, row["route"]), key + hit(kw, row["route"]))
+    return {label for label, (sem, key) in tally.items() if sem > key}
+
+
+def trust_eval(cv, keyword, folds, min_score=TRUST_MIN_SCORE):
+    """Hybrid that takes the semantic pick only for labels it earned, with the
+    labels chosen on the other folds - so the score is not graded on the
+    same rows that chose it. Returns (score, labels trusted on all rows)."""
+    def triples(rows):
+        return [(row, label, keyword[row["id"]]) for row, label, s in rows if s >= min_score]
+    preds = []
+    for k in range(FOLDS):
+        trusted = trusted_routes(triples(c for c, f in zip(cv, folds) if f != k))
+        for (row, label, s), f in zip(cv, folds):
+            if f == k:
+                preds.append((row, label if s >= min_score and label in trusted else keyword[row["id"]]))
+    return score(preds), trusted_routes(triples(cv))
+
+
 def report_semantic(gold):
     pool = [r for r in gold if not r.get("unsure")]
     keyword = {r["id"]: keyword_route(r["text"]) for r in pool}
@@ -291,9 +325,14 @@ def report_semantic(gold):
              f"(keyword router on the same set: {base['accuracy']:.1%}, "
              f"questions acted on {len(base['acted_on'])})",
              f"  {'min score':>9}{'takes':>8}{'right there':>13}{'hybrid':>9}{'acted on':>10}"]
-    for t, taken, right, hybrid in semantic_table(cross_validate(pool), keyword):
+    cv = cross_validate(pool)
+    for t, taken, right, hybrid in semantic_table(cv, keyword):
         lines.append(f"  {t:>9.2f}{taken:>8}{(right / taken if taken else 0.0):>13.1%}"
                      f"{hybrid['accuracy']:>9.1%}{len(hybrid['acted_on']):>10}")
+    trust, trusted = trust_eval(cv, keyword, fold_ids(pool))
+    lines.append(f"  per-route trust at min score {TRUST_MIN_SCORE:.2f} (labels chosen on the other folds): "
+                 f"{trust['accuracy']:.1%}, questions acted on {len(trust['acted_on'])}")
+    lines.append(f"  labels trusted on all rows: {', '.join(sorted(trusted)) or 'none'}")
     return "\n".join(lines)
 
 

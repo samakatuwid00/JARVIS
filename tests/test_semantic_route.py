@@ -82,6 +82,24 @@ def test_cross_validation_and_the_hybrid_table(monkeypatch):
     assert table[-1][3]["hits"] <= hybrid["hits"]      # a higher minimum hands more to keywords
 
 
+def test_a_label_is_trusted_only_where_it_beat_keywords():
+    rows = [{"route": "recall_memory"}, {"route": "recall_memory"}, {"route": "close_app"},
+            {"route": "close_app"}]
+    triples = [(rows[0], "recall_memory", "chat"), (rows[1], "recall_memory", "chat"),
+               (rows[2], "close_app", "close_app"), (rows[3], "chat", "close_app")]
+    assert re_.trusted_routes(triples) == {"recall_memory"}   # close_app only tied keywords
+
+
+def test_trust_eval_picks_labels_on_other_folds():
+    rows = [{"id": str(i), "route": "recall_memory" if i % 2 else "close_app"} for i in range(10)]
+    cv = [(r, r["route"], 0.9) for r in rows]                   # semantic always right
+    keyword = {r["id"]: "close_app" for r in rows}              # keywords right on half
+    folds = [i % re_.FOLDS for i in range(10)]
+    s, trusted = re_.trust_eval(cv, keyword, folds, min_score=0.7)
+    assert trusted == {"recall_memory"}
+    assert s["hits"] == 10
+
+
 def test_a_turn_logs_the_semantic_pick(monkeypatch, tmp_path):
     import intent_router as ir
     monkeypatch.setattr(ir, "SHADOW_LOG", str(tmp_path / "shadow.jsonl"))
