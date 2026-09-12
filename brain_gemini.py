@@ -1235,15 +1235,17 @@ TOOL_DECLARATIONS = [
         }, "required": ["topic"]}),
 
     _make_tool("delegate",
-        "Unified delegation — the ONE primitive for routing tasks. Auto-detects the "
-        "best backend (music / desktop / web / chatgpt / manus run instantly via local "
-        "tools; everything else goes to hermes, the full agent with the machine toolkit). "
-        "The hermes path includes a confirm gate for destructive tasks and optional memory "
-        "grounding (profile, session context, vault citation). Use this INSTEAD of any "
-        "other delegate_* tool for all new tool calls.",
+        "Hand a task to the right helper. When the user names one, use it: backend "
+        "'claude' for Claude Code (coding, files, fixing this app), 'gemini' for Gemini "
+        "CLI, 'opencode' for OpenCode, 'hermes' for Hermes, the general agent with the "
+        "machine toolkit. Otherwise leave backend empty and it is picked from the task "
+        "(music / desktop / web / chatgpt / manus run instantly; the rest goes to hermes). "
+        "Helpers that change files ask the user to confirm first. Not for questions or "
+        "single words like 'test': answer those yourself. Use this INSTEAD of any other "
+        "delegate_* tool.",
         {"type": "object", "properties": {
             "task": {"type": "STRING", "description": "The self-contained task to perform"},
-            "backend": {"type": "STRING", "description": "Force backend: hermes, music, desktop, web, chatgpt, manus (or omit/empty for auto-detect)"},
+            "backend": {"type": "STRING", "description": "claude (Claude Code), gemini, opencode, hermes, music, desktop, web, chatgpt, manus - or omit to pick from the task"},
             "confirm": {"type": "BOOLEAN", "description": "Set true ONLY to run a previously-confirmed destructive task"},
             "grounded": {"type": "BOOLEAN", "description": "Inject Cygnus memory context (default true). Set false for raw Hermes."},
             "timeout": {"type": "INTEGER", "description": "Max seconds to wait (15-600, default 300)"},
@@ -1255,7 +1257,8 @@ TOOL_DECLARATIONS = [
         "plans, executes, verifies each step and reports evidence. Use for goals like "
         "'organize my downloads folder', 'build a landing page', 'research X and write "
         "it up'. Returns immediately with an acknowledgment; progress is spoken as it "
-        "lands. NOT for single quick actions.",
+        "lands. NOT for single quick actions, and not when the user names a helper "
+        "(Claude, Gemini, OpenCode): use delegate with that backend.",
         {"type": "object", "properties": {
             "goal": {"type": "STRING", "description": "The complete self-contained goal"},
             "timeout": {"type": "INTEGER", "description": "Max seconds for the whole goal (default 1800)"}

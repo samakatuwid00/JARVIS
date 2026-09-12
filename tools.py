@@ -2325,6 +2325,8 @@ def delegate_to_hermes(task: str, timeout: int = 300, max_turns: int = 15,
     # Gate the user's real intent, never the injected context.
     gate_target = raw_task if raw_task is not None else task
     gate_target = str(gate_target or "").strip()
+    if _is_not_a_task(gate_target):
+        return _not_a_task_reply(gate_target)
 
     try:
         timeout = max(15, min(int(timeout), 600))
@@ -2467,9 +2469,17 @@ def confirm_pending(on_done=None, progress_cb=None, background: bool | None = No
     Returns None when nothing is pending — caller falls through to normal
     routing.
     """
+    global _PENDING_HERMES_CALL
     kw = _PENDING_HERMES_CALL
     if not kw:
         return None
+    if kw.get("cli"):                    # a CLI agent waited: its own card runs on
+        _PENDING_HERMES_CALL = None
+        _PENDING_DESTRUCTIVE["task"] = None
+        _audit_log(f"delegate:{kw['cli']}", (kw.get("raw_task") or "")[:200], "confirmed",
+                   confirm=True, extra={"jid": kw.get("jid")})
+        return _start_cli_job(kw["task"], kw["cli"], raw_task=kw.get("raw_task"),
+                              on_done=on_done or kw.get("on_done"), jid=kw.get("jid"))
     superseded_jid = kw.get("jid")
     kw = {k: v for k, v in kw.items() if k not in ("jid", "ts")}
     if on_done is not None:
@@ -2782,12 +2792,20 @@ def _explicit_cli_agent(task: str):
     user explicitly names the CLI — auto-detection NEVER sends work here
     (Hermes stays the default executor).
     """
-    m = re.search(r"\b(?:using|via|with|through)\s+(?:the\s+)?"
-                  r"(gemini(?:\s*cli)?|chatgpt(?:\s*cli)?|codex|claude(?:\s*code)?)\b",
-                  task, re.I)
+    # "using/via claude", and the ways people hand work over: "delegate this to
+    # Claude", "hand it off to Claude", "have Claude Code fix ...". "ask Claude"
+    # is left to ask_ai (it may mean the website), and "I have claude
+    # installed" does not count: "have X" needs a verb after it.
+    m = re.search(
+        r"\b(?:(?:using|via|with|through|delegate\s+(?:(?:this|it|that)\s+)?to|"
+        r"hand\s+(?:(?:this|it|that)\s+)?(?:off\s+)?to|give\s+(?:this|it|that)\s+to)\s+(?:the\s+)?"
+        r"(?P<a>gemini(?:\s*cli)?|chatgpt(?:\s*cli)?|codex|claude(?:\s*code)?)\b"
+        r"|(?:have|let|get)\s+(?P<b>claude(?:\s*code)?|gemini(?:\s*cli)?|codex)\s+(?:to\s+)?"
+        r"(?=(?:do|build|make|create|fix|write|code|handle|look|check|review|update|add|change|"
+        r"set|work)\b))", task, re.I)
     if not m:
         return False, None, task
-    spoken = re.sub(r"\s+", " ", m.group(1).lower().strip())
+    spoken = re.sub(r"\s+", " ", (m.group("a") or m.group("b")).lower().strip())
     reg = _cli_registry()
     for key in reg:
         if spoken == key or spoken == f"{key} cli" or \
@@ -2832,6 +2850,120 @@ def _run_cli_agent(task: str, name: str, timeout: int = 300) -> str:
         # npm .cmd shims often print usage noise; surface the real error only.
         return f"[cli:{name}] failed ({proc.returncode}): {err[:300] or 'no output'}"
     return out.strip() or "(empty response)"
+
+
+# A named CLI agent (Claude Code, Gemini CLI) runs as a background job, like
+# Hermes: the turn answers at once, the Active Tasks card follows the work,
+# and the result is announced. It used to run inside the voice turn for
+# minutes, logged as a job only after it ended, and "delegate this to Claude"
+# never reached it at all: on 2026-09-12 it went to Hermes.
+CLI_JOB_TIMEOUT = int(os.getenv("JARVIS_CLI_JOB_TIMEOUT", "900"))
+_REPO_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Words that are not a task: "test" became a Hermes job waiting for confirm.
+_NOT_A_TASK_RE = re.compile(
+    r"(?:test(?:ing)?|hi|hello|hey|yo|ok(?:ay)?|yes|yeah|yep|no|nope|sure|thanks?|"
+    r"thank\s+you|hmm+|huh|what|nothing|never\s*mind|cygnus|jarvis)[\s.!?,]*", re.I)
+
+
+def _is_not_a_task(task: str) -> bool:
+    t = (task or "").strip()
+    return bool(_NOT_A_TASK_RE.fullmatch(strip_fillers(t).strip() or t))
+
+
+def _not_a_task_reply(task: str) -> str:
+    return f"“{(task or '').strip()}” isn't something I can run as a task. What would you like me to do?"
+
+
+def _cli_label(name: str) -> str:
+    return (_cli_registry().get(name) or {}).get("label") or name
+
+
+def _cli_command(task: str, name: str) -> list | None:
+    """The command line for CLI agent `name`, or None when it isn't installed."""
+    spec = _cli_registry().get(name) or {}
+    exe = shutil.which(spec.get("bin", ""))
+    if not exe:
+        return None
+    args = [os.path.expanduser(a) for a in spec.get("args") or []]
+    flag = [spec["prompt_flag"]] if spec.get("prompt_flag") else []
+    return [exe] + args + flag + [task]
+
+
+def _start_cli_job(task: str, name: str, raw_task: str = None, on_done=None,
+                   jid: str = None, timeout: int = CLI_JOB_TIMEOUT) -> str:
+    """Run `task` through CLI agent `name` in the background; returns the ack.
+    `jid`: the job that waited for the confirm, so the same card carries on."""
+    import jobs as jobreg
+    label = _cli_label(name)
+    try:
+        import context_assembler as ca
+        prompt = ca.assemble_brief(task, delegate=name) + task
+    except Exception:
+        prompt = task
+    cmd = _cli_command(prompt, name)
+    if cmd is None:
+        if jid:
+            jobreg.update(jid, state="error", error=f"{label} is not installed")
+        return f"[Error] {label} is not installed on this computer, so I can't hand it this."
+    jid = jid or jobreg.create((raw_task or task)[:200], tier="cli", agent=label, background=True)
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                encoding="utf-8", errors="replace", cwd=_REPO_DIR)
+    except Exception as e:
+        jobreg.update(jid, state="error", error=f"could not start {label}: {e}"[:300])
+        return f"[Error] I couldn't start {label}: {e}"
+    jobreg.update(jid, state="running", note=f"handed to {label}")
+    _audit_log(f"delegate:{name}", (raw_task or task)[:200], "started", extra={"jid": jid})
+
+    def _watch():
+        try:
+            out, err = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            result = f"[Error] {label} did not finish within {timeout}s."
+            jobreg.update(jid, state="error", error=result, summary=result)
+        else:
+            out = (out or "").strip()
+            if proc.returncode != 0 and not out:
+                result = f"[Error] {label} stopped: {(err or '').strip()[:300] or 'no output'}"
+                jobreg.update(jid, state="error", error=result[:500], summary=result[:200])
+            else:
+                result = out or f"{label} finished and had nothing to add."
+                jobreg.update(jid, state="done", result=result[-6000:], summary=result[:200])
+        if on_done:
+            try:
+                on_done(result)
+            except Exception as e:
+                print(f"[CLI] on_done raised: {e}", flush=True)
+
+    threading.Thread(target=_watch, daemon=True, name=f"cli-{name}-{jid}").start()
+    return f"⟳ HERMES_BACKGROUND: On it, sir. {label} is working on it now. (job {jid})"
+
+
+def _cli_delegate(task: str, name: str, raw_task: str = None, confirm: bool = False,
+                  on_done=None) -> str:
+    """Hand `task` to CLI agent `name`: at once when it only looks, after the
+    user's confirm when it may change files. The confirm uses the Hermes latch,
+    so "confirm" / "no" and the brain's confirm handling work unchanged."""
+    global _PENDING_HERMES_CALL
+    import jobs as jobreg
+    raw = (raw_task or task).strip()
+    if _is_not_a_task(task):
+        return _not_a_task_reply(raw)
+    if confirm or _is_safe_task(raw):
+        return _start_cli_job(task, name, raw_task=raw, on_done=on_done)
+    label = _cli_label(name)
+    jid = jobreg.create(raw[:200], tier="cli", agent=label, background=True)
+    _PENDING_DESTRUCTIVE["task"] = task
+    _PENDING_HERMES_CALL = dict(cli=name, task=task, raw_task=raw, on_done=on_done,
+                                jid=jid, ts=time.time())
+    jobreg.update(jid, state="waiting-on-confirm", note="needs confirm — say 'confirm' to run",
+                  summary=f"Waiting for confirm: {raw[:120]}")
+    _audit_log(f"delegate:{name}", raw[:200], "NEEDS_CONFIRM", extra={"jid": jid})
+    return (f"[NEEDS_CONFIRM:{jid}] {label} may change files for this, so I'm asking first. "
+            f"Say 'confirm' and I'll run it through {label}: \"{raw}\" (job {jid})")
 
 
 def _run_specialist(task: str, agent: str | None = None, timeout: int = 300) -> str:
@@ -3131,6 +3263,13 @@ def run_autonomous(goal: str, timeout: int = 1800) -> str:
     goal = str(goal or "").strip()
     if not goal:
         return "[Error] No goal given for autonomous run."
+    if _is_not_a_task(goal):
+        return _not_a_task_reply(goal)
+    # A goal that names a helper ("delegate this to Claude") goes to it, not to
+    # Hermes' autonomous runner, which the model picked for it on 2026-09-12.
+    forced, name, cleaned = _explicit_cli_agent(goal)
+    if forced:
+        return _cli_delegate(cleaned, name, raw_task=goal)
     # Phase 1: autonomous goals that mutate state need confirm (allowlist flip)
     if not _is_safe_task(goal):
         if not _PENDING_DESTRUCTIVE.get("autonomous") or _PENDING_DESTRUCTIVE["autonomous"] != goal:
@@ -3513,6 +3652,8 @@ def delegate(
     # Local routing reads the request without "now / okay / jarvis" lead-ins;
     # logs and non-local backends keep the spoken text.
     _rtask = strip_fillers(task)
+    if _is_not_a_task(task):
+        return _not_a_task_reply(task)
 
     # ---- Apps-panel action rules win over the generic search/open paths ----
     _rule_out = try_rule_action(_rtask)
@@ -3655,10 +3796,9 @@ def delegate(
     # failures are reported VERBATIM — no silent Hermes fallback.
     cli_forced, cli_name, cli_task = _explicit_cli_agent(task)
     if cli_forced:
-        result = _run_cli_agent(cli_task, cli_name, timeout=timeout)
         if cw is not None:
-            cw.append(task, "command", tool=f"cli:{cli_name}", result=result[:200])
-        return result
+            cw.append(task, "command", tool=f"cli:{cli_name}")
+        return _cli_delegate(cli_task, cli_name, raw_task=task, confirm=confirm, on_done=on_done)
 
     # ---- Explicit harness invocation (user names the tool) ----------------
     # "create a website using opencode", "via project-runner", ...
@@ -3681,6 +3821,10 @@ def delegate(
         result = _run_specialist(cleaned, forced_agent, timeout=timeout)
         return result
 
+    if backend:                          # the model may say "Claude Code" or "Gemini CLI"
+        backend = str(backend).strip().lower()
+        backend = {"claude code": "claude", "claude-code": "claude",
+                   "gemini cli": "gemini", "gemini-cli": "gemini"}.get(backend, backend) or None
     if backend is None:
         backend = _detect_backend(task)
 
@@ -3694,20 +3838,10 @@ def delegate(
             return result
         backend = "hermes"      # the local handler declined: not its kind of task
 
-    # Phase 5: CLI delegates (gemini/claude/codex) — explicit or via registry handles
-    if backend in ("gemini", "claude", "codex"):
-        result = _run_cli_agent(task, backend, timeout=timeout)
-        # CLI delegates also tracked in jobs for proactive reporting
-        try:
-            import jobs as _jr
-            jid = _jr.create(task[:200], tier="cli", agent=backend, background=False)
-            if result.startswith("[cli:") and "failed" in result.lower():
-                _jr.update(jid, state="error", error=result[:300], summary=result[:120])
-            else:
-                _jr.update(jid, state="done", result=result[-4000:], summary=result.splitlines()[-1][:200] if result else "done")
-        except Exception:
-            pass
-        return result
+    # Phase 5: CLI delegates (claude / gemini / codex), named by the model as
+    # the backend: background job, confirm first when files may change.
+    if backend in _cli_registry():
+        return _cli_delegate(task, backend, raw_task=task, confirm=confirm, on_done=on_done)
 
     # Specialist tier: opencode or hermes floor with domain match
     if backend == "opencode":
@@ -5009,19 +5143,21 @@ TOOLS = [
     {
         "name": "delegate",
         "description": (
-            "Unified delegation — the ONE primitive for routing tasks. Auto-detects "
-            "the best backend (music / desktop / web / chatgpt / manus run instantly "
-            "via local tools; everything else goes to hermes, the full agent with the "
-            "machine toolkit). Hermes path includes a confirm gate for destructive "
-            "tasks and optional memory grounding (profile, session context, vault "
-            "citation). Use this INSTEAD of delegate_to_hermes / "
-            "delegate_to_hermes_grounded for all new tool calls."
+            "Hand a task to the right helper. When the user names one, use it: "
+            "backend 'claude' for Claude Code (coding, files, fixing this app), "
+            "'gemini' for Gemini CLI, 'opencode' for OpenCode, 'hermes' for Hermes, "
+            "the general agent. Otherwise leave backend empty and it is picked from "
+            "the task (music / desktop / web / chatgpt / manus run instantly; the "
+            "rest goes to hermes). Helpers that change files ask the user to "
+            "confirm first. Not for questions or single words like 'test': answer "
+            "those yourself. Use this INSTEAD of delegate_to_hermes / "
+            "delegate_to_hermes_grounded."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "task": {"type": "string", "description": "The self-contained task to perform"},
-                "backend": {"type": "string", "description": "Force backend: hermes, music, desktop, web, chatgpt, manus (or null for auto-detect)"},
+                "backend": {"type": "string", "description": "claude (Claude Code), gemini, opencode, hermes, music, desktop, web, chatgpt, manus - or null to pick from the task"},
                 "confirm": {"type": "boolean", "description": "Set true ONLY to run a previously-confirmed destructive task"},
                 "grounded": {"type": "boolean", "description": "Inject Cygnus memory context (default true). Set false for raw Hermes."},
                 "timeout": {"type": "integer", "description": "Max seconds (15-600, default 300)"},

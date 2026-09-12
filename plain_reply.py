@@ -20,8 +20,9 @@ import time
 
 _JOB_ID = re.compile(r"\s*\((?:job|jid)\s+[0-9a-f]{6,}\)|\bjob\s+[0-9a-f]{8}\b", re.I)
 _BACKGROUND_MARK = re.compile(r"⟳\s*[A-Z_]+_BACKGROUND:\s*")
-_CONFIRM = re.compile(r'^\[NEEDS_CONFIRM(?::[0-9a-f]+)?\][^"“]*["“](?P<task>.+?)["”]'
+_CONFIRM = re.compile(r'^\[NEEDS_CONFIRM(?::[0-9a-f]+)?\](?P<pre>[^"“]*)["“](?P<task>.+?)["”]'
                       r'(?:\s*\(job\s+[0-9a-f]+\))?\s*$', re.S)
+_THROUGH = re.compile(r"through\s+(?P<agent>[^:]+?):\s*$", re.I)
 _REISSUE = "[NEEDS_CONFIRM] Please re-issue"
 _SAY_CONFIRM = re.compile(r"^NEEDS_CONFIRM(?:\s*\[[^\]]*\])?:\s*I will(?:\s+run)?:?\s*")
 # Lines that are the agent's own chatter, not an answer.
@@ -72,7 +73,11 @@ def for_user(text):
         return "I lost track of which task you meant. Please say the task again, then say confirm."
     m = _CONFIRM.match(t)
     if m:
-        return (f"Before I start, please confirm: {_sentence(short_task(m['task'], 16))} "
+        via = _THROUGH.search(m["pre"])
+        agent = via["agent"].strip() if via else ""
+        lead = (f"Before I hand this to {agent}, please confirm:" if agent and agent.lower() != "hermes"
+                else "Before I start, please confirm:")
+        return (f"{lead} {_sentence(short_task(m['task'], 16))} "
                 "Say confirm to go ahead, or no to cancel.")
     t = _SAY_CONFIRM.sub("Before I do this, please confirm. I will ", t)
     t = re.sub(r"^\[NEEDS_PICK\]\s*", "", t)
@@ -190,6 +195,8 @@ def _detail(note: str) -> str:
         return step[0].upper() + step[1:]
     if "look-only job ran" in (note or ""):
         return note
+    if (note or "").startswith("handed to "):
+        return "H" + note[1:]
     return "Started"
 
 
@@ -225,6 +232,8 @@ def card(job: dict) -> dict:
             return {**out, "label": "Not confirmed", "tone": "muted",
                     "detail": "Nobody confirmed it, so it never started."}
         return {**out, "label": "Ran out of time", "tone": "bad", "detail": "It took too long and was stopped."}
+    if state == "cancelled":
+        return {**out, "label": "Cancelled", "tone": "muted", "detail": "You said no, so it never started."}
     return {**out, "label": str(state or "").capitalize(), "tone": "run", "detail": ""}
 
 

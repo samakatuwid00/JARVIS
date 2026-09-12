@@ -1,5 +1,5 @@
 {
-  "_comment": "External CLI agent tiers (Phase 16.5). Spoken name -> launch spec. Binaries are resolved via PATH at CALL TIME (shutil.which) — installing or removing a CLI needs zero code changes. prompt_flag: flag that introduces the prompt ('-p' for claude); null = positional argument. Add an entry here and 'using X' / 'via X' routes to it.",
+  "_comment": "External CLI agent tiers (Phase 16.5). Spoken name -> launch spec. Binaries are resolved via PATH at CALL TIME (shutil.which) — installing or removing a CLI needs zero code changes. prompt_flag: flag that introduces the prompt ('-p' for claude); null = positional argument. args: extra arguments before the prompt ('~' is expanded). Claude Code runs only after the user said confirm (tools._cli_delegate), so it may edit without asking again, in Cygnus's folder (its working directory) and the user's own folders. Add an entry here and 'using X' / 'via X' / 'have X do ...' routes to it.",
   "gemini": {
     "bin": "gemini",
     "label": "Gemini CLI",
@@ -18,6 +18,7 @@
   "claude": {
     "bin": "claude",
     "label": "Claude Code",
-    "prompt_flag": "-p"
+    "prompt_flag": "-p",
+    "args": ["--permission-mode", "acceptEdits", "--add-dir", "~/Documents", "~/Desktop", "~/Downloads"]
   }
 }
