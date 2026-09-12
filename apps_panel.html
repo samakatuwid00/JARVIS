@@ -432,6 +432,11 @@
     .controls { flex-wrap: wrap; }
     .search { flex-basis: 100%; }
     .acts .btn { display: none; }
+    /* View tabs stay on one line and scroll sideways instead of wrapping
+       ("Shadow review" was cut off at phone width). */
+    .tabs { gap: 16px; overflow-x: auto; scrollbar-width: none; }
+    .tabs::-webkit-scrollbar { display: none; }
+    .tab { flex: 0 0 auto; white-space: nowrap; }
   }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }

@@ -142,6 +142,18 @@ Tablet and desktop keep the artifact as today.
    step 3. Docked drawer on wide tablets skipped: the overlay sheet
    already works at 1024px.
 5. **Apps modal** — full screen on phones, tab row scroll.
+   *Done 2026-09-12.* Under 700px the Apps window fills the screen; on
+   touch screens its frame takes the space under the 44px close button
+   instead of assuming a 54px head. In `apps_panel.html` the view tabs stay
+   on one line and scroll sideways below 640px. Same commit fixes a step 3
+   regression: the Panels button pushed the phone topbar to three rows
+   (83 to 114px); Panels and Apps are now 44px icon-only buttons on phones
+   (inline SVG, no CDN), with the task badge on the Panels icon. Topbar
+   back to 83px. Checked at 360x780 and 400x860; all sizes above 700px
+   identical to step 4.
+
+All five steps done. Still to do on the real phone: keyboard open with
+the input focused, drawer, Apps window, a full voice turn.
 
 Each step is its own commit, testable in Chrome devtools device mode.
 
