@@ -108,6 +108,15 @@ Tablet and desktop keep the artifact as today.
    clipping. TALK still covers the input at 768px and in landscape (step 4).
 2. **Phone portrait** — full-height column, flexible transcript, bottom dock,
    44px targets, placeholder, background option (decision).
+   *Done 2026-09-12.* Under 700px: `#hud` hidden (soft orb gradient on
+   `#stage` instead), topbar on two rows (brand, dot, Online, Apps / status),
+   transcript fills down to the TALK dock. Touch screens: 44px controls,
+   16px input. Viewport meta adds `interactive-widget=resizes-content`
+   (Android keyboard shrinks the layout, so the input stays visible) and
+   `viewport-fit=cover`. Phone placeholder "TYPE TO JARVIS…". Probe at
+   360/400: transcript 569/649px tall (was 140), TALK clear of the input,
+   no target under 44px. 1280+ identical; non-touch 1024 identical to
+   step 1. Keyboard behaviour still needs the real phone.
 3. **Panel drawer** — markup for the sheet + Panels button + task badge;
    move the side sections into it under 1100px.
 4. **Tablet + landscape** — two-region layout, docked drawer on wide
