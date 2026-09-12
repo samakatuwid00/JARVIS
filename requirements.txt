@@ -7,9 +7,14 @@ soundfile>=0.12.1
 numpy>=1.24.0
 faster-whisper>=0.10.0
 edge-tts>=6.1.0
+# Resampling clips whose rate differs from Whisper's (voice_engine)
+scipy>=1.18.1
 
-# AI Brain - Google Gemini (FREE tier)
-google-generativeai>=0.8.0
+# AI Brain - Google Gemini (brain_gemini imports the google-genai SDK)
+google-genai>=2.10.0
+# The router, Groq and Cerebras backends speak the OpenAI API; the router
+# leads every turn, so this is required even though it is imported lazily.
+openai>=2.53.0
 
 # Browser automation (ask_chatgpt)
 playwright>=1.40.0
@@ -26,3 +31,14 @@ pywinauto>=0.6.9; sys_platform == "win32"
 # Utilities
 python-dotenv>=1.0.0
 rich>=13.0.0
+
+# Optional features, imported lazily and skipped when missing. Install only
+# what you use:
+#   kokoro-onnx            JARVIS_TTS_ENGINE=kokoro (models/kokoro)
+#   piper-tts              JARVIS_TTS_ENGINE=piper
+#   sentence-transformers  semantic memory search (pulls in PyTorch)
+#   pycaw                  lowering other apps' volume while JARVIS speaks
+#   python-docx            Word reports (report_agent)
+#   Pillow                 window screenshots (desktop_driver)
+#   pyautogui              one keyboard fallback in tools
+# turbovec and honcho are local experiments, not needed to run JARVIS.

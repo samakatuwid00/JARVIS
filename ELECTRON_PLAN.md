@@ -135,14 +135,27 @@ Machine: Node 26.3 and npm 11.19 installed; Python 3.14.6 (default),
 
 ## Phase 0 — Environment
 
-- [ ] Create `.venv` on Python 3.14 (`py -3.14 -m venv .venv`) and install
+- [x] Create `.venv` on Python 3.14 (`py -3.14 -m venv .venv`) and install
       `requirements.txt`. JARVIS already runs on the global 3.14.6
       (faster-whisper loads, 246 tests pass), so the version is proven; the
       venv is for isolation, so the app's packages cannot be broken by other
       projects' `pip install`s.
-- [ ] Run `pytest` and `jarvis_web.py` from the venv. Anything the global
+- [x] Run `pytest` and `jarvis_web.py` from the venv. Anything the global
       install had but `requirements.txt` misses shows up here (fastapi and
       uvicorn were the first two).
+
+*Done 2026-09-12.* An import scan of every backend module against
+`requirements.txt` found three more required packages the global install
+had been hiding: `openai` (the router brain, imported lazily, so a clean
+install would start and then fail on the first command), `google-genai`
+(brain_gemini uses the new SDK; the listed `google-generativeai` was not
+imported anywhere and was removed) and `scipy` (clip resampling). Optional
+features (kokoro-onnx, piper-tts, sentence-transformers, pycaw,
+python-docx, Pillow, pyautogui) are listed as comments. In the clean venv:
+all 16 runtime imports load, 246 tests pass, the backend listens on a
+spare port after 9 s, and a turn routed to the language model answers in
+5.2 s with telemetry `backend: router`. To run the daily JARVIS from the
+venv: `.venv\Scripts\python jarvis_web.py`.
 
 Done when: `.venv\Scripts\python jarvis_web.py` serves the HUD on 8001 and
 the test suite passes inside the venv.
@@ -229,7 +242,8 @@ hard-coded `C:\Users\deped` paths (8 in `tools.py`, 3 in
 
 ## Open questions
 
-- Is `requirements.txt` complete? A clean venv will tell (phase 0).
+- ~~Is `requirements.txt` complete?~~ Answered in phase 0: it was missing
+  `openai`, `google-genai` and `scipy`; fixed.
 - Whisper wake word accuracy and CPU as the only wake path (phase 1).
 - Does Electron remember the mic permission across launches with the
   permission handler, or prompt each time?
