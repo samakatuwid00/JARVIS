@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>JARVIS HUD — Voice</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#05070c">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&family=Rajdhani:wght@600;700&display=swap" rel="stylesheet">
@@ -447,6 +449,32 @@
   #jv-col-left, #jv-col-right { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
   #jv-col-left > .jv-sec, #jv-col-right > .jv-sec, #jv-col-left > #jv-left { flex: 1 1 auto; }
   #jv-center { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+
+  /* Tap-to-talk. Android Chrome's Web Speech cannot share the mic with the
+     page's own getUserMedia stream, so the phone has no wake word: this
+     button opens the same command capture the wake word would. */
+  #jv-talk { display: none; position: fixed; left: 50%; bottom: max(22px, env(safe-area-inset-bottom));
+      transform: translateX(-50%); z-index: 60; width: 84px; height: 84px; border-radius: 50%;
+      border: 2px solid var(--holo); background: color-mix(in srgb, var(--holo) 14%, #05070c);
+      color: var(--holo); font: 700 11px/1.2 var(--font-display); letter-spacing: .18em;
+      text-transform: uppercase; box-shadow: 0 0 28px color-mix(in srgb, var(--holo) 35%, transparent);
+      -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+  #jv-talk.show { display: block; }
+  #jv-talk.live { background: #9dff8a; border-color: #9dff8a; color: #0b1a0d;
+      box-shadow: 0 0 34px #9dff8a; animation: jvPulse .9s infinite; }
+  #jv-talk:active { transform: translateX(-50%) scale(.95); }
+
+  /* Phone: one column, side panels off, room for the talk button. */
+  @media (max-width: 700px) {
+    #jv-shell { grid-template-columns: minmax(0, 1fr); gap: 10px; margin-top: 8px;
+        min-height: calc(100vh - 8px); }
+    #jv-col-left, #jv-col-right { display: none; }
+    #jv-topbar { flex-wrap: wrap; gap: 6px 10px; }
+    #jv-pill-brain, #jv-pill-voice, #jv-pill-fb, #jv-level { display: none; }
+    #jv-status { font-size: 11px; letter-spacing: .14em; }
+    #jv-center { margin-bottom: 118px; }
+    #jv-feed { min-height: 140px; }
+  }
   #jv-center .jv-spacer { flex: 0 0 auto; height: 15vh; min-height: 100px; max-height: 200px; }
 
   /* Panels live inside columns now: static flow, always shown. */
@@ -655,6 +683,8 @@
     </aside>
   </div>
 
+  <button id="jv-talk" type="button" aria-label="Tap to talk">Talk</button>
+
   <div id="jv-apps-modal">
     <div id="jv-apps-card">
       <div id="jv-apps-head">
@@ -734,6 +764,11 @@
   var chatWrap = document.getElementById('jv-input-wrap');
   var rootStyle = document.documentElement.style;
   var PLACEHOLDER = 'SPEAK TO J.A.R.V.I.S. - TYPE, THEN PRESS ENTER';
+  // Phones get tap-to-talk instead of the always-on wake listener (see #jv-talk).
+  var IS_MOBILE = /Android|iPhone|iPad/i.test(navigator.userAgent) ||
+                  (window.matchMedia && matchMedia('(pointer: coarse) and (max-width: 900px)').matches);
+  var talkBtn = document.getElementById('jv-talk');
+  if (IS_MOBILE && talkBtn) talkBtn.classList.add('show');
 
   // ---------------------------------------------------------------- hud link
   // The HUD artifact re-sets `--spd` on ITS OWN documentElement on every render,
@@ -1388,6 +1423,7 @@
     // exactly as the browser WakeListener would, guarded by a short lock so the two
     // engines can't both open a capture for one "jarvis".
     if (m.type === 'wake') {
+      if (IS_MOBILE) return;   // the PC's room said "jarvis", not this phone
       var src = (m.source === 'server') ? 'SERVER' : 'BROWSER';
       console.log('[wake] ' + src + ' engine detected wake word');
       var now = Date.now();
@@ -1881,6 +1917,9 @@
   }
 
   function startWakeListener() {
+    // Android Chrome: SpeechRecognition never starts while getUserMedia holds
+    // the mic (no error, no beep, no results). The talk button is the wake.
+    if (IS_MOBILE) return;
     var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) {
       notice('WAKE-WORD UNAVAILABLE — use Enable Mic + type, or Chrome');
@@ -2035,7 +2074,8 @@
       return;
     }
     mode = 'idle';
-    setState('idle', 'LISTENING FOR “JARVIS”');
+    setState('idle', IS_MOBILE ? 'TAP TALK, THEN SPEAK' : 'LISTENING FOR “JARVIS”');
+    if (talkBtn) talkBtn.classList.remove('live');
     // A live mic means a voice session is active — surface the End button so
     // the user can always stop it without relying on a spoken close word.
     if (endBtn) endBtn.classList.add('show');
@@ -2106,6 +2146,7 @@
     var data = b64(encodeWav(resample(flat, srcRate, TARGET_RATE)));
 
     mode = 'busy'; busySince = Date.now();
+    if (talkBtn) talkBtn.classList.remove('live');
     setState('transcribing', 'TRANSCRIBING…');
     // The browser's own live transcript rides along: the server compares it
     // with Whisper's and keeps the better one (Whisper alone misheard
@@ -2275,6 +2316,22 @@
     };
   }
   retryBtn.onclick = function () { retryBtn.classList.remove('show'); mode = 'boot'; startMic(); };
+
+  // Tap-to-talk: one tap opens the command window (as a wake word would), a
+  // second tap while it is open ends the clip early instead of waiting for
+  // the silence timeout. The tap is also the user gesture that unlocks audio.
+  if (talkBtn) talkBtn.onclick = async function () {
+    if (ctx && ctx.state !== 'running') { try { await ctx.resume(); } catch (e) {} }
+    if (ampCtx && ampCtx.state !== 'running') { try { await ampCtx.resume(); } catch (e) {} }
+    audioUnlocked = true; unlockBtn.classList.remove('show');
+    if (!micOk || mode === 'nomic' || mode === 'off') { mode = 'boot'; startMic(); return; }
+    if (mode === 'command') { endCapture(); return; }
+    if (mode !== 'idle') return;                 // busy / speaking / booting
+    sessionClosePending = false;
+    talkBtn.classList.add('live');
+    var wait = playTick(880, TICK_MS, 0.18);
+    setTimeout(function () { beginCapture('command', false); }, wait);
+  };
 
   // ---------------------------------------------------------------- apps modal
   var appsData = null, appCat = 'all';

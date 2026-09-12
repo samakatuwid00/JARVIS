@@ -44,14 +44,40 @@ from config import (GEMINI_MODEL, ROUTER_BASE_URL, ROUTER_MODEL, WHISPER_MODEL,
 app = FastAPI(title="JARVIS Voice Interface")
 
 
+# Browser origins allowed besides JARVIS's own (the phone's Tailscale https
+# name). Comma-separated in .env.
+_ALLOWED_ORIGINS = frozenset(
+    o.strip().rstrip("/") for o in os.environ.get("JARVIS_ALLOWED_ORIGINS", "").split(",")
+    if o.strip())
+
+
+def _hostname(host_header: str) -> str:
+    """A Host header without its port; IPv6 keeps its brackets."""
+    host = host_header.strip().lower()
+    if host.startswith("["):
+        return host.split("]", 1)[0] + "]"
+    return host.split(":", 1)[0]
+
+
+# Names this server answers to. A DNS-rebinding page (evil.example pointed at
+# 127.0.0.1) arrives with its own name in Host, and its Origin matches that
+# Host, so the origin checks alone would let it in.
+_ALLOWED_HOSTS = frozenset({"127.0.0.1", "localhost", "[::1]"} |
+                           {_hostname(o.split("://", 1)[-1]) for o in _ALLOWED_ORIGINS})
+
+
 @app.middleware("http")
 async def _guard_apps_writes(request: Request, call_next):
-    """Apps-panel writes (rules, toggles, re-checks) come only from JARVIS's
-    own pages. The server binds 0.0.0.0 with no login and the handlers parse
-    the body as JSON whatever its type, so without this any web page the user
-    visits could post a rule (a text/plain POST skips the CORS preflight)."""
+    """Every request must name an allowed host. Apps-panel writes (rules,
+    toggles, re-checks) come only from JARVIS's own pages: the server has no
+    login and the handlers parse the body as JSON whatever its type, so
+    without this any web page the user visits could post a rule (a
+    text/plain POST skips the CORS preflight)."""
+    if _hostname(request.headers.get("host", "")) not in _ALLOWED_HOSTS:
+        return JSONResponse({"error": "unknown host"}, status_code=400)
     # What you said (shadow review) and your learned defaults stay on this
-    # computer: the server listens on the network, these pages don't.
+    # computer. Requests proxied by tailscale serve also come from 127.0.0.1,
+    # so the phone passes this check; it is your own device.
     if request.url.path.startswith(("/shadow", "/prefs")) and \
             (request.client.host if request.client else "") not in ("127.0.0.1", "::1", "localhost"):
         return JSONResponse({"error": "Only available on this computer."}, status_code=403)
@@ -68,6 +94,10 @@ async def _guard_apps_writes(request: Request, call_next):
 # Connected voice clients (JARVIS HUD tabs) — the server-side wake engine alerts
 # all of them so a wake detected on the server opens the command window in the UI.
 WS_CLIENTS = set()
+# The subset that came in through the tailscale proxy (the phone). The PC's
+# wake engine hears the PC's room, so its wakes must not open a capture on a
+# phone somewhere else; those clients are tap-to-talk.
+WS_REMOTE = set()
 
 # Global singletons (Whisper load is slow, do it once)
 print("[JARVIS Web] Loading VoiceEngine (Whisper)...", flush=True)
@@ -132,8 +162,9 @@ def broadcast_wake():
             print("[WakeEngine] wake heard but no server loop yet (no HUD connected); "
                   "clients kept", flush=True)
         return False
-    clients = list(WS_CLIENTS)
-    print(f"[WakeEngine] broadcasting wake to {len(clients)} HUD client(s)", flush=True)
+    clients = [ws for ws in WS_CLIENTS if ws not in WS_REMOTE]
+    print(f"[WakeEngine] broadcasting wake to {len(clients)} local HUD client(s) "
+          f"({len(WS_REMOTE)} remote skipped)", flush=True)
     payload = json.dumps({"type": "wake", "source": "server"})
     scheduled = 0
     for ws in clients:
@@ -728,6 +759,30 @@ async def get():
     with open(html_path, "r", encoding="utf-8") as f:
         html = f.read()
     return _no_cache(HTMLResponse(content=html, status_code=200))
+
+
+@app.get("/manifest.webmanifest")
+async def get_manifest():
+    """Lets Android Chrome install the HUD to the home screen (standalone,
+    no browser bar). Icons are served below."""
+    return JSONResponse({
+        "name": "JARVIS", "short_name": "JARVIS", "start_url": "/",
+        "display": "standalone", "background_color": "#05070c",
+        "theme_color": "#05070c",
+        "icons": [{"src": "/icon-192.png", "sizes": "192x192", "type": "image/png",
+                   "purpose": "any maskable"},
+                  {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png",
+                   "purpose": "any maskable"}],
+    }, media_type="application/manifest+json")
+
+
+@app.get("/icon-{size}.png")
+async def get_icon(size: int):
+    from fastapi.responses import FileResponse
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", f"icon-{size}.png")
+    if not os.path.exists(path):
+        return JSONResponse({"error": "no such icon"}, status_code=404)
+    return FileResponse(path, media_type="image/png")
 
 
 @app.get("/hud.html")
@@ -1544,13 +1599,49 @@ async def get_apps_panel():
     return _no_cache(HTMLResponse(content=html, status_code=200))
 
 
+def _ws_origin_allowed(websocket: WebSocket) -> bool:
+    """Browsers skip CORS for WebSockets, so without this any web page open
+    on a device that can reach the server could connect to /ws and drive the
+    tools. The Host must be one of _ALLOWED_HOSTS (HTTP middleware does not
+    run for WebSockets). Then accept JARVIS's own pages (Origin matches
+    Host), the JARVIS_ALLOWED_ORIGINS list, and non-browser clients that
+    send no Origin (ws_verify.py)."""
+    host = websocket.headers.get("host", "")
+    if _hostname(host) not in _ALLOWED_HOSTS:
+        return False
+    origin = websocket.headers.get("origin")
+    if not origin:
+        return True
+    if origin.split("://", 1)[-1].rstrip("/") == host:
+        return True
+    return origin.rstrip("/") in _ALLOWED_ORIGINS
+
+
+def _ws_is_remote(websocket: WebSocket) -> bool:
+    """A proxied client (tailscale serve adds X-Forwarded-For) or one that
+    addressed the server by anything but its loopback name is not in this
+    room."""
+    if websocket.headers.get("x-forwarded-for"):
+        return True
+    return _hostname(websocket.headers.get("host", "")) not in ("127.0.0.1", "localhost", "[::1]")
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     global _WS_LOOP
+    if not _ws_origin_allowed(websocket):
+        print(f"[WS] rejected origin {websocket.headers.get('origin')!r}", flush=True)
+        await websocket.close(code=1008)
+        return
     await websocket.accept()
     _WS_LOOP = asyncio.get_running_loop()
     WS_CLIENTS.add(websocket)
-    print("[WS] client connected", flush=True)
+    if _ws_is_remote(websocket):
+        WS_REMOTE.add(websocket)
+        print(f"[WS] remote client connected (host={websocket.headers.get('host')!r}, "
+              f"via={websocket.headers.get('x-forwarded-for')!r})", flush=True)
+    else:
+        print("[WS] client connected", flush=True)
     # Per-connection feedback policy: each client decides (and hears) its own
     # cues; the synthesizer and audio cache are shared module-wide.
     vf = _vf.Policy()
@@ -2016,6 +2107,7 @@ async def websocket_endpoint(websocket: WebSocket):
         print(f"[WS] error: {e}", flush=True)
         WS_CLIENTS.discard(websocket)
     finally:
+        WS_REMOTE.discard(websocket)
         # This connection's job listener must not outlive it: stale listeners
         # spoke every finished job into closed sockets (5x after 5 reconnects).
         try:
@@ -2144,5 +2236,10 @@ async def post_music(message: Request):
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("JARVIS_PORT", "8000"))
-    print(f"[JARVIS Web] Starting on http://localhost:{port}  (ws://localhost:{port}/ws)")
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    # This computer only: the tools open apps and drive the browser with no
+    # login. Remote devices come in through a proxy on this machine
+    # (tailscale serve); JARVIS_HOST=0.0.0.0 re-exposes it on the LAN, and the
+    # LAN address must then be listed in JARVIS_ALLOWED_ORIGINS as well.
+    host = os.environ.get("JARVIS_HOST", "127.0.0.1")
+    print(f"[JARVIS Web] Starting on http://{host}:{port}  (ws://{host}:{port}/ws)")
+    uvicorn.run(app, host=host, port=port)
