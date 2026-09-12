@@ -151,6 +151,37 @@ def _run_bounded(fn, budget, label):
         ex.shutdown(wait=False)
 
 
+# One budget per turn for the whole model chain. A model that is down held a
+# turn for minutes - 9router's per-model retries at 45 s each, then 180 s on
+# the CPU model - and turns stacked up behind each other (2026-09-12).
+TURN_BUDGET = float(os.getenv("JARVIS_TURN_BUDGET", "45"))
+MIN_CALL_SECONDS = 2.0
+_NO_MODEL_REPLY = ("I couldn't get an answer from my AI model in time, sir. The online service "
+                   "may be down - please try again in a moment.")
+
+
+class _OutOfTime(Exception):
+    """The turn's budget is spent; no further model call starts."""
+
+
+def _time_left():
+    deadline = getattr(_progress_local, "deadline", None)
+    return float("inf") if deadline is None else deadline - time.monotonic()
+
+
+def _call_timeout(cap):
+    """A model call's timeout: its own cap, or what the turn has left."""
+    left = _time_left()
+    if left < MIN_CALL_SECONDS:
+        raise _OutOfTime(f"turn budget of {TURN_BUDGET:.0f}s spent")
+    return min(cap, left)
+
+
+def _client_key():
+    """Whose conversation this thread's turn belongs to (think(client=...))."""
+    return getattr(_progress_local, "client", None) or "default"
+
+
 # Spotify playback resolves a track through a headless browser against
 # open.spotify.com (3 retries, lazy-load scrolls). Cold, that is well over two
 # minutes, which is what the live probe saw as total silence. Bound the route.
@@ -588,19 +619,56 @@ def _asks_about_own_work(text):
     return bool((_WH_QUESTION_RE.match(t) or _DID_YOU_LEAD_RE.match(t)) and _OWN_WORK_RE.search(t))
 
 
-def _own_work_facts():
-    """What JARVIS recently did, from the job log and the audit trail."""
+# "can you / do you / is there ..." ending in a question mark.
+_YES_NO_RE = re.compile(r"^\s*(?:(?:jarvis|cygnus|so|and|hey)[,\s]+)*"
+                        r"(?:can|could|would|will|do|does|did|is|are|have|has)\s+"
+                        r"(?:you|it|there|i|we|this|that)\b.*\?\s*$", re.I)
+# What a "can you X?" asks for when it is a request, not a capability question.
+_REQUEST_ROUTES = {"task", "multi", "app_action", "open_site", "open_app", "close_app", "music",
+                   "media_control", "web_search", "read_page", "report", "launch_project"}
+
+
+def _is_question_not_request(text):
+    """True for a question to answer, not a job to start: any what / which /
+    who / how question, and a yes-no question the semantic router does not
+    read as a request ("can you visit websites?" asks; "can you create a
+    website with opencode?" asks for one). Until the router is loaded, a
+    yes-no question stays a request, as before."""
+    t = (text or "").strip()
+    if _WH_QUESTION_RE.match(t):
+        return True
+    if not _YES_NO_RE.match(t):
+        return False
+    try:
+        import semantic_route
+        route, score = semantic_route.pick(t)
+    except Exception:
+        return False
+    return route is not None and not (route in _REQUEST_ROUTES and score >= semantic_route.LEAD_MIN_SCORE)
+
+
+def _own_work_facts(question=""):
+    """What JARVIS did, from the job log and the audit trail: the jobs and
+    file writes matching what the question names, then the latest ones. The
+    latest three alone missed a morning's website by evening, and Cygnus
+    said it had never built it (2026-09-12)."""
     parts = []
     try:
         import jobs
-        work = jobs.recent_work()
+        matched = jobs.find_work(question)
+        if matched:
+            parts.append("Jobs matching what the user asked about, best match first:\n"
+                         + jobs.format_jobs(matched))
+        work = jobs.recent_work(exclude={j["id"] for j in matched})
         if work:
-            parts.append("Background jobs, newest first:\n" + work)
+            parts.append("Latest background jobs, newest first:\n" + work)
     except Exception:
         pass
     try:
+        import jobs
         import tools
-        writes = tools.recent_file_writes()
+        words = sorted(jobs.content_words(question))
+        writes = (tools.recent_file_writes(match=words) if words else []) or tools.recent_file_writes()
         if writes:
             parts.append("Files JARVIS wrote itself (write_file), oldest first:\n"
                          + "\n".join(f"- {w}" for w in writes))
@@ -1489,6 +1557,17 @@ class JarvisBrain:
         # it; after IDLE_RESET_MINUTES of silence the next turn clears context.
         self._last_turn_ts = time.time()
 
+    @property
+    def conversation(self):
+        """This client's history. The desktop window, the phone and each test
+        session keep their own (think(client=...)): one shared list let one
+        client's pending question leak into another's answer (2026-09-12)."""
+        return self.__dict__.setdefault("_conversations", {}).setdefault(_client_key(), [])
+
+    @conversation.setter
+    def conversation(self, value):
+        self.__dict__.setdefault("_conversations", {})[_client_key()] = value
+
     def _maybe_reset_idle(self):
         """Full context reset when the conversation has been idle too long.
 
@@ -1517,10 +1596,12 @@ class JarvisBrain:
             trimmed.pop(0)
         self.conversation = trimmed
 
-    def think(self, user_input: str, on_hermes_done=None, progress_cb=None) -> str:
+    def think(self, user_input: str, on_hermes_done=None, progress_cb=None, client=None) -> str:
         """One turn, then its observers: the conversation state records it and
         the understand-first router decides in shadow (in the background,
-        after the reply - never in its way)."""
+        after the reply - never in its way). `client` names whose conversation
+        the turn belongs to; every thread sets it before touching history."""
+        _progress_local.client = client or "default"
         started = None
         try:
             import intent_router
@@ -1528,7 +1609,7 @@ class JarvisBrain:
         except Exception:
             pass
         self._lead_record = None
-        self._grounded = None
+        _progress_local.grounded = None
         try:
             import command_chain
             clauses = command_chain.split_commands(user_input)
@@ -1543,10 +1624,11 @@ class JarvisBrain:
         finally:
             # The facts rode along for this one answer; history keeps the
             # user's own words so they are not re-sent on every later turn.
-            if self._grounded:
-                msg, original = self._grounded
+            grounded = getattr(_progress_local, "grounded", None)
+            if grounded:
+                msg, original = grounded
                 msg["content"] = original
-                self._grounded = None
+                _progress_local.grounded = None
         if started is not None:
             try:
                 fixed = honest_reply(reply, intent_router._audit_since(started["audit_pos"]),
@@ -1584,11 +1666,13 @@ class JarvisBrain:
     def _ground_own_work(self):
         """Attach what JARVIS recently did to this turn's user message, for
         the model to answer from; think() puts the original text back."""
-        facts = _own_work_facts()
-        if not facts or not self.conversation or self.conversation[-1].get("role") != "user":
+        if not self.conversation or self.conversation[-1].get("role") != "user":
             return
         msg = self.conversation[-1]
-        self._grounded = (msg, msg["content"])
+        facts = _own_work_facts(msg["content"])
+        if not facts:
+            return
+        _progress_local.grounded = (msg, msg["content"])
         msg["content"] = msg["content"] + facts
 
     def _think_turn(self, user_input: str, on_hermes_done=None, progress_cb=None) -> str:
@@ -1834,6 +1918,11 @@ class JarvisBrain:
         if _semantic_route in ("general", "app_reference") and \
                 not _WH_QUESTION_RE.match(user_input or ""):
             _conversational = False
+        # A question is answered, not handed to an agent: "which of those do I
+        # visit most?" and "what is the start of Cygnus?" became Hermes jobs,
+        # because visit and start read as actions (2026-09-12).
+        if intent == "general" and _is_question_not_request(user_input):
+            _conversational = True
         # "What coding agent did you use to create this website?" is answered
         # from the record by the cloud brain, never re-run as a new goal.
         if _asks_about_own_work(user_input):
@@ -2146,6 +2235,14 @@ class JarvisBrain:
             except Exception as e:
                 print(f"[JARVIS] stop failed ({e}); falling back to cloud brain...")
 
+        return self._answer_with_models(user_input)
+
+    def _answer_with_models(self, user_input: str) -> str:
+        """The model chain - local when preferred, Cerebras, 9router, local -
+        under one turn budget (TURN_BUDGET): each call's timeout is what the
+        turn has left, and a turn that runs out says so instead of waiting
+        minutes on a model that is down."""
+        _progress_local.deadline = time.monotonic() + TURN_BUDGET
         # 0) Local first, only when explicitly preferred (offline / on-device).
         if self._prefer_local:
             try:
@@ -2196,7 +2293,9 @@ class JarvisBrain:
 
         # 3) LOCAL: Ollama — final real backend before demo mode. A small local
         #    model beats canned demo text, so it is kept as the last resort.
-        if self._use_ollama and not self._prefer_local:
+        # A second turn is not queued behind one already on the CPU model:
+        # four stacked there each waited minutes (2026-09-12).
+        if self._use_ollama and not self._prefer_local and not self._ollama_active:
             try:
                 result = self._think_ollama(user_input)
                 if result:
@@ -2205,6 +2304,14 @@ class JarvisBrain:
             except Exception as e:
                 print(f"[JARVIS] Ollama unavailable ({e}); switching to demo mode...")
 
+        # Out of time, or the local model busy with another turn or failing:
+        # say so plainly rather than answer with canned demo text.
+        if _time_left() < MIN_CALL_SECONDS or (self._use_ollama and not self._prefer_local):
+            print("[JARVIS] no model answered within the turn budget", flush=True)
+            self.conversation.append({"role": "assistant", "content": _NO_MODEL_REPLY})
+            self.last_backend = "timeout"
+            self.last_stats = {"backend": "timeout"}
+            return _NO_MODEL_REPLY
         # 4) Demo mode fallback
         print("[JARVIS] All backends exhausted, switching to demo mode...")
         self._use_mock = True
@@ -2293,7 +2400,7 @@ class JarvisBrain:
                             tools=tools_arg,
                             tool_choice=tool_choice_arg,
                             max_tokens=max_tokens_arg,
-                            timeout=45,
+                            timeout=_call_timeout(45),
                         )
                     except Exception as ce:
                         cs = str(ce)
@@ -2538,7 +2645,7 @@ class JarvisBrain:
                 tools=otools,
                 tool_choice="auto",
                 max_tokens=max_tokens,
-                timeout=timeout,
+                timeout=_call_timeout(timeout),
             )
             _gen_secs += _time.time() - _leg
             _usage = getattr(response, "usage", None)
@@ -2672,7 +2779,7 @@ class JarvisBrain:
                 tools=otools,
                 tool_choice="auto",
                 max_tokens=1024,
-                timeout=45,
+                timeout=_call_timeout(45),
             )
 
             if not response.choices:
@@ -2791,7 +2898,7 @@ class JarvisBrain:
                 tools=otools,
                 tool_choice="auto",
                 max_tokens=1024,
-                timeout=45,
+                timeout=_call_timeout(45),
             )
 
             if not response.choices:
@@ -2929,8 +3036,11 @@ class JarvisBrain:
 
         return "I apologize, but I encountered an issue processing that request."
 
-    def reset(self):
-        """Clear conversation history and the per-turn telemetry."""
+    def reset(self, client=None):
+        """Clear conversation history (`client`'s, else this turn's) and the
+        per-turn telemetry."""
+        if client:
+            _progress_local.client = client
         self.conversation = []
         self._use_mock = False
         # Re-enabling the router unconditionally here would have quietly undone

@@ -109,6 +109,14 @@ def warm():
         threading.Thread(target=_routers, daemon=True, name="semantic-warm").start()
 
 
+def pick(text):
+    """(route, score) of the nearest examples, or (None, 0.0) while the model
+    is not loaded - never loads it on the caller's thread."""
+    if MODE == "off" or not _bank or not (text or "").strip():
+        return None, 0.0
+    return _bank["route"].route(text, min_score=0.0)
+
+
 def lead(text):
     """The trusted route for `text` when leading is on and the pick is
     confident, else None. Never loads the model on the caller's thread: until

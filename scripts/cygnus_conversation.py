@@ -34,7 +34,7 @@ import time
 from collections import Counter
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from cygnus_client import ask, connect, find_server, percentile, report_path  # noqa: E402
+from cygnus_client import ask, connect, find_server, hello, percentile, report_path  # noqa: E402
 from cygnus_smoke import ACTING, run_step, step  # noqa: E402
 
 WORDS = ("FALCON", "ORCHID", "GRANITE", "MERIDIAN", "LANTERN", "CASCADE", "TUNDRA", "SAFFRON")
@@ -130,6 +130,7 @@ async def overlap(base):
     """A follow-up sent before the first reply, and an instant command on a
     second socket while the first waits on the cloud."""
     async with connect(base) as ws:
+        await hello(ws, "overlap-queued")
         await ws.send(json.dumps({"type": "text", "text": "12 * 12"}))
         follow = await ask(ws, "and what is that plus 6?", 90)       # sent at once, answered in turn
         if follow.reply and re.search(r"144", follow.reply) and not follow.error:
@@ -139,11 +140,13 @@ async def overlap(base):
 
     async def slow():
         async with connect(base) as ws:
+            await hello(ws, "overlap-slow")
             return await ask(ws, "In two sentences, what is a black hole?", 120)
 
     async def fast():
         await asyncio.sleep(0.5)
         async with connect(base) as ws:
+            await hello(ws, "overlap-fast")
             return await ask(ws, "what time is it", 120)
     s, f = await asyncio.gather(slow(), fast())
     side = {"slow_ms": s.ms, "fast_ms": f.ms, "fast_waited_for_slow": f.ms > 3000,
@@ -157,6 +160,8 @@ async def concurrent_sessions(base, n):
     """Each session gives its own word in the same moment, then asks for it."""
     words = WORDS[:n]
     sockets = [await connect(base).__aenter__() for _ in words]
+    for ws, w in zip(sockets, words):
+        await hello(ws, f"concurrent-{w.lower()}")
     try:
         await asyncio.gather(*(ask(ws, f"For this chat, the code word is {w}. Just say OK.", 120)
                                for ws, w in zip(sockets, words)))
@@ -190,6 +195,7 @@ async def run(base, args, sessions):
             # A fresh connection per run: a late reply from a timed-out turn
             # must not be read as the next run's reply.
             async with connect(base) as ws:
+                await hello(ws, f"conv-{session['name']}-{k}")
                 rows = await run_session(ws, session, args.pause)
             if k == 0 or any(r["problems"] for r in rows):
                 _print_run(session, rows)

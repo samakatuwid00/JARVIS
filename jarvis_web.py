@@ -1647,6 +1647,9 @@ async def websocket_endpoint(websocket: WebSocket):
               f"via={websocket.headers.get('x-forwarded-for')!r})", flush=True)
     else:
         print("[WS] client connected", flush=True)
+    # Whose conversation this socket's turns join: the phone's or this PC's
+    # browser, unless "hello" names the desktop window or a session of its own.
+    client_key = "remote" if _ws_is_remote(websocket) else "local"
     # Per-connection feedback policy: each client decides (and hears) its own
     # cues; the synthesizer and audio cache are shared module-wide.
     vf = _vf.Policy()
@@ -1772,7 +1775,10 @@ async def websocket_endpoint(websocket: WebSocket):
             elif mtype == "hello":
                 if message.get("client") == "desktop":
                     WS_DESKTOP.add(websocket)
+                    client_key = "desktop"
                     print("[WS] desktop app window connected", flush=True)
+                if message.get("session"):
+                    client_key = "session:" + str(message["session"])[:64]
 
             elif mtype == "speech":
                 # Phase C: duck music while JARVIS speaks, restore when done.
@@ -1916,7 +1922,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     # Off the event loop: a turn that drives the browser can run for
                     # a minute, and blocking here stalls the WebSocket for its duration.
                     response = await asyncio.to_thread(
-                        brain.think, text.strip(), on_hermes_done, _push_progress)
+                        brain.think, text.strip(), on_hermes_done, _push_progress, client=client_key)
                     _t["brain"] = time.time()
                     _wd.stop()
                     _arm_phase_b(websocket, vf, response)
@@ -1981,7 +1987,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 # answer instead of clearing anything.
                 name = (message.get("name") or "").strip().lower()
                 if name == "clear":
-                    brain.reset()
+                    brain.reset(client=client_key)
                     TURN_STATS["turns"] = 0
                     TURN_STATS["by_backend"].clear()
                     TURN_STATS["latencies"].clear()
@@ -2068,7 +2074,7 @@ async def websocket_endpoint(websocket: WebSocket):
                             deliver_result(websocket, result, speak), loop)
 
                     response = await asyncio.to_thread(
-                        brain.think, user_text, on_hermes_done, _push_progress)
+                        brain.think, user_text, on_hermes_done, _push_progress, client=client_key)
                     _wd.stop()
                     _arm_phase_b(websocket, vf, response)
                     sstore_log("user", user_text)

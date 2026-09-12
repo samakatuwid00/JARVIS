@@ -47,17 +47,26 @@ def _audit_log(caller: str, task: str, decision: str, result: str = "", confirm:
     except Exception:
         pass
 
-def recent_file_writes(hours: float = 2.0, limit: int = 8) -> list:
-    """Files JARVIS itself wrote with write_file in the last `hours`, oldest
-    first, as "HH:MM path". Reads only the tail of the audit trail."""
+# How much of the audit trail's end is read: recent writes, and a search for
+# writes a question names (older, so further back).
+_AUDIT_TAIL_BYTES = 256 * 1024
+_AUDIT_SEARCH_BYTES = 4 * 1024 * 1024
+
+
+def recent_file_writes(hours: float = 2.0, limit: int = 8, match=None) -> list:
+    """Files JARVIS itself wrote with write_file, oldest first, as "HH:MM
+    path": those of the last `hours`, or - given `match` words - those whose
+    path holds one of them, however old ("hello world website" finds
+    hello-world-website\\index.html from the morning)."""
     try:
         with open(_AUDIT_PATH, "rb") as f:
             f.seek(0, 2)
-            f.seek(max(0, f.tell() - 262144))
+            f.seek(max(0, f.tell() - (_AUDIT_SEARCH_BYTES if match else _AUDIT_TAIL_BYTES)))
             tail = f.read().decode("utf-8", "replace").splitlines()
     except OSError:
         return []
     cutoff = datetime.datetime.now() - datetime.timedelta(hours=hours)
+    words = [w.lower() for w in (match or [])]
     out = []
     for line in tail:
         if '"write_file"' not in line:
@@ -67,8 +76,11 @@ def recent_file_writes(hours: float = 2.0, limit: int = 8) -> list:
             ts = datetime.datetime.fromisoformat(rec["ts"])
         except (ValueError, KeyError, TypeError):
             continue
-        if rec.get("caller") == "write_file" and rec.get("decision") == "executed" and ts >= cutoff:
-            out.append(f"{ts:%H:%M} {rec.get('task', '')}")
+        path = str(rec.get("task", ""))
+        if rec.get("caller") != "write_file" or rec.get("decision") != "executed":
+            continue
+        if (any(w in path.lower() for w in words) if words else ts >= cutoff):
+            out.append(f"{ts:%H:%M} {path}")
     return out[-limit:]
 
 def _quarantine_external(text: str, label: str = "external") -> str:

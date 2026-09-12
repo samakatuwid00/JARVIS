@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import time
 import uuid
@@ -252,12 +253,40 @@ def recent(limit: int = 10) -> list[dict]:
     return [dict(j) for j in rows[-limit:]][::-1]
 
 
-def recent_work(limit: int = 3, max_notes: int = 6) -> str:
-    """The latest jobs as plain facts - task, who ran it, each step, the
-    outcome - so "what did you use to build that?" is answered from the
-    record rather than guessed."""
+# Words a question about past work shares with the job it means - not the
+# question's own framing ("what coding agent did you use to create ...").
+_FRAME_WORDS = {"what", "which", "who", "how", "when", "where", "why", "did", "does", "you", "your",
+                "use", "used", "the", "this", "that", "these", "those", "and", "for", "with", "from",
+                "was", "were", "are", "its", "create", "created", "make", "made", "build", "built",
+                "coding", "agent", "tool", "can", "please", "jarvis", "cygnus", "sir", "just", "earlier",
+                "today", "one", "job", "task", "work", "have", "has", "had"}
+
+
+def content_words(text: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z0-9]+", (text or "").lower())
+            if len(w) >= 3 and w not in _FRAME_WORDS}
+
+
+def find_work(query: str, limit: int = 3) -> list[dict]:
+    """Past jobs whose task shares the most words with `query`, best first:
+    "the hello world website" finds the job that built it hours ago, long
+    after it left the newest three."""
+    words = content_words(query)
+    if not words:
+        return []
+    _load_history()
+    with _lock:
+        rows = [dict(j) for j in _jobs.values()]
+    need = 1 if len(words) == 1 else 2
+    scored = [(len(words & content_words(j.get("task") or "")), j.get("started") or 0, j) for j in rows]
+    scored = sorted((s for s in scored if s[0] >= need), key=lambda s: (s[0], s[1]), reverse=True)
+    return [j for _, _, j in scored[:limit]]
+
+
+def format_jobs(jobs: list[dict], max_notes: int = 6) -> str:
+    """Jobs as plain facts - task, who ran it, each step, the outcome."""
     lines = []
-    for j in recent(limit):
+    for j in jobs:
         when = time.strftime("%H:%M", time.localtime(j.get("started") or 0))
         who = j.get("agent") or j.get("tier") or "unknown"
         lines.append(f"- {when} job {j['id']} ({who}), state {j.get('state')}: "
@@ -267,6 +296,13 @@ def recent_work(limit: int = 3, max_notes: int = 6) -> str:
         if j.get("summary"):
             lines.append(f"    outcome: {' '.join(j['summary'].split())[:200]}")
     return "\n".join(lines)
+
+
+def recent_work(limit: int = 3, max_notes: int = 6, exclude=()) -> str:
+    """The latest jobs (minus `exclude` ids) as plain facts, so "what did you
+    use to build that?" is answered from the record rather than guessed."""
+    return format_jobs([j for j in recent(limit + len(exclude)) if j["id"] not in exclude][:limit],
+                       max_notes)
 
 
 def status_line() -> str:

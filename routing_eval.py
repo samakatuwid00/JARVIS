@@ -98,7 +98,8 @@ def keyword_route(text):
     intent = b.classify_intent(t)
     if intent in INTENT_ROUTE:
         return INTENT_ROUTE[intent]
-    if b._asks_about_own_work(t) or tools.is_conversational(t):
+    if b._asks_about_own_work(t) or tools.is_conversational(t) or \
+            (intent == "general" and b._is_question_not_request(t)):
         return "chat"
     if b._is_multistep_goal(t):
         return "task"

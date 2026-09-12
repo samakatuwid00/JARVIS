@@ -35,6 +35,13 @@ def connect(base):
     return websockets.connect(url, max_size=None, open_timeout=10, ping_interval=None)
 
 
+async def hello(ws, session):
+    """Join a conversation of our own: Cygnus keeps one per client, so test
+    turns stay out of the user's history (a server that predates sessions
+    ignores this)."""
+    await ws.send(json.dumps({"type": "hello", "session": session}))
+
+
 @dataclass
 class Turn:
     said: str

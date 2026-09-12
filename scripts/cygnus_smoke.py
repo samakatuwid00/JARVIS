@@ -31,7 +31,8 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from cygnus_client import Turn, ask, audit_mark, connect, find_server, report_path, tools_since  # noqa: E402
+from cygnus_client import (Turn, ask, audit_mark, connect, find_server, hello, report_path,  # noqa: E402
+                           tools_since)
 
 TIERS = ("safe", "live", "agent")
 # Tools that change something on the machine or hand work to an agent.
@@ -182,6 +183,7 @@ async def run(base, cases):
     results = []
     for case in cases:
         async with connect(base) as ws:
+            await hello(ws, f"smoke-{case['name']}")
             for expect in case["steps"]:
                 result = await run_step(ws, expect)
                 _print_step(case, result)
