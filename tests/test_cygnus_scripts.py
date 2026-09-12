@@ -9,6 +9,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts"))
 
 import cygnus_client as cc  # noqa: E402
+import cygnus_conversation as conv  # noqa: E402
 import cygnus_smoke as smoke  # noqa: E402
 import cygnus_stress as stress  # noqa: E402
 
@@ -77,6 +78,41 @@ def test_every_case_is_well_formed():
     for case in smoke.CASES:
         assert case["tier"] in smoke.TIERS and case["steps"]
         assert all(s["say"].strip() for s in case["steps"])
+
+
+def _row(say, reply, route=("instant", "time"), ms=100, problems=()):
+    return {"say": say, "reply": reply, "backend": route[0], "intent": route[1], "ms": ms,
+            "problems": list(problems)}
+
+
+def test_consistency_reads_repeats_turn_by_turn():
+    runs = [[_row("what time is it", "It is 07:43 PM."), _row("anong petsa", "Sabado", ("router", None))],
+            [_row("what time is it", "It is 07:44 PM."), _row("anong petsa", "Saturday", ("hermes", "general"),
+                                                                 problems=["x"])]]
+    first, second = conv.consistency(runs)
+    assert first["pass_rate"] == 1 and first["route_stable"] == 1 and first["distinct_replies"] == 1
+    assert second["pass_rate"] == 0.5 and second["route_stable"] == 0.5 and second["distinct_replies"] == 2
+
+
+def test_conversation_findings_name_what_broke():
+    report = {"sessions": {"code word kept": [[_row("What code word did I give you?", "No idea",
+                                                     problems=["reply does not match /falcon/"])]]},
+              "consistency": {},
+              "overlap": {"queued_follow_up": {"kept_context": True},
+                          "cloud_and_instant_side_by_side": {"fast_waited_for_slow": True, "fast_ms": 5200,
+                                                             "slow_mentions_time": False}},
+              "concurrent": {"sessions": [{"got_own": False}, {"got_own": True}], "kept_own": 1, "crossed": 1}}
+    assert conv.summary(report) == [
+        "code word kept: failed on 'What code word did I give you?'",
+        "an instant command waited 5200 ms behind another client's cloud turn",
+        "1 of 2 simultaneous sessions got another session's code word back",
+        "only 1 of 2 simultaneous sessions recalled their own code word"]
+
+
+def test_every_session_is_well_formed():
+    names = [s["name"] for s in conv.SESSIONS]
+    assert len(names) == len(set(names))
+    assert all(s["tier"] in ("safe", "live") and len(s["turns"]) >= 2 for s in conv.SESSIONS)
 
 
 def test_percentiles_and_findings():
