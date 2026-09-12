@@ -368,7 +368,9 @@
   /* Trimmed transcript: only the last exchange shows until "Show all".
      Expanded, the transcript takes the column and the black hole steps
      aside (the top-bar mark still shows the state). Phones in landscape
-     keep the whole transcript: there is no room for the black hole. */
+     keep the whole transcript: there is no room for the black hole. So does
+     a portrait phone while its keyboard is open (html.jv-kb, see syncKeyboard):
+     the transcript takes the column and scrolls, the black hole shrinks. */
   #jv-side-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .jv-tx-toggle { font: 700 10.5px/1 var(--font-display); letter-spacing: .14em; text-transform: uppercase;
     color: var(--holo); background: transparent; border: 1px solid var(--hairline); border-radius: 999px;
@@ -376,10 +378,10 @@
   .jv-tx-toggle:hover { background: color-mix(in srgb, var(--holo) 12%, transparent); }
   .jv-tx-toggle:focus-visible { outline: 2px solid var(--holo); outline-offset: 2px; }
   .jv-tx-toggle[hidden] { display: none; }
-  @media not all and (pointer: coarse) and (max-height: 500px) {
-    html:not(.jv-tx-all) #jv-side-log > .jv-line:not(:nth-last-child(-n+2)) { display: none; }
-    html:not(.jv-tx-all) #jv-feed { min-height: 0; }
-    html:not(.jv-tx-all) #jv-feed #jv-side-log { flex: 0 1 auto; }
+  @media not all and (pointer: coarse) and (orientation: landscape) and (min-aspect-ratio: 3/2) and (max-height: 500px) {
+    html:not(.jv-tx-all):not(.jv-kb) #jv-side-log > .jv-line:not(:nth-last-child(-n+2)) { display: none; }
+    html:not(.jv-tx-all):not(.jv-kb) #jv-feed { min-height: 0; }
+    html:not(.jv-tx-all):not(.jv-kb) #jv-feed #jv-side-log { flex: 0 1 auto; }
   }
   html.jv-tx-all #cy-stage { display: none; }
   html.jv-tx-all #jv-center .jv-spacer { display: none; }
@@ -395,20 +397,27 @@
   /* The old bottom transcript is superseded by the side panel; the input stays. */
   #jv-log { display: none; }
 
-  #jv-input-wrap { pointer-events: auto; display: flex; align-items: center; gap: 10px;
-    padding: 8px 15px; border-radius: 999px;
+  /* The box grows with the message (autosizeInput), so everything in it sits
+     on the last line and the corners stay round at any height. */
+  #jv-input-wrap { pointer-events: auto; display: flex; align-items: flex-end; gap: 10px;
+    padding: 8px 15px; border-radius: 22px;
     background: color-mix(in srgb, #070a0e 80%, transparent);
     border: 1px solid var(--hairline);
     box-shadow: 0 12px 32px rgba(0, 0, 0, .45);
     backdrop-filter: blur(8px); transition: border-color .2s, box-shadow .2s; }
-  #jv-input-wrap::before { content: '>'; flex: 0 0 auto; opacity: .7;
-    font: 700 13px/1 var(--font-data); color: var(--holo); }
+  #jv-input-wrap::before { content: '>'; flex: 0 0 auto; opacity: .7; align-self: flex-start;
+    font: 700 13px/1 var(--font-data); color: var(--holo); padding-top: 11px; }
   #jv-input-wrap:focus-within { border-color: color-mix(in srgb, var(--holo) 60%, transparent);
     box-shadow: 0 0 0 1px color-mix(in srgb, var(--holo) 35%, transparent),
                 0 12px 34px rgba(0, 0, 0, .5); }
   #jv-input-wrap.jv-err { border-color: #ec3013; box-shadow: 0 0 20px color-mix(in srgb, #ec3013 40%, transparent); }
 
+  /* A textarea: long messages wrap onto new lines and the box grows up to
+     about six lines, then scrolls (max-height; overflow set by autosizeInput). */
   #jv-input { flex: 1 1 auto; min-width: 0; border: 0; outline: 0; background: transparent;
+    resize: none; overflow-y: hidden; display: block; margin: 0; padding: 8px 0;
+    line-height: 1.45; max-height: calc(1.45em * 6 + 16px);
+    scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--holo) 35%, transparent) transparent;
     font-family: var(--font-body);
     font-size: 13.5px; font-weight: 500; letter-spacing: .01em;
     color: #ffe7c4; caret-color: var(--holo); }
@@ -759,18 +768,42 @@
 
   /* Phones and the widget: a smaller black hole, higher up, over the space
      the trimmed transcript leaves (step 5 of CYGNUS_UI_PLAN.md). */
-  @media (max-width: 700px), (pointer: coarse) and (max-height: 500px) {
+  @media (max-width: 700px), (pointer: coarse) and (orientation: landscape) and (min-aspect-ratio: 3/2) and (max-height: 500px) {
     :root { --cy-y: 38%; --cy-w: clamp(150px, 46vw, 210px); }
   }
-  /* Phones in landscape: thin topbar, transcript fills the height. */
-  @media (pointer: coarse) and (max-height: 500px) {
-    #jv-shell { gap: 6px; margin-top: 6px; height: calc(100vh - 6px); height: calc(100dvh - 6px); }
-    #jv-topbar { padding: 4px 12px; }
-    #jv-center { align-self: stretch; margin: 0 0 6px; }
-    #jv-center .jv-spacer { display: none; }
-    #jv-feed { flex: 1 1 auto; min-height: 0; max-height: none; }
-    #cy-stage, .jv-tx-toggle, #jv-rings.speak, #jv-glow.speak::after { display: none; }
+  /* Phones in landscape: thin topbar, transcript fills the height. Only a
+     genuinely wide viewport: a portrait phone's keyboard also drops the
+     height under 500px (and can leave it barely wider than tall), which used
+     to hide the black hole. html.jv-kb marks that case from script. */
+  @media (pointer: coarse) and (orientation: landscape) and (min-aspect-ratio: 3/2) and (max-height: 500px) {
+    html:not(.jv-kb) #jv-shell { gap: 6px; margin-top: 6px; height: calc(100vh - 6px); height: calc(100dvh - 6px); }
+    html:not(.jv-kb) #jv-topbar { padding: 4px 12px; }
+    html:not(.jv-kb) #jv-center { align-self: stretch; margin: 0 0 6px; }
+    html:not(.jv-kb) #jv-center .jv-spacer { display: none; }
+    html:not(.jv-kb) #jv-feed { flex: 1 1 auto; min-height: 0; max-height: none; }
+    html:not(.jv-kb) #cy-stage, html:not(.jv-kb) .jv-tx-toggle,
+    html:not(.jv-kb) #jv-rings.speak, html:not(.jv-kb) #jv-glow.speak::after { display: none; }
   }
+  /* Portrait phone, keyboard open (syncKeyboard sets html.jv-kb and --vv-h /
+     --vv-top from visualViewport). The shell fits the visible area, so the
+     chat bar sits right above the keyboard; a small black hole keeps a strip
+     under the top bar (the spacer reserves it) and the transcript takes the
+     rest, scrolled to the newest line. */
+  @media (max-width: 700px) {
+    html.jv-kb { --cy-w: clamp(56px, min(24vw, calc(var(--vv-h, 100dvh) * .2)), 120px);
+      --cy-y: calc(var(--vv-top, 0px) + var(--cy-bar-bottom, 60px) + var(--cy-w) / 2); }
+    html.jv-kb #jv-shell { gap: 6px; margin-top: calc(var(--vv-top, 0px) + 6px);
+      height: calc(var(--vv-h, 100dvh) - 6px); transition: height .12s ease-out; }
+    html.jv-kb #jv-topbar { padding-top: 4px; padding-bottom: 4px; }
+    html.jv-kb #jv-center { margin-bottom: 4px; }
+    html.jv-kb #jv-shell #jv-center .jv-spacer { flex: 0 0 auto; height: calc(var(--cy-w) + 4px); }
+    html.jv-kb.jv-tx-all #jv-shell #jv-center .jv-spacer { display: none; }
+    html.jv-kb #jv-feed { flex: 1 1 auto; min-height: 0; max-height: none; }
+    /* Every line shows while typing, so "Last exchange · Show all" would be
+       wrong; the header goes and the transcript gets its row. */
+    html.jv-kb #jv-side-head { display: none; }
+  }
+  @media (max-width: 700px) and (prefers-reduced-motion: reduce) { html.jv-kb #jv-shell { transition: none; } }
 
   /* Desktop app (Electron): one window, three sizes (ELECTRON_PLAN.md,
      decision 2). The shell sets data-desk on <html>; the page only lays
@@ -937,8 +970,8 @@
         <div id="jv-cues" style="margin-top:8px"></div>
         <div id="jv-input-wrap" style="margin-top:10px">
           <span class="jv-wave" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
-          <input id="jv-input" type="text" autocomplete="off" spellcheck="false"
-                 placeholder="Speak to Cygnus: type, then press Enter" />
+          <textarea id="jv-input" rows="1" autocomplete="off" spellcheck="false" enterkeyhint="send"
+                 aria-label="Message Cygnus" placeholder="Speak to Cygnus: type, then press Enter"></textarea>
           <button id="jv-mic" type="button" aria-label="Talk" title="Talk (Ctrl+Alt+J)">
             <svg class="i-mic" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>
             <svg class="i-stop" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>
@@ -1649,6 +1682,56 @@
   window.addEventListener('resize', function () {
     positionHudLine(); positionLeft(); positionStats(); positionSidePanel();
   });
+
+  // Portrait phone keyboard (html.jv-kb in the CSS). Android shrinks the
+  // layout with it (interactive-widget=resizes-content); iOS only shrinks and
+  // pans the visual viewport. Either way the shell is sized from
+  // visualViewport. Open = the chat input has focus and the visible height
+  // fell well under the tallest seen at this width.
+  var vv = window.visualViewport;
+  var phoneMq = window.matchMedia('(max-width: 700px) and (pointer: coarse)');
+  var kbBase = { w: 0, h: 0 };
+  function scrollChatToEnd() {
+    requestAnimationFrame(function () { if (chatLog) chatLog.scrollTop = chatLog.scrollHeight; });
+  }
+  function syncKeyboard() {
+    var w = vv ? vv.width : window.innerWidth;
+    var h = vv ? vv.height : window.innerHeight;
+    if (Math.abs(w - kbBase.w) > 40) kbBase = { w: w, h: h };   // rotated: start over
+    else if (h > kbBase.h) kbBase.h = h;
+    var open = phoneMq.matches && document.activeElement === chatInput &&
+               kbBase.h > kbBase.w && kbBase.h - h > 120;
+    var was = document.documentElement.classList.contains('jv-kb');
+    if (open) {
+      // iOS may scroll the page to reach the input; the page never scrolls.
+      if (window.scrollY) window.scrollTo(0, 0);
+      // The keyboard slides up over several resizes: keep the newest line in
+      // view at each step, not only at the first (it ended up hidden under
+      // the chat bar once the transcript finished growing).
+      if (Math.round(h) + 'px' !== rootStyle.getPropertyValue('--vv-h')) scrollChatToEnd();
+      rootStyle.setProperty('--vv-h', Math.round(h) + 'px');
+      rootStyle.setProperty('--vv-top', Math.round(vv ? vv.offsetTop : 0) + 'px');
+    } else {
+      rootStyle.removeProperty('--vv-h');
+      rootStyle.removeProperty('--vv-top');
+    }
+    if (open !== was) {
+      document.documentElement.classList.toggle('jv-kb', open);
+      requestAnimationFrame(dockUnderBar);   // the orb sits under the bar
+      scrollChatToEnd();
+      setTimeout(scrollChatToEnd, 250);      // again once the .12s resize settled
+    }
+  }
+  if (vv) { vv.addEventListener('resize', syncKeyboard); vv.addEventListener('scroll', syncKeyboard); }
+  window.addEventListener('resize', syncKeyboard);
+  chatInput.addEventListener('focus', function () { syncKeyboard(); scrollChatToEnd(); });
+  // Late on blur: tapping Send blurs the input first, and collapsing the
+  // layout at once would move the button out from under the finger.
+  chatInput.addEventListener('blur', function () { setTimeout(syncKeyboard, 300); });
+  chatInput.addEventListener('input', function () {
+    if (document.documentElement.classList.contains('jv-kb')) scrollChatToEnd();
+  });
+  syncKeyboard();
   // One pass for every overlay: separate timers would each cost a layout read
   // against the iframe.
   setInterval(function () {
@@ -1811,7 +1894,7 @@
       if (bp) bp.style.width = '0%';
       if (bo) bo.style.width = '0%';
     }
-    chatInput.value = '';
+    chatInput.value = ''; autosizeInput();
     chatInput.focus();
     return true;
   }
@@ -1828,18 +1911,18 @@
         var instr = value.slice(1).replace(/^redirect\s*/i, '').trim();
         if (instr && send({ type: 'command', name: 'redirect', text: instr })) {
           logConv('user', value);
-          chatInput.value = '';
+          chatInput.value = ''; autosizeInput();
           pendingReply = true;
           mode = 'busy'; busySince = Date.now();
           setState('thinking', 'REDIRECTING…');
         } else if (!instr) {
           notice('USAGE: /redirect <instruction>');
-          chatInput.value = '';
+          chatInput.value = ''; autosizeInput();
         }
         return;
       }
       notice('UNKNOWN COMMAND: ' + value);
-      chatInput.value = '';
+      chatInput.value = ''; autosizeInput();
       return;
     }
     if (!send({ type: 'text', text: value, speak: true })) {
@@ -1854,7 +1937,7 @@
     // Typed input logs its own line here; the server still echoes a transcript
     // for it, and without this the echo would render the same words twice.
     userLoggedThisTurn = true;
-    chatInput.value = '';
+    chatInput.value = ''; autosizeInput();
     chatInput.placeholder = '> ';
     setTimeout(function () { chatInput.placeholder = PLACEHOLDER; }, 900);
     chatInput.focus();                          // typing stays the active path
@@ -1864,9 +1947,22 @@
   }
 
   var pendingReply = false;
+  // Enter sends; Shift+Enter starts a new line. Never mid-composition (IME).
   chatInput.addEventListener('keydown', function (e) {
-    if (e.key === 'Enter' || e.keyCode === 13) { e.preventDefault(); sendTyped(); syncMicMode(); }
+    if ((e.key === 'Enter' || e.keyCode === 13) && !e.shiftKey && !e.isComposing) {
+      e.preventDefault(); sendTyped(); syncMicMode();
+    }
   });
+  // The box is as tall as the message, up to its CSS max-height; past that it
+  // scrolls, so a long prompt can always be read back before sending.
+  function autosizeInput() {
+    chatInput.style.height = 'auto';
+    var max = parseFloat(getComputedStyle(chatInput).maxHeight) || Infinity;
+    var h = Math.min(chatInput.scrollHeight, max);
+    chatInput.style.height = h + 'px';
+    chatInput.style.overflowY = chatInput.scrollHeight > max ? 'auto' : 'hidden';
+  }
+  chatInput.addEventListener('input', autosizeInput);
 
   // ---------------------------------------------------------------- websocket
   var ws = null, wsReady = false, reconnectDelay = 800;
