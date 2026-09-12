@@ -358,6 +358,27 @@
   #jv-feed #jv-side-log { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
   #jv-feed #jv-cues { flex: 0 0 auto; }
   #jv-feed #jv-input-wrap { flex: 0 0 auto; }
+
+  /* Trimmed transcript: only the last exchange shows until "Show all".
+     Expanded, the transcript takes the column and the black hole steps
+     aside (the top-bar mark still shows the state). Phones in landscape
+     keep the whole transcript: there is no room for the black hole. */
+  #jv-side-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .jv-tx-toggle { font: 700 10.5px/1 var(--font-display); letter-spacing: .14em; text-transform: uppercase;
+    color: var(--holo); background: transparent; border: 1px solid var(--hairline); border-radius: 999px;
+    padding: 5px 9px; cursor: pointer; }
+  .jv-tx-toggle:hover { background: color-mix(in srgb, var(--holo) 12%, transparent); }
+  .jv-tx-toggle:focus-visible { outline: 2px solid var(--holo); outline-offset: 2px; }
+  .jv-tx-toggle[hidden] { display: none; }
+  @media not all and (pointer: coarse) and (max-height: 500px) {
+    html:not(.jv-tx-all) #jv-side-log > .jv-line:not(:nth-last-child(-n+2)) { display: none; }
+    html:not(.jv-tx-all) #jv-feed { min-height: 0; }
+    html:not(.jv-tx-all) #jv-feed #jv-side-log { flex: 0 1 auto; }
+  }
+  html.jv-tx-all #cy-stage { display: none; }
+  html.jv-tx-all #jv-center .jv-spacer { display: none; }
+  html.jv-tx-all #jv-center { align-self: stretch; }
+  html.jv-tx-all #jv-feed { flex: 1 1 auto; max-height: none; }
   #jv-side-log { flex: 1 1 auto; overflow-y: auto; pointer-events: auto;
     display: flex; flex-direction: column; gap: 5px; padding-right: 4px;
     scrollbar-width: thin;
@@ -567,8 +588,11 @@
     #jv-pill-net.offline { display: inline-flex; padding: 6px 9px; letter-spacing: .1em; }
     #jv-actions { margin-left: auto; }
     #jv-center { align-self: stretch; margin-bottom: max(8px, env(safe-area-inset-bottom)); }
-    #jv-center .jv-spacer { display: none; }
-    #jv-feed { flex: 1 1 auto; min-height: 0; max-height: none; }
+    /* The spacer takes the free height, so the trimmed transcript sits at
+       the bottom and the black hole shows above it. Two ids: the base
+       .jv-spacer rule comes later in the file and would win a tie. */
+    #jv-shell #jv-center .jv-spacer { flex: 1 1 auto; height: auto; min-height: 0; max-height: none; }
+    #jv-feed { flex: 0 1 auto; min-height: 0; max-height: none; }
   }
   #jv-center .jv-spacer { flex: 0 0 auto; height: 15vh; min-height: 100px; max-height: 200px; }
 
@@ -713,6 +737,7 @@
     #jv-center { align-self: stretch; margin: 0 0 6px; }
     #jv-center .jv-spacer { display: none; }
     #jv-feed { flex: 1 1 auto; min-height: 0; max-height: none; }
+    #cy-stage, .jv-tx-toggle { display: none; }
   }
 
   /* Desktop app (Electron): one window, three sizes (ELECTRON_PLAN.md,
@@ -861,7 +886,9 @@
       <div class="jv-spacer"></div>
       <div id="jv-feed" class="jv-sec">
         <div id="jv-gate"></div>
-        <div id="jv-side-head">Transcript</div>
+        <div id="jv-side-head"><span id="jv-tx-label">Transcript</span>
+          <button id="jv-tx-toggle" class="jv-tx-toggle" type="button" aria-controls="jv-side-log"
+                  aria-expanded="false" hidden>Show all</button></div>
         <div id="jv-side-log"></div>
         <div id="jv-cues" style="margin-top:8px"></div>
         <div id="jv-input-wrap" style="margin-top:10px">
@@ -1403,6 +1430,30 @@
       })
       .catch(function () { setVal(stBrain, 'unreachable', 'bad'); syncBrainPill(); });
   }
+
+  // ---------------------------------------------------------------- transcript
+  // Only the last exchange shows until "Show all" (CSS hides the rest); the
+  // button counts the messages and flips to "Show less".
+  var txToggle = document.getElementById('jv-tx-toggle');
+  var txLabel = document.getElementById('jv-tx-label');
+
+  function syncTranscriptToggle() {
+    var n = chatLog ? chatLog.querySelectorAll('.jv-line:not(.jv-provisional)').length : 0;
+    var all = document.documentElement.classList.contains('jv-tx-all');
+    txToggle.hidden = n <= 2 && !all;
+    txToggle.textContent = all ? 'Show less' : 'Show all ' + n;
+    txToggle.setAttribute('aria-expanded', all ? 'true' : 'false');
+    txLabel.textContent = all ? 'Transcript · ' + n + (n === 1 ? ' message' : ' messages')
+      : (n ? 'Last exchange' : 'Transcript');
+  }
+
+  txToggle.onclick = function () {
+    document.documentElement.classList.toggle('jv-tx-all');
+    syncTranscriptToggle();
+    if (chatLog) chatLog.scrollTop = chatLog.scrollHeight;
+  };
+  if (chatLog) new MutationObserver(syncTranscriptToggle).observe(chatLog, { childList: true });
+  syncTranscriptToggle();
 
   // ---------------------------------------------------------------- desktop app
   // The shell tells the page which of its three sizes it is in; the page lays
