@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>JARVIS — Apps</title>
+<title>Cygnus — Apps</title>
 <style>
   :root {
     --bg: #0d0d11;
@@ -449,7 +449,7 @@
       <div class="top-row">
         <div class="title">
           <h1>Apps</h1>
-          <p>Installed apps, websites and capabilities JARVIS can act on</p>
+          <p>Installed apps, websites and capabilities Cygnus can act on</p>
         </div>
         <div class="spacer"></div>
         <div class="stats" aria-label="Summary">
@@ -527,7 +527,7 @@
     <div class="dr-body">
       <div id="app-secs">
       <section class="sec" id="sec-abilities">
-        <div class="sec-h"><h3>What JARVIS can do here</h3><span class="count" id="ab-count"></span>
+        <div class="sec-h"><h3>What Cygnus can do here</h3><span class="count" id="ab-count"></span>
           <button class="link-btn" id="ab-scan" title="Opens the app if needed, reads its buttons, then closes it again">Scan this app</button></div>
         <div class="progress" id="ab-progress" role="status" aria-live="polite" hidden>
           <div class="progress-bar"><span></span></div><div class="progress-text"></div>
@@ -538,14 +538,14 @@
       <section class="sec" id="sec-voice">
         <div class="sec-h">
           <h3>Voice Rule Setup</h3>
-          <span class="sub">Type a command, then tell JARVIS what it should do. JARVIS works out the rule with AI.</span>
+          <span class="sub">Type a command, then tell Cygnus what it should do. Cygnus works out the rule with AI.</span>
         </div>
         <div class="thread" id="v-thread"></div>
         <div class="progress" id="v-progress" role="status" aria-live="polite" hidden>
           <div class="progress-bar"><span></span></div><div class="progress-text"></div>
         </div>
         <div class="ask" id="v-clarify" hidden>
-          <div class="ask-top"><span class="who">JARVIS</span><span class="ask-state" id="v-state"></span></div>
+          <div class="ask-top"><span class="who">Cygnus</span><span class="ask-state" id="v-state"></span></div>
           <div class="v-question question"></div>
           <pre class="v-proposal proposal-text" hidden></pre>
           <div class="composer">
@@ -579,13 +579,13 @@
         <textarea class="drafts" id="drafts" spellcheck="false" placeholder="search movies in brave -> search hollymoviehd.cc for the name&#10;never play explicit tracks even if I ask"></textarea>
         <div class="btn-row">
           <button class="btn btn-sm" id="d-save">Save rules</button>
-          <button class="btn btn-sm btn-quiet" id="d-compile">Compile with JARVIS</button>
+          <button class="btn btn-sm btn-quiet" id="d-compile">Compile with Cygnus</button>
         </div>
         <div class="progress" id="d-progress" role="status" aria-live="polite" hidden>
           <div class="progress-bar"><span></span></div><div class="progress-text"></div>
         </div>
         <div class="proposal" id="proposal" hidden>
-          <div class="sec-h"><h3>JARVIS proposal</h3></div>
+          <div class="sec-h"><h3>Cygnus proposal</h3></div>
           <pre class="prop-body"></pre>
           <div class="prop-q"></div>
           <button class="btn btn-sm btn-primary" id="d-accept">Accept proposal</button>
@@ -721,7 +721,7 @@ async function loadApps() {
     const byKey = new Map(S.all.map(a => [a.key, a]));
     S.curated = (data.curated || data.apps || []).map(a => byKey.get(a.key) || a);
   } catch (e) {
-    S.error = "JARVIS didn't answer. Check that the server is running, then retry.";
+    S.error = "Cygnus didn't answer. Check that the server is running, then retry.";
   }
   S.loading = false;
   $("#refresh").classList.remove("spinning");
@@ -842,7 +842,7 @@ function rowHtml(a) {
       <span class="meta">${escapeHtml(metaOf(a))}</span>
     </button>
     <div class="aux">
-      ${(a.abilities || []).length ? `<span class="rules-chip" title="What JARVIS can do here">${(a.abilities || []).length} abilities</span>` : ""}
+      ${(a.abilities || []).length ? `<span class="rules-chip" title="What Cygnus can do here">${(a.abilities || []).length} abilities</span>` : ""}
       ${rules ? `<span class="rules-chip" title="Active rules">${svg("shield", 12)}${rules} rule${rules > 1 ? "s" : ""}</span>` : ""}
       ${k !== "app" || a.broken ? `<span class="pill ${st.cls}"${brokenWhy ? ` title="${escapeHtml(brokenWhy)}"` : ""}>${st.label}</span>` : ""}
     </div>
@@ -1034,7 +1034,7 @@ function renderInfo(a, k) {
     rows.push(["Tools", chips(a.tools || [])]);
     rows.push(["Runtime", escapeHtml(a.adapter || "local")]);
     rows.push(["Priority", escapeHtml(a.priority || 0)]);
-    note = "Capabilities are tasks JARVIS can delegate. They're listed for reference and can't be edited here.";
+    note = "Capabilities are tasks Cygnus can delegate. They're listed for reference and can't be edited here.";
   }
   $("#sec-info").innerHTML =
     `<div class="sec-h"><h3>Details</h3></div>` +
@@ -1061,7 +1061,7 @@ function renderCurrentRules(rules) {
   $("#rules-count").textContent = rules.length || "";
   $("#rules-clear").hidden = !rules.length;
   if (!rules.length) {
-    box.innerHTML = '<div class="empty-mini">No rules set yet. Describe one above and JARVIS will set it up.</div>';
+    box.innerHTML = '<div class="empty-mini">No rules set yet. Describe one above and Cygnus will set it up.</div>';
     return;
   }
   box.innerHTML = rules.map(r => `<div class="rule">
@@ -1165,7 +1165,7 @@ function say(who, text, tone) {
 
 function renderThread() {
   $("#v-thread").innerHTML = DR.thread.map(m =>
-    `<div class="bubble ${m.who} ${m.tone}">${m.who === "jarvis" ? '<span class="who">JARVIS</span>' : ""}` +
+    `<div class="bubble ${m.who} ${m.tone}">${m.who === "jarvis" ? '<span class="who">Cygnus</span>' : ""}` +
     `${escapeHtml(m.text)}</div>`).join("");
 }
 
@@ -1226,7 +1226,7 @@ async function voiceBegin(key, btn) {
   } catch (e) {}
   stop();
   setBusy(btn, false);
-  if (!res || !res.ok) { toast(d.error || "JARVIS couldn't read that rule", "err"); return; }
+  if (!res || !res.ok) { toast(d.error || "Cygnus couldn't read that rule", "err"); return; }
   input.value = "";
   say("user", phrase);
   voiceStep(d);
@@ -1376,7 +1376,7 @@ async function appsJob(url, body, label, btn) {
   } catch (e) {}
   stop();
   setBusy(btn, false);
-  if (!res || !res.ok) { toast(d.error || "That didn't work. Check that JARVIS is running.", "err"); return null; }
+  if (!res || !res.ok) { toast(d.error || "That didn't work. Check that Cygnus is running.", "err"); return null; }
   await loadApps();
   return d;
 }
@@ -1486,7 +1486,7 @@ async function renderShadow() {
   try {
     [d, p] = await Promise.all([fetch("/shadow/review").then(r => r.json()), fetch("/prefs").then(r => r.json())]);
   } catch (e) {
-    list.innerHTML = emptyState("Couldn't load shadow review", "JARVIS didn't answer. Check that the server is running.", "retry", "Retry");
+    list.innerHTML = emptyState("Couldn't load shadow review", "Cygnus didn't answer. Check that the server is running.", "retry", "Retry");
     return;
   }
   if (S.tab !== "shadow") return;
@@ -1500,26 +1500,26 @@ async function renderShadow() {
   let html = `<div class="sh-stats">
       <span><b>${s.turns || 0}</b> commands watched</span>
       <span><b>${s.agreed || 0}</b> same decision</span>
-      <span><b>${Math.round((s.agreement_where_old_right || 0) * 100)}%</b> agreement where JARVIS was right</span>
-      <span><b>${s.new_right || 0}</b> new router right · <b>${s.old_right || 0}</b> JARVIS right · <b>${s.both_wrong || 0}</b> both wrong</span>
+      <span><b>${Math.round((s.agreement_where_old_right || 0) * 100)}%</b> agreement where Cygnus was right</span>
+      <span><b>${s.new_right || 0}</b> new router right · <b>${s.old_right || 0}</b> Cygnus right · <b>${s.both_wrong || 0}</b> both wrong</span>
       <span><b>${s.unsafe || 0}</b> unsafe</span>
       <span>${readiness}</span>
     </div>
     <div class="sh-block"><h3>Learned defaults</h3>${prefs.length ? prefs.map(([topic, v]) =>
       `<div class="sh-pref"><span><b>${escapeHtml(topic)}</b> → ${escapeHtml([v.site, v.browser && "in " + v.browser, v.app].filter(Boolean).join(" "))}</span>
        <button class="btn btn-sm btn-quiet" data-forget="${escapeHtml(topic)}">Forget</button></div>`).join("")
-      : '<div class="empty-mini">None yet. After you use the same site or app for the same thing three times, JARVIS asks whether to make it the default.</div>'}</div>`;
+      : '<div class="empty-mini">None yet. After you use the same site or app for the same thing three times, Cygnus asks whether to make it the default.</div>'}</div>`;
   if (!items.length) {
-    html += '<div class="empty-mini">No disagreements yet. Use JARVIS as usual; every command is compared in the background.</div>';
+    html += '<div class="empty-mini">No disagreements yet. Use Cygnus as usual; every command is compared in the background.</div>';
   } else {
     html += items.map(x => {
       const btn = (v, label) => `<button class="btn btn-sm${x.verdict === v ? " is-chosen" : ""}" data-verdict="${v}" data-sid="${escapeHtml(x.id)}">${label}</button>`;
       return `<div class="sh-card">
         <div class="sh-row"><span>You said</span><span>“${escapeHtml(x.user)}”</span></div>
-        <div class="sh-row"><span>JARVIS did</span><span>${escapeHtml(describeRoute(x.actual))}${x.reply ? ` — “${escapeHtml(x.reply.slice(0, 140))}”` : ""}</span></div>
+        <div class="sh-row"><span>Cygnus did</span><span>${escapeHtml(describeRoute(x.actual))}${x.reply ? ` — “${escapeHtml(x.reply.slice(0, 140))}”` : ""}</span></div>
         <div class="sh-row"><span>New router would</span><span>${escapeHtml(describeRoute(x.decision))}${x.reason ? ` — ${escapeHtml(x.reason)}` : ""} <span class="muted">(${Math.round((x.confidence || 0) * 100)}% sure)</span></span></div>
         <div class="sh-row"><span>When</span><span>${escapeHtml(x.ts || "")}</span></div>
-        <div class="sh-verdicts">${btn("old", "JARVIS was right")}${btn("new", "New router was right")}${btn("neither", "Both wrong")}</div>
+        <div class="sh-verdicts">${btn("old", "Cygnus was right")}${btn("new", "New router was right")}${btn("neither", "Both wrong")}</div>
       </div>`;
     }).join("");
   }

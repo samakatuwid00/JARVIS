@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
-<title>JARVIS HUD — Voice</title>
+<title>Cygnus</title>
 <link rel="manifest" href="/manifest.webmanifest">
 <meta name="theme-color" content="#05070c">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -714,7 +714,7 @@
 
   <div id="jv-shell">
     <header id="jv-topbar" style="grid-column: 1 / -1">
-      <span id="jv-brand">J.A.R.V.I.S.</span>
+      <span id="jv-brand">CYGNUS</span>
       <span id="jv-dot"></span>
       <span id="jv-status">BOOTING…</span>
       <span id="jv-level"><i></i></span>
@@ -725,7 +725,7 @@
       <span id="jv-actions" style="display:flex; gap:8px">
         <button id="jv-panels" class="jv-btn" type="button" aria-label="Panels" aria-controls="jv-drawer"
                 aria-expanded="false"><svg class="jv-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg><span class="jv-btn-label">Panels</span><span id="jv-panels-badge" hidden></span></button>
-        <button id="jv-apps" class="jv-btn" type="button" aria-label="Apps" title="Apps JARVIS can open"><svg class="jv-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg><span class="jv-btn-label">Apps</span></button>
+        <button id="jv-apps" class="jv-btn" type="button" aria-label="Apps" title="Apps Cygnus can open"><svg class="jv-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg><span class="jv-btn-label">Apps</span></button>
         <span id="jv-desk-ctl" hidden><button id="jv-desk-expand" class="jv-btn" type="button" aria-label="Full HUD"
                 title="Full HUD">&#x2922;</button><button id="jv-desk-mini" class="jv-btn" type="button"
                 aria-label="Mini orb" title="Mini orb">&minus;</button></span>
@@ -780,7 +780,7 @@
         <div id="jv-cues" style="margin-top:8px"></div>
         <div id="jv-input-wrap" style="margin-top:10px">
           <input id="jv-input" type="text" autocomplete="off" spellcheck="false"
-                 placeholder="SPEAK TO J.A.R.V.I.S. - TYPE, THEN PRESS ENTER" />
+                 placeholder="SPEAK TO CYGNUS - TYPE, THEN PRESS ENTER" />
         </div>
       </div>
     </main>
@@ -831,7 +831,7 @@
 
   <button id="jv-talk" type="button" aria-label="Tap to talk">Talk</button>
 
-  <div id="jv-mini-orb" role="button" aria-label="Open JARVIS panel"></div>
+  <div id="jv-mini-orb" role="button" aria-label="Open Cygnus panel"></div>
 
   <div id="jv-drawer" role="dialog" aria-modal="true" aria-label="Panels">
     <div id="jv-drawer-card">
@@ -846,7 +846,7 @@
   <div id="jv-apps-modal">
     <div id="jv-apps-card">
       <div id="jv-apps-head">
-        <span id="jv-apps-title">JARVIS APPS</span>
+        <span id="jv-apps-title">CYGNUS APPS</span>
         <span id="jv-apps-count"></span>
         <button id="jv-apps-close" class="jv-btn">×</button>
       </div>
@@ -922,7 +922,7 @@
   var chatInput = document.getElementById('jv-input');
   var chatWrap = document.getElementById('jv-input-wrap');
   var rootStyle = document.documentElement.style;
-  var PLACEHOLDER = 'SPEAK TO J.A.R.V.I.S. - TYPE, THEN PRESS ENTER';
+  var PLACEHOLDER = 'SPEAK TO CYGNUS - TYPE, THEN PRESS ENTER';
   // Phones get tap-to-talk instead of the always-on wake listener (see #jv-talk).
   var IS_MOBILE = /Android|iPhone|iPad/i.test(navigator.userAgent) ||
                   (window.matchMedia && matchMedia('(pointer: coarse) and (max-width: 900px)').matches);
@@ -933,7 +933,7 @@
   var IS_DESKTOP = /\bElectron\//.test(navigator.userAgent);
   if ((IS_MOBILE || IS_DESKTOP) && talkBtn) talkBtn.classList.add('show');
   // The phone and the desktop panel are narrow; the long hint gets cut off.
-  if (IS_MOBILE || IS_DESKTOP) { PLACEHOLDER = 'TYPE TO JARVIS…'; chatInput.placeholder = PLACEHOLDER; }
+  if (IS_MOBILE || IS_DESKTOP) { PLACEHOLDER = 'TYPE TO CYGNUS…'; chatInput.placeholder = PLACEHOLDER; }
 
   // ---------------------------------------------------------------- hud link
   // The HUD artifact re-sets `--spd` on ITS OWN documentElement on every render,

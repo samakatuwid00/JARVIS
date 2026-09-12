@@ -1,4 +1,4 @@
-// JARVIS desktop shell: a tray icon, Ctrl+Alt+J, and one window that switches
+// Cygnus desktop shell: a tray icon, Ctrl+Alt+J, and one window that switches
 // between a sticky panel, the full HUD and a mini orb (modelled on Sticky
 // Brain). The backend stays in the repo: this process starts, watches and
 // stops it, or attaches to one already running (ELECTRON_PLAN.md, phase 2
@@ -80,7 +80,8 @@ function probe () {
     const req = http.get(HUD_URL, { timeout: 1500 }, res => {
       let body = ''
       res.on('data', chunk => { if (body.length < 4096) body += chunk })
-      res.on('end', () => resolve(res.statusCode === 200 && body.includes('JARVIS HUD') ? 'jarvis' : 'other'))
+      // The HUD's own shell element, not its title: the title is branding.
+      res.on('end', () => resolve(res.statusCode === 200 && body.includes('id="jv-shell"') ? 'jarvis' : 'other'))
     })
     req.on('timeout', () => req.destroy())
     req.on('error', () => resolve('free'))
@@ -162,7 +163,7 @@ function onBackendExit (code) {
   }
   restartTimes.push(now)
   setBackend('starting', `The backend exited (code ${code}); starting it again.`)
-  showStatusPage('JARVIS stopped unexpectedly. Starting it again…')
+  showStatusPage('Cygnus stopped unexpectedly. Starting it again…')
   setTimeout(startBackend, 2000)
 }
 
@@ -170,7 +171,7 @@ function onBackendExit (code) {
 function startFresh () {
   restartTimes = []
   setBackend('starting')
-  showStatusPage('Starting JARVIS…')
+  showStatusPage('Starting Cygnus…')
   startBackend()
 }
 
@@ -201,7 +202,7 @@ async function restartBackend () {
   if (backend.attached) return
   stopBackend()
   setBackend('starting')
-  showStatusPage('Restarting JARVIS…')
+  showStatusPage('Restarting Cygnus…')
   await new Promise(resolve => setTimeout(resolve, 1000))
   await startBackend()
 }
@@ -285,7 +286,7 @@ function createWindow () {
     ...stickyBounds,
     minWidth: STICKY.minWidth,
     minHeight: STICKY.minHeight,
-    title: 'JARVIS',
+    title: 'Cygnus',
     frame: false,
     transparent: true,
     backgroundColor: '#00000000',
@@ -309,7 +310,7 @@ function createWindow () {
   // pet; quitting is a tray decision.
   win.on('close', event => { if (!quitting) { event.preventDefault(); setMode('mini') } })
   win.once('ready-to-show', () => { if (!startHidden) win.show() })
-  showStatusPage('Starting JARVIS…')
+  showStatusPage('Starting Cygnus…')
 }
 
 // The window only ever shows JARVIS. Other pages open in the default browser,
@@ -400,7 +401,7 @@ function buildTrayMenu () {
   const status = trayStatus()
   const warnings = checks || []
   const ready = backend.state === 'ready'
-  tray.setToolTip(`JARVIS (${status})${warnings.length ? `, ${warnings.length} warning(s)` : ''}${isDev ? ' [dev]' : ''}`)
+  tray.setToolTip(`Cygnus (${status})${warnings.length ? `, ${warnings.length} warning(s)` : ''}${isDev ? ' [dev]' : ''}`)
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: status, enabled: false },
     ...warnings.map(w => ({ label: `⚠ ${w}`, enabled: false })),
@@ -418,7 +419,7 @@ function buildTrayMenu () {
     },
     { label: 'Open backend log', click: () => shell.openPath(LOG_FILE) },
     { type: 'separator' },
-    { label: 'Quit JARVIS', click: () => { quitting = true; app.quit() } }
+    { label: 'Quit Cygnus', click: () => { quitting = true; app.quit() } }
   ]))
 }
 
@@ -440,7 +441,7 @@ function showTrayHintOnce () {
   const marker = path.join(app.getPath('userData'), 'tray-hint-shown')
   if (fs.existsSync(marker)) return
   tray.displayBalloon({
-    title: 'JARVIS is running',
+    title: 'Cygnus is running',
     content: 'Ctrl+Alt+J opens the panel. The tray icon may be under the ^ arrow on the taskbar; drag it onto the taskbar to keep it visible.'
   })
   try {

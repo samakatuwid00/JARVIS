@@ -771,7 +771,7 @@ async def get_manifest():
     """Lets Android Chrome install the HUD to the home screen (standalone,
     no browser bar). Icons are served below."""
     return JSONResponse({
-        "name": "JARVIS", "short_name": "JARVIS", "start_url": "/",
+        "name": "Cygnus", "short_name": "Cygnus", "start_url": "/",
         "display": "standalone", "background_color": "#05070c",
         "theme_color": "#05070c",
         "icons": [{"src": "/icon-192.png", "sizes": "192x192", "type": "image/png",

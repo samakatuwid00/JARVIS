@@ -1,8 +1,9 @@
 {
   "name": "jarvis-desktop",
+  "productName": "Cygnus",
   "version": "0.1.0",
   "private": true,
-  "description": "Tray icon, Ctrl+Alt+J and one window for the JARVIS HUD. The backend stays in the repo.",
+  "description": "Cygnus: tray icon, Ctrl+Alt+J and one window for the HUD. The backend stays in the repo.",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
