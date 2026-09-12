@@ -176,6 +176,31 @@ def test_a_down_model_hands_over_and_says_which_one_answered(monkeypatch):
     assert health.marked and health.marked[0][0] == "a"
 
 
+def test_an_empty_reply_is_a_failure_not_an_answer(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+    import openai
+    health = _Health(["cu/empty", "b"])
+    monkeypatch.setitem(sys.modules, "router_health", health)
+
+    def create(model, **kw):
+        msg = SimpleNamespace(content="" if model == "cu/empty" else "Blue, sir.", tool_calls=None)
+        return SimpleNamespace(choices=[SimpleNamespace(message=msg)], usage=None)
+
+    class Client:
+        def __init__(self, **kw):
+            self.chat = SimpleNamespace(completions=SimpleNamespace(create=create))
+    monkeypatch.setattr(openai, "OpenAI", Client)
+    monkeypatch.setattr(b._progress_local, "cb", None, raising=False)
+    monkeypatch.setattr(b._progress_local, "deadline", None, raising=False)
+    brain = object.__new__(b.JarvisBrain)
+    brain.conversation = [{"role": "user", "content": "what colour is the sky?"}]
+    brain.last_stats = {}
+    assert brain._think_router("what colour is the sky?") == "Blue, sir."
+    assert health.marked == [("cu/empty", "empty reply")]
+    assert brain.last_stats == {"model": "b", "switched_from": "cu/empty"}
+
+
 def test_the_switch_signal_goes_out_only_once_router_health_exists(monkeypatch):
     import sys
     heard = []

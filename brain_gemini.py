@@ -2561,9 +2561,11 @@ class JarvisBrain:
                         self.last_stats["switched_from"] = failed
                     return text
 
-                # inner loop ended with no answer from this model -> try next model
-                last_err = last_err or "no answer"
+                # No text and no tool call is a failure, not a reply: the cursor
+                # models answer 200 with empty content (2026-09-12).
+                last_err = "empty reply"
                 failed = model
+                _report_unhealthy(model, last_err)
                 continue
             except _RateLimited:
                 last_err = "rate-limited"
