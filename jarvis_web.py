@@ -1732,6 +1732,7 @@ async def websocket_endpoint(websocket: WebSocket):
         try:
             st = dict(getattr(brain, "last_stats", {}) or {})
             backend = st.get("backend") or brain.last_backend
+            _note_answering_model(st, backend)        # the top bar keeps it between turns
             line = _rh.answer_notice(st.get("model"), backend, _answered_by["who"])
             who = _rh.answering(st.get("model"), backend)
             if who:
@@ -2168,6 +2169,20 @@ async def websocket_endpoint(websocket: WebSocket):
             pass
 
 
+# The model that last answered a turn. A Hermes or tool turn records no model,
+# so the top bar fell back to the configured one ("Gemini 3.8 Flash") while
+# Big Pickle was the one answering (2026-09-12).
+_LAST_ANSWERED = {"model": None}
+
+
+def _note_answering_model(stats: dict, backend: str | None) -> None:
+    from config import OLLAMA_MODEL
+    if (stats or {}).get("model"):
+        _LAST_ANSWERED["model"] = stats["model"]
+    elif backend == "ollama":
+        _LAST_ANSWERED["model"] = OLLAMA_MODEL
+
+
 @app.get("/status")
 async def get_status():
     """Report the backend actually in use, not a hardcoded guess."""
@@ -2193,7 +2208,9 @@ async def get_status():
     # "brain" used to report the configured router model even when a different
     # backend answered, so the HUD showed brain=ag/claude-sonnet-4-6 next to
     # answered-by=ollama and looked self-contradictory. Report what actually ran.
-    actual = (getattr(brain, "last_stats", {}) or {}).get("model")
+    _st = getattr(brain, "last_stats", {}) or {}
+    _note_answering_model(_st, _st.get("backend") or getattr(brain, "last_backend", None))
+    actual = _st.get("model") or _LAST_ANSWERED["model"]
     # Route reflects the actual chain: router -> cerebras -> groq -> local.
     # Gemini is intentionally omitted (reserved for portfolio work).
     if getattr(brain, "_local_only", False):

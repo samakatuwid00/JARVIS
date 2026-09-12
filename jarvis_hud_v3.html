@@ -2233,7 +2233,20 @@
     card.querySelectorAll('.job-btn').forEach(function (b) { b.disabled = true; });
     chatInput.value = word; autosizeInput(); sendTyped();
   }
+  // A job is created "queued" and, when it needs a confirm, turns "waiting on
+  // confirm" a moment later: drawn at once, its card flashed Working before
+  // Needs you. A brand-new queued card waits briefly for the next event.
+  var queuedWait = {};                    // id -> timer
+  var QUEUED_WAIT_MS = 400;
   function renderJobCard(ev) {
+    if (queuedWait[ev.id]) { clearTimeout(queuedWait[ev.id]); delete queuedWait[ev.id]; }
+    if (ev.state === 'queued' && !jobCards[ev.id] && !ev._waited) {
+      queuedWait[ev.id] = setTimeout(function () {
+        delete queuedWait[ev.id];
+        renderJobCard(Object.assign({}, ev, { _waited: true }));
+      }, QUEUED_WAIT_MS);
+      return;
+    }
     var tone = ev.tone || legacyJobTone(ev.state);
     if (tone === 'gone') { dropJobCard(ev.id); return; }
     var name = ev.title || ev.task || 'Task';
