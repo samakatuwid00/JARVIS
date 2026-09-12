@@ -55,6 +55,16 @@ def test_a_long_title_ends_once():
     assert "…. " not in pr.for_user(raw) and "… Say confirm" in pr.for_user(raw)
 
 
+def test_thanks_keeps_its_answer():
+    assert pr.tidy("You're welcome, sir.") == "You're welcome, sir."
+    assert pr.tidy("Absolutely, sir.") == "Absolutely, sir."
+
+
+def test_tidy_still_drops_machine_tics_and_dashes():
+    assert pr.tidy("Great question! The answer is 4 — easy.") == "The answer is 4, easy."
+    assert pr.tidy("⟳ HERMES_BACKGROUND: On it, sir (job c6112ad0)") == "On it, sir"
+
+
 def test_ordinary_replies_are_untouched():
     assert pr.for_user("Your name is Roger, sir.") == "Your name is Roger, sir."
 

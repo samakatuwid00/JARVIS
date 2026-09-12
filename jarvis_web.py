@@ -405,24 +405,8 @@ def decode_audio_to_wav(audio_bytes: bytes) -> str:
 
 import re as _re
 
-# Lightweight P0 anti-AI-ism filter (mirrors the avoid-ai-writing skill's quick-wins).
-# Regex-only, microseconds of work, so it adds no latency to JARVIS's spoken replies.
-# It runs on every reply right before TTS (see tts_to_b64). It does NOT rewrite prose
-# (the full skill is for long-form); it only strips the worst machine tics the voice
-# model might still emit.
-_AI_ARTIFACT_PATTERNS = [
-    # chatbot pleasantries (punctuation inside the match so trailing \b isn't needed)
-    _re.compile(r"\b(great question[!.]?|i hope this helps[!.]?|absolutely[!.]?|"
-                r"certainly[!.]?|you'?re welcome[!.]?|feel free to (?:ask|reach out)|"
-                r"let me know if you need anything)\b", _re.IGNORECASE),
-    # filler openers
-    _re.compile(r"\b(let's explore|let's dive in|let's break this down|let me break this down)\b",
-                _re.IGNORECASE),
-    # significance inflation on routine facts
-    _re.compile(r"\b(a pivotal moment|a game-?changer|a watershed moment|the future looks bright|"
-                r"only time will tell)\b", _re.IGNORECASE),
-]
-_EM_DASH = _re.compile(r"—|--")  # em dash and double-hyphen
+# The anti-AI-ism filter (machine tics, em dashes) lives in plain_reply.tidy
+# with the rest of the outgoing-text cleanup, where it is tested.
 
 
 def strip_ai_artifacts(text: str) -> str:
@@ -431,24 +415,11 @@ def strip_ai_artifacts(text: str) -> str:
     Removes chatbot artifacts and filler openers entirely, and converts em dashes /
     double-hyphens to a comma so speech does not stumble on a dash. Leaves already-clean,
     brisk replies untouched. Does not alter meaning."""
-    if not text:
-        return text
-    # Internal markers, job ids and Markdown out first (plain_reply.py). Only
-    # here, where replies leave the server: brain.think's own return value keeps
-    # its markers for the command chain.
+    # Internal markers, job ids, Markdown and machine tics out (plain_reply.py).
+    # Only here, where replies leave the server: brain.think's own return value
+    # keeps its markers for the command chain.
     import plain_reply
-    text = plain_reply.for_user(text)
-    for pat in _AI_ARTIFACT_PATTERNS:
-        text = pat.sub("", text)
-    # em dash / double-hyphen -> comma (read naturally)
-    text = _EM_DASH.sub(",", text)
-    # tidy the spaces left by removed phrases: collapse 2+ spaces, and " ," -> ","
-    text = _re.sub(r"\s{2,}", " ", text)
-    text = _re.sub(r"\s+,", ",", text)
-    text = text.strip()
-    # drop a leading comma/space that a removed opener may have left
-    text = _re.sub(r"^[\s,]+", "", text)
-    return text
+    return plain_reply.tidy(text)
 
 
 # ---------------------------------------------------------------------------

@@ -87,6 +87,40 @@ def for_user(text):
     return "\n".join(l for l in t.splitlines() if not _NOISE_LINE.match(l)).strip()
 
 
+# The worst machine tics a model might still emit (from jarvis_web, where
+# they were stripped from speech only). "You're welcome" is not one: it is the
+# answer to "thank you", and removing it left a bare "sir." (2026-09-12).
+_AI_TICS = [
+    re.compile(r"\b(great question[!.]?|i hope this helps[!.]?|absolutely[!.]?|"
+               r"certainly[!.]?|feel free to (?:ask|reach out)|"
+               r"let me know if you need anything)\b", re.I),
+    re.compile(r"\b(let's explore|let's dive in|let's break this down|let me break this down)\b", re.I),
+    re.compile(r"\b(a pivotal moment|a game-?changer|a watershed moment|the future looks bright|"
+               r"only time will tell)\b", re.I),
+]
+_EM_DASH = re.compile(r"—|--")
+_ONLY_ADDRESS = re.compile(r"\W*(?:sir)?\W*", re.I)
+
+
+def _tidy_speech(text: str) -> str:
+    for pat in _AI_TICS:
+        text = pat.sub("", text)
+    text = _EM_DASH.sub(",", text)                  # a dash makes speech stumble
+    text = re.sub(r"\s{2,}", " ", text)
+    text = re.sub(r"\s+,", ",", text).strip()
+    return re.sub(r"^[\s,.!]+", "", text)             # what a removed opener left
+
+
+def tidy(text):
+    """for_user(), then the machine tics out. A reply that was nothing but a
+    tic ("Absolutely, sir.") is kept as it is rather than cut to "sir."."""
+    if not isinstance(text, str) or not text:
+        return text
+    plain = for_user(text)
+    tidied = _tidy_speech(plain)
+    return _EM_DASH.sub(",", plain) if _ONLY_ADDRESS.fullmatch(tidied) else tidied
+
+
 def pending_ask(text: str) -> str | None:
     """The question a result ends on ('Say proceed to launch…'), if any."""
     lines = [l.strip() for l in for_user(text or "").splitlines() if l.strip()]
