@@ -120,3 +120,21 @@ def test_old_turns_are_re_read_from_the_audit_trail():
     assert rebuilt[2]["actual"] == {"type": "chat", "id": None}           # a neighbour's open is not re-read
     assert re_.live_route(rebuilt[0]) == "music"
     assert [r["id"] for r in re_.false_disagreements(records, rebuilt)] == []
+
+
+def test_live_semantic_picks_are_scored_and_differences_listed():
+    gold = [{"text": "what is my name", "route": "recall_memory", "act": "question",
+             "shadow_ids": ["a"]}]
+    shadow = [{"id": "a", "user": "what is my name", "actual": {"type": "chat", "id": None},
+               "semantic": {"route": "recall_memory", "score": 0.93}},
+              {"id": "b", "user": "open github", "actual": {"type": "ability", "id": "open_site"},
+               "semantic": {"route": "open_site", "score": 0.75}},
+              {"id": "c", "user": "what is cygnus", "actual": {"type": "chat", "id": None},
+               "semantic": {"route": None, "score": 0.35}},
+              {"id": "d", "user": "no pick logged", "actual": {"type": "chat", "id": None}}]
+    s = re_.score_live_semantic(gold, shadow)
+    assert (s["turns"], s["labeled"]) == (3, 1)
+    assert s["semantic"]["hits"] == 1 and s["live"]["hits"] == 0
+    assert [d[0] for d in s["differ"]] == ["what is my name", "what is cygnus"]
+    out = re_.report_live_semantic(s)
+    assert "semantic recall_memory (0.93) / JARVIS chat" in out

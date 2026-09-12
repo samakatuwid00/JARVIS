@@ -336,6 +336,32 @@ def report_semantic(gold):
     return "\n".join(lines)
 
 
+def score_live_semantic(gold, shadow=None):
+    """On logged turns that carry a semantic pick: the semantic router and
+    JARVIS scored on the labeled ones, and every turn where they differ -
+    the ones worth labeling next."""
+    by_id = {sid: row for row in gold for sid in row.get("shadow_ids") or []}
+    records = rebuild_actual(load_jsonl(SHADOW), load_jsonl(AUDIT)) if shadow is None else shadow
+    records = [r for r in records if r.get("semantic")]
+    labeled = [(by_id[r["id"]], r) for r in records if r.get("id") in by_id]
+    differ = [(r.get("user", ""), r["semantic"].get("route"), r["semantic"].get("score"), live_route(r))
+              for r in records if (r["semantic"].get("route") or "abstain") != live_route(r)]
+    return {"turns": len(records), "labeled": len(labeled), "differ": differ,
+            "semantic": score((row, r["semantic"].get("route") or "abstain") for row, r in labeled),
+            "live": score((row, live_route(r)) for row, r in labeled)}
+
+
+def report_live_semantic(s, misses=20):
+    lines = [f"\n== semantic picks on live turns: {s['turns']} turns, {s['labeled']} labeled"]
+    if s["labeled"]:
+        lines.append(f"  labeled turns: semantic {s['semantic']['accuracy']:.1%}, "
+                     f"JARVIS {s['live']['accuracy']:.1%}")
+    lines.append(f"  semantic and JARVIS differ on {len(s['differ'])} (label these next):")
+    for text, route, sc, did in s["differ"][:misses]:
+        lines.append(f"    semantic {route or 'abstain'} ({sc}) / JARVIS {did}: {text[:70]}")
+    return "\n".join(lines)
+
+
 def report(name, s, misses=20):
     lines = [f"\n== {name}: {s['hits']}/{s['n']} right ({s['accuracy']:.1%}); "
              f"questions acted on instead of answered: {len(s['acted_on'])}"]
@@ -381,6 +407,7 @@ def main(argv=None):
         logged = sum(1 for r in records if not r.get("agree"))
         print(f"\n{len(false)} of {logged} logged router disagreements agree once the turn's "
               "actions are re-read - no verdict needed for those")
+        print(report_live_semantic(score_live_semantic(gold), args.misses))
     if args.semantic:
         print(report_semantic(gold))
     return 0
