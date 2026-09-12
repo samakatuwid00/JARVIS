@@ -45,6 +45,8 @@ web_registry.json
 jarvis-profile.md
 # Tier-3 JARVIS session transcripts (everything said to JARVIS)
 sessions/
+# Routing eval labels: real utterances with their conversation context
+eval/routing_gold.jsonl
 # Capability manifest (leaks installed software inventory)
 capabilities.json
 # Local-only Manus cookie handoff (PRIVACY: never commit — like .env)

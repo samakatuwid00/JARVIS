@@ -337,8 +337,15 @@ def actual_route(entries, backend=None, stats=None):
             return {"type": "web_search", "app": None, "id": None}
         if tool == "open_site":
             return {"type": "ability", "app": None, "id": "open_site"}
-        if tool in ("play_music", "stop_music", "stop_spotify"):
+        # play_spotify (36 turns by 2026-09-12) and the brain's own Hermes
+        # hand-offs were missing here, so those turns were logged as chat and
+        # counted as disagreements the router never had.
+        if tool in ("play_music", "play_spotify", "stop_music", "stop_spotify"):
             return {"type": "ability", "app": "media", "id": tool}
+        if tool == "web_browse":
+            return {"type": "ability", "app": None, "id": "web_browse"}
+        if tool in ("delegate", "delegate_to_hermes", "run_autonomous"):
+            return {"type": "delegate", "app": None, "id": tool}
     if backend in ("hermes", "autonomous"):
         return {"type": "delegate", "app": None, "id": backend}
     return {"type": "chat", "app": None, "id": (stats or {}).get("intent")}
@@ -377,6 +384,16 @@ def turn_started(text):
     return {"text": text, "ts": time.time(), "audit_pos": pos, "snapshot": dialogue_state.snapshot()}
 
 
+def _semantic(text):
+    """The meaning-based router's pick for this turn - logged, never acted on."""
+    try:
+        import semantic_route
+        return semantic_route.shadow(text)
+    except Exception as e:
+        print(f"[shadow] semantic route failed: {type(e).__name__}: {e}", flush=True)
+        return None
+
+
 def turn_finished(started, reply, backend=None, stats=None, llm=None, background=True,
                   decided=None):
     """After the reply: record the turn, then log the router's decision next
@@ -402,6 +419,9 @@ def turn_finished(started, reply, backend=None, stats=None, llm=None, background
                 rec = {"decision": decision, "intent": intent, "confidence": confidence,
                        "reason": reason, "model": model, "ms": int((time.time() - t0) * 1000),
                        "mode": "shadow"}
+            semantic = _semantic(started["text"])
+            if semantic:
+                rec["semantic"] = semantic
             decision = rec.get("decision") or {}
             record = {"id": uuid.uuid4().hex[:12], "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
                       "user": started["text"], "reply": (reply or "")[:300],

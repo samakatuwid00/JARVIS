@@ -37,6 +37,8 @@ rich>=13.0.0
 #   kokoro-onnx            JARVIS_TTS_ENGINE=kokoro (models/kokoro)
 #   piper-tts              JARVIS_TTS_ENGINE=piper
 #   sentence-transformers  semantic memory search (pulls in PyTorch)
+#   model2vec              semantic router (numpy only; downloads
+#                          minishlab/potion-multilingual-128M on first use)
 #   pycaw                  lowering other apps' volume while JARVIS speaks
 #   python-docx            Word reports (report_agent)
 #   Pillow                 window screenshots (desktop_driver)

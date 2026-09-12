@@ -39,3 +39,6 @@ def offline_probe(monkeypatch, tmp_path_factory):
     import preferences
     dialogue_state.reset()
     monkeypatch.setattr(preferences, "_PATH", str(tmp_path_factory.mktemp("prefs") / "p.json"))
+    # The semantic router's model is ~0.5 GB; tests that need it fake it.
+    import semantic_route
+    monkeypatch.setattr(semantic_route, "MODE", "off")
