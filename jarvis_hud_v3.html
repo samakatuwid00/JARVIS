@@ -465,6 +465,14 @@
     background: rgba(7, 10, 14, .88); border: 1px solid var(--hairline);
     box-shadow: 0 14px 36px rgba(0, 0, 0, .4); backdrop-filter: blur(10px); }
   #jv-brand { font: 700 21px/1 var(--font-display); letter-spacing: .3em; color: var(--holo); }
+  /* Brand block: the black-hole mark (in the state's colour), the name, and
+     the status under it. */
+  #jv-brandblock { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 0 1 auto; }
+  #jv-mark { width: 32px; height: 32px; flex: 0 0 auto; overflow: visible; }
+  .jv-brandtext { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+  .jv-statusrow { display: flex; align-items: center; gap: 7px; min-width: 0; }
+  .jv-statusrow #jv-dot { width: 8px; height: 8px; }
+  .jv-statusrow #jv-status { font-size: 11px; letter-spacing: .18em; }
   .jv-pill { font: 700 10.5px/1 var(--font-display); letter-spacing: .16em; text-transform: uppercase;
     padding: 6px 12px; border-radius: 999px; border: 1px solid var(--hairline); color: #ffd9a0;
     display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
@@ -481,7 +489,7 @@
     text-overflow: ellipsis; }
   #jv-pill-brain { flex: 0 1 auto; min-width: 0; overflow: hidden; }
   #jv-pill-brain span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  #jv-brand, #jv-actions, .jv-pill:not(#jv-pill-brain) { flex-shrink: 0; }
+  #jv-actions, .jv-pill:not(#jv-pill-brain) { flex-shrink: 0; }
   @media (max-width: 1279px) { #jv-pill-voice, #jv-pill-fb { display: none; } }
 
   #jv-shell { position: relative; z-index: 35; display: grid; gap: 16px;
@@ -549,19 +557,15 @@
     #jv-shell { grid-template-columns: minmax(0, 1fr); gap: 8px; margin-top: 8px;
         height: calc(100vh - 8px); height: calc(100dvh - 8px); }
     #jv-col-left, #jv-col-right { display: none; }
-    /* Topbar on two rows: brand, dot, Online, Apps; then the status. */
-    #jv-topbar { flex-wrap: wrap; gap: 6px 8px; padding: 8px 12px; }
-    #jv-brand { font-size: 17px; letter-spacing: .14em; }
-    /* Icon-only Panels and Apps keep row one on a single line down to 360px. */
-    #jv-pill-net { padding: 6px 9px; letter-spacing: .1em; }
-    #jv-panels, #jv-apps { display: inline-flex; align-items: center; justify-content: center;
-        position: relative; width: 44px; height: 44px; padding: 0; }
-    .jv-btn-label { display: none; }
-    #jv-actions .jv-ico { display: block; }   /* id: the base .jv-ico rule comes later */
-    #jv-panels-badge { position: absolute; top: -5px; right: -5px; margin: 0; }
-    #jv-status { order: 10; flex: 1 0 100%; font-size: 11px; letter-spacing: .14em; }
-    #jv-pill-brain, #jv-pill-voice, #jv-pill-fb, #jv-level { display: none; }
-    #jv-pill-net { margin-left: auto; }
+    /* One row: the brand block and the tools. The Online pill only shows
+       when the link is down. */
+    #jv-topbar { gap: 8px; padding: 8px 10px 8px 12px; }
+    #jv-brand { font-size: 17px; letter-spacing: .2em; }
+    #jv-mark { width: 26px; height: 26px; }
+    .jv-statusrow #jv-status { font-size: 10.5px; letter-spacing: .14em; }
+    #jv-pill-net, #jv-pill-brain, #jv-pill-voice, #jv-pill-fb, #jv-level { display: none; }
+    #jv-pill-net.offline { display: inline-flex; padding: 6px 9px; letter-spacing: .1em; }
+    #jv-actions { margin-left: auto; }
     #jv-center { align-self: stretch; margin-bottom: max(8px, env(safe-area-inset-bottom)); }
     #jv-center .jv-spacer { display: none; }
     #jv-feed { flex: 1 1 auto; min-height: 0; max-height: none; }
@@ -650,12 +654,26 @@
      move in here (see placePanels): a right-hand sheet on tablets, a bottom
      sheet on phones. */
   #jv-panels { display: none; }
-  #jv-panels-badge { display: inline-block; min-width: 18px; height: 18px; margin-left: 6px;
-    padding: 0 5px; border-radius: 9px; background: var(--holo); color: #1a1005;
-    font: 700 10px/18px var(--font-data); letter-spacing: 0; text-align: center; }
+  #jv-panels-badge { position: absolute; top: -5px; right: -5px; min-width: 16px; height: 16px;
+    padding: 0 4px; border-radius: 8px; background: var(--holo); color: #1a1005;
+    font: 700 9.5px/16px var(--font-data); letter-spacing: 0; text-align: center; }
   #jv-panels-badge[hidden] { display: none; }
-  .jv-ico { display: none; width: 18px; height: 18px; fill: none; stroke: currentColor;
-    stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .jv-ico { display: block; width: 17px; height: 17px; fill: none; stroke: currentColor;
+    stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+  /* Top-bar tools in one pill: Cygnus's things (Panels, Apps), then, in the
+     desktop app, the window's things (full HUD, mini orb) after a divider. */
+  .jv-tools { display: inline-flex; align-items: center; gap: 2px; padding: 3px; border-radius: 10px;
+    border: 1px solid var(--hairline); background: color-mix(in srgb, var(--holo) 4%, transparent); }
+  .jv-tools .jv-btn { position: relative; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 7px;
+    display: inline-grid; place-items: center; color: #ffd9a0; }
+  .jv-tools .jv-btn:hover { background: color-mix(in srgb, var(--holo) 16%, transparent); }
+  .jv-tools .jv-btn[aria-expanded="true"] { background: color-mix(in srgb, var(--holo) 16%, transparent); color: var(--holo); }
+  .jv-tools .jv-btn-label { display: none; }
+  .jv-sep { width: 1px; height: 18px; background: var(--hairline); margin: 0 3px; }
+  .jv-sep[hidden] { display: none; }
+  #jv-desk-expand .i-panel { display: none; }
+  html[data-desk="expanded"] #jv-desk-expand .i-expand { display: none; }
+  html[data-desk="expanded"] #jv-desk-expand .i-panel { display: block; }
   #jv-drawer { position: fixed; inset: 0; z-index: 75; display: none;
     background: rgba(4, 6, 10, .6); backdrop-filter: blur(4px); }
   #jv-drawer.show { display: flex; justify-content: flex-end; align-items: stretch; }
@@ -700,14 +718,13 @@
   /* Desktop app (Electron): one window, three sizes (ELECTRON_PLAN.md,
      decision 2). The shell sets data-desk on <html>; the page only lays
      itself out for it. */
-  #jv-desk-ctl { display: inline-flex; gap: 6px; }
+  #jv-desk-ctl { display: inline-flex; gap: 2px; }
   #jv-desk-ctl[hidden] { display: none; }
-  #jv-desk-ctl .jv-btn { width: 32px; height: 32px; padding: 0; font-size: 16px; line-height: 1; }
-  html[data-desk] #jv-topbar { -webkit-app-region: drag; }
-  html[data-desk] #jv-topbar button { -webkit-app-region: no-drag; }
-  /* Sticky panel: the status dot and the tray already show the link, and
-     row one must fit two more buttons at 380px. */
-  @media (max-width: 700px) { html[data-desk] #jv-pill-net { display: none; } }
+  /* Only the brand block drags the desktop window. Windows claims a drag
+     region before the page sees the click, whatever lies on top of it, so
+     the whole-bar strip used to swallow the Apps window's close button. */
+  html[data-desk] #jv-brandblock { -webkit-app-region: drag; }
+  html[data-desk] #jv-apps-modal, html[data-desk] #jv-drawer { -webkit-app-region: no-drag; }
   #jv-mini-orb { display: none; }
   html[data-desk="mini"], html[data-desk="mini"] body { background: transparent !important; }
   html[data-desk="mini"] body > * { display: none !important; }
@@ -773,21 +790,31 @@
 
   <div id="jv-shell">
     <header id="jv-topbar" style="grid-column: 1 / -1">
-      <span id="jv-brand">CYGNUS</span>
-      <span id="jv-dot"></span>
-      <span id="jv-status">BOOTING…</span>
+      <!-- Brand block: the only part of the bar that drags the desktop window. -->
+      <div id="jv-brandblock">
+        <svg id="jv-mark" class="cy-idle" aria-hidden="true"><use href="#cy-bh"/></svg>
+        <div class="jv-brandtext">
+          <span id="jv-brand">CYGNUS</span>
+          <span class="jv-statusrow"><span id="jv-dot"></span><span id="jv-status">BOOTING…</span></span>
+        </div>
+      </div>
       <span id="jv-level"><i></i></span>
       <span class="jv-pill" id="jv-pill-net"><span>● …</span></span>
       <span class="jv-pill grow" id="jv-pill-brain"><i data-lucide="cpu"></i><span>BRAIN: …</span></span>
       <span class="jv-pill" id="jv-pill-voice"><i data-lucide="audio-lines"></i><span>VOICE: KOKORO</span></span>
       <span class="jv-pill" id="jv-pill-fb"><i data-lucide="volume-2"></i><span>FB: ESSENTIAL</span></span>
-      <span id="jv-actions" style="display:flex; gap:8px">
+      <span id="jv-actions" style="display:flex; gap:8px; align-items:center">
+        <span class="jv-tools">
         <button id="jv-panels" class="jv-btn" type="button" aria-label="Panels" aria-controls="jv-drawer"
                 aria-expanded="false"><svg class="jv-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg><span class="jv-btn-label">Panels</span><span id="jv-panels-badge" hidden></span></button>
         <button id="jv-apps" class="jv-btn" type="button" aria-label="Apps" title="Apps Cygnus can open"><svg class="jv-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg><span class="jv-btn-label">Apps</span></button>
+        <span class="jv-sep" id="jv-desk-sep" hidden></span>
         <span id="jv-desk-ctl" hidden><button id="jv-desk-expand" class="jv-btn" type="button" aria-label="Full HUD"
-                title="Full HUD">&#x2922;</button><button id="jv-desk-mini" class="jv-btn" type="button"
-                aria-label="Mini orb" title="Mini orb">&minus;</button></span>
+                title="Full HUD"><svg class="jv-ico i-expand" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/></svg><svg
+                class="jv-ico i-panel" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="3" width="10" height="18" rx="2.2"/><path d="M10 17h4"/></svg></button><button
+                id="jv-desk-mini" class="jv-btn" type="button" aria-label="Mini orb" title="Mini orb"><svg class="jv-ico" viewBox="0 0 24 24"
+                aria-hidden="true"><circle cx="12" cy="12" r="7.5"/><path d="M3.5 13.5c3-1.4 14-3.4 17-2.8"/></svg></button></span>
+        </span>
         <button id="jv-unlock" class="jv-btn">Activate audio</button>
         <button id="jv-retry" class="jv-btn">Enable mic</button>
       </span>
@@ -978,6 +1005,7 @@
   var endBtn = document.getElementById('jv-end');
   var miniOrb = document.getElementById('jv-mini-orb');
   var cyStage = document.getElementById('cy-stage');
+  var markEl = document.getElementById('jv-mark');
   var hud = document.getElementById('hud');
   // Transcript now renders in the HUD's right column; #jv-log is kept in the
   // DOM (hidden) so nothing that references it breaks.
@@ -1044,6 +1072,7 @@
       : st === 'speaking' ? 'cy-speak' : 'cy-idle';
     if (miniOrb) miniOrb.className = cyClass;
     if (cyStage) cyStage.className = cyClass;
+    if (markEl) markEl.setAttribute('class', cyClass);   // an <svg>: className is read-only
     // The chat bar's mic and the bar itself show it too, whatever started
     // the capture (wake word, hotkey or a tap).
     if (talkBtn) {
@@ -1401,6 +1430,7 @@
   if (IS_DESKTOP && window.jarvisDesktop) {
     var expandBtn = document.getElementById('jv-desk-expand');
     document.getElementById('jv-desk-ctl').hidden = false;
+    document.getElementById('jv-desk-sep').hidden = false;
     jarvisDesktop.onMode(function (m) {
       document.documentElement.setAttribute('data-desk', m);
       var label = m === 'expanded' ? 'Panel' : 'Full HUD';
