@@ -843,7 +843,7 @@ function rowHtml(a) {
     </div>
     <div class="ctl">${k === "app" ? switchHtml(enabled, "Enable " + a.name) : ""}</div>
     <div class="acts">
-      ${k !== "capability" ? '<button class="btn btn-sm" data-act="open">Open</button>' : ""}
+      ${k === "website" ? '<button class="btn btn-sm btn-site" data-act="open">Open site</button>' : (k !== "capability" ? '<button class="btn btn-sm" data-act="open">Open</button>' : "")}
       ${S.tab === "all" && k === "app" ? '<button class="btn btn-sm btn-quiet" data-act="hide">Hide</button>' : ""}
       <span class="chev">${svg("chevron", 14)}</span>
     </div>

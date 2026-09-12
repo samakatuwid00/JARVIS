@@ -3981,6 +3981,27 @@ def open_application(app: str, action: str = None, query: str = None,
 
     # 3) Launch the resolved binary / alias / raw name.
     cand = binp or target
+
+    # If no binary was resolved, check whether this is a website registered in
+    # web_registry.json. Websites carry a URL but no executable, so startfile()
+    # on the app name always fails with WinError 2. Route them to open_site().
+    if not binp:
+        if entry and entry.get("url"):
+            try:
+                return _open_url_in_browser(entry["url"], name)
+            except Exception as e:
+                return f"[Error] Could not open {name}: {e}"
+        try:
+            import web_registry as _wr
+            _sites = (_wr.load_registry() or {}).get("sites", {})
+            if requested.lower() in _sites:
+                return open_site(requested)
+            _sk = _wr.resolve_site(requested)
+            if _sk:
+                return open_site(requested)
+        except Exception:
+            pass
+
     try:
         if system == "Windows":
             _os.startfile(cand)

@@ -96,6 +96,14 @@ _WAKE_HOLD_MS = 30000
 # there never schedules the send, so every server wake reached nobody.
 _WS_LOOP = None
 _WS_LOOP_WARN_TS = 0.0
+# Cached set of website keys (populated at module load so /apps/open can route
+# websites to open_site() without first hitting GET /apps).
+_WEBSITE_KEYS = frozenset()
+try:
+    _wi, _ = _website_items()
+    _WEBSITE_KEYS = frozenset(i["key"] for i in _wi)
+except Exception:
+    pass
 
 
 def _wake_send_done(ws, fut):
@@ -741,6 +749,7 @@ def _website_items():
     Returns (items, hidden_count). Sites carry kind="website" and a `url`, so
     the panel can badge them and offer "Open Site" instead of a binary launch.
     """
+    global _WEBSITE_KEYS
     items, hidden = [], 0
     try:
         import web_registry as wr
@@ -770,6 +779,7 @@ def _website_items():
             "rule_drafts": site.get("rule_drafts") or [],
             "compiled_rules": site.get("compiled_rules") or [],
         })
+    _WEBSITE_KEYS = frozenset(i["key"] for i in items)
     return items, hidden
 
 
@@ -916,8 +926,13 @@ async def post_apps_open(message: Request):
     if not key:
         return JSONResponse({"error": "missing key"}, status_code=400)
     loop = asyncio.get_running_loop()
-    result = await loop.run_in_executor(
-        None, lambda: tools.execute_tool("open_application", {"app": key}))
+    # Websites carry kind="website" + url; open them via open_site, not open_application
+    # (which expects a binary and would fail on an empty bin with WinError 2).
+    if key in _WEBSITE_KEYS:
+        result = await loop.run_in_executor(None, lambda: tools.open_site(key))
+    else:
+        result = await loop.run_in_executor(
+            None, lambda: tools.execute_tool("open_application", {"app": key}))
     ok = not result.startswith("[Error]")
     return JSONResponse({"ok": ok, "result": result})
 
