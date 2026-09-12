@@ -50,6 +50,20 @@ def test_errors_are_worded_for_people():
                                 "Say 'scan installed software' so I pick up newly installed apps.")
 
 
+def test_a_failed_turn_is_told_plainly_never_as_the_exception():
+    assert pr.for_error(TimeoutError()) == "That took too long, so I stopped waiting."
+    assert pr.for_error("Read timed out.") == "That took too long, so I stopped waiting."
+    assert pr.for_error(ConnectionRefusedError("[WinError 10061] No connection could be made")) == \
+        "I couldn't reach a service I needed. The internet connection may be down."
+    assert pr.for_error(RuntimeError("429 RESOURCE_EXHAUSTED: quota exceeded")) == \
+        "The model service is busy or out of quota right now."
+    assert pr.for_error(ValueError("401 Unauthorized: API key not valid")) == \
+        "The model service turned down my key."
+    # A file permission error is not a refused key, and a bare KeyError says nothing.
+    for err in (PermissionError("[WinError 5] Access is denied"), KeyError("choices")):
+        assert pr.for_error(err) == "Something went wrong on my side while handling that."
+
+
 def test_a_long_title_ends_once():
     raw = f'[NEEDS_CONFIRM:1] x: "{MOBILE}, please fix it quickly and tell me" (job 1)'
     assert "…. " not in pr.for_user(raw) and "… Say confirm" in pr.for_user(raw)

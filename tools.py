@@ -1888,6 +1888,11 @@ _MUTATING_RE = re.compile(
     | \bget\s+rid\s+of\b
     """
 )
+# Verbs that change files when given as an instruction. Kept apart from
+# _MUTATING_RE so a question ("how do I fix my wifi?") still reads as chat.
+_CHANGE_RE = re.compile(
+    r"\b(fix|repair|patch|edit|modify|refactor|rewrite|redesign|restyle|tweak|adjust|"
+    r"improve|change|implement|resize|reposition|rearrange)\b", re.I)
 # Politeness and request framing before the real instruction: "please",
 # "can you", "I need you to", "go ahead and".
 _REQUEST_LEAD_RE = re.compile(
@@ -1984,6 +1989,11 @@ def _is_safe_task(task: str) -> bool:
         # destructive, costing a confirm + a 2-min Hermes round trip per chat turn.)
         if is_conversational(t):
             return True
+    # An instruction to fix or edit something changes files, whatever else it
+    # says: "... fix the chat buttons ... double check it" matched "check" on
+    # the allowlist and ran as a look-only job that only described the fix.
+    if _CHANGE_RE.search(t):
+        return False
     core = _REQUEST_LEAD_RE.sub("", t)
     return bool(_SAFE_ALLOWLIST_RE.search(t) or _SAFE_ALLOWLIST_RE.search(core))
 
@@ -2485,6 +2495,19 @@ def confirm_pending(on_done=None, progress_cb=None, background: bool | None = No
                    confirm=True, extra={"jid": kw.get("jid")})
         return _start_cli_job(kw["task"], kw["cli"], raw_task=kw.get("raw_task"),
                               on_done=on_done or kw.get("on_done"), jid=kw.get("jid"))
+    if kw.get("spec"):                   # an OpenCode specialist or Pi waited
+        _PENDING_HERMES_CALL = None
+        _PENDING_DESTRUCTIVE["task"] = None
+        _audit_log(f"delegate:{kw['spec']}", (kw.get("raw_task") or "")[:200], "confirmed",
+                   confirm=True, extra={"jid": kw.get("jid")})
+        if kw.get("jid"):
+            import jobs as _jobs
+            _jobs.update(kw["jid"], state="timeout",
+                         note="superseded — confirmed, running as a new job")
+        agent = None if kw["spec"] == "opencode" else kw["spec"]
+        bg = kw.get("background") if background is None else background
+        return _run_specialist_now(kw["task"], agent, kw.get("pi", False), kw.get("timeout", 300),
+                                   bg, on_done or kw.get("on_done"))
     superseded_jid = kw.get("jid")
     kw = {k: v for k, v in kw.items() if k not in ("jid", "ts")}
     if on_done is not None:
@@ -2839,6 +2862,12 @@ def _cli_registry() -> dict:
         return {}
 
 
+# What follows a helper's name when the user hands it work ("have Claude fix").
+_HANDOFF_VERBS = (r"(?:do|build|make|create|fix|write|code|handle|look|check|review|update|add|"
+                  r"change|set|work|tidy|clean|refactor|debug|implement|align|redesign|test|"
+                  r"run|finish|repair|patch|edit|improve)\b")
+
+
 def _explicit_cli_agent(task: str):
     """Detect 'using/via/with <cli-name>' for an external CLI tier.
 
@@ -2849,22 +2878,33 @@ def _explicit_cli_agent(task: str):
     # "using/via claude", and the ways people hand work over: "delegate this to
     # Claude", "hand it off to Claude", "have Claude Code fix ...". "ask Claude"
     # is left to ask_ai (it may mean the website), and "I have claude
-    # installed" does not count: "have X" needs a verb after it.
+    # installed" does not count: "have X" needs a verb after it. "delegate
+    # claude to fix ..." (no "to" before the name) went to Hermes on
+    # 2026-09-13, which only described the handoff.
+    # "..., use claude" (2026-09-13) and "ask/tell claude to fix ..." and
+    # "Claude, fix ..." hand work over too; "I use claude" and "ask claude
+    # what ..." do not.
     m = re.search(
-        r"\b(?:(?:using|via|with|through|delegate\s+(?:(?:this|it|that)\s+)?to|"
+        r"\b(?:(?:(?<!\bi\s)(?<!\bwe\s)(?<!\bthey\s)(?<!\bdo\syou\s)(?<!\bdid\syou\s)use|"
+        r"using|via|with|through|delegate(?:\s+(?:this|it|that))?(?:\s+to)?|"
         r"hand\s+(?:(?:this|it|that)\s+)?(?:off\s+)?to|give\s+(?:this|it|that)\s+to)\s+(?:the\s+)?"
         r"(?P<a>gemini(?:\s*cli)?|chatgpt(?:\s*cli)?|codex|claude(?:\s*code)?)\b"
-        r"|(?:have|let|get)\s+(?P<b>claude(?:\s*code)?|gemini(?:\s*cli)?|codex)\s+(?:to\s+)?"
-        r"(?=(?:do|build|make|create|fix|write|code|handle|look|check|review|update|add|change|"
-        r"set|work)\b))", task, re.I)
+        # "claude code" is one name: backtracking must not read its "code"
+        # as the verb ("ask claude code what time is it" is a question).
+        r"|(?:have|let|get|ask|tell)\s+(?P<b>claude(?:\s*code\b|(?!\s*code\b))|gemini(?:\s*cli)?|codex)"
+        r"\s+(?:to\s+)?"
+        rf"(?={_HANDOFF_VERBS})"
+        r"|^\s*(?:hey\s+)?(?P<c>claude(?:\s*code\b|(?!\s*code\b)))\s*[,:]\s*"
+        rf"(?={_HANDOFF_VERBS}))", task, re.I)
     if not m:
         return False, None, task
-    spoken = re.sub(r"\s+", " ", (m.group("a") or m.group("b")).lower().strip())
+    spoken = re.sub(r"\s+", " ", (m.group("a") or m.group("b") or m.group("c")).lower().strip())
     reg = _cli_registry()
     for key in reg:
         if spoken == key or spoken == f"{key} cli" or \
            (key == "claude" and spoken == "claude code"):
-            cleaned = (task[:m.start()] + " " + task[m.end():]).strip(" ,.()")
+            tail = re.sub(r"^\s*to\s+", " ", task[m.end():], flags=re.I)
+            cleaned = re.sub(r"\s+", " ", task[:m.start()] + " " + tail).strip(" ,.()")
             return True, key, (cleaned or task)
     return False, None, task
 
@@ -3008,7 +3048,12 @@ def _cli_delegate(task: str, name: str, raw_task: str = None, confirm: bool = Fa
     raw = (raw_task or task).strip()
     if _is_not_a_task(task):
         return _not_a_task_reply(raw)
-    if confirm or _is_safe_task(raw):
+    # The model's confirm=true releases only the confirm the user just heard
+    # for this very task. On its own it started Claude (acceptEdits) unasked.
+    pending = _PENDING_HERMES_CALL or {}
+    if confirm and pending.get("cli") == name and pending.get("task") == task:
+        return confirm_pending(on_done=on_done)
+    if _is_safe_task(raw):
         return _start_cli_job(task, name, raw_task=raw, on_done=on_done)
     label = _cli_label(name)
     jid = jobreg.create(raw[:200], tier="cli", agent=label, background=True)
@@ -3020,6 +3065,42 @@ def _cli_delegate(task: str, name: str, raw_task: str = None, confirm: bool = Fa
     _audit_log(f"delegate:{name}", raw[:200], "NEEDS_CONFIRM", extra={"jid": jid})
     return (f"[NEEDS_CONFIRM:{jid}] {label} may change files for this, so I'm asking first. "
             f"Say 'confirm' and I'll run it through {label}: \"{raw}\" (job {jid})")
+
+
+def _specialist_delegate(task: str, agent: str | None, raw_task: str = None, confirm: bool = False,
+                         pi: bool = False, timeout: int = 300, background: bool = False,
+                         on_done=None) -> str:
+    """Hand `task` to an OpenCode specialist (or the Pi sandbox) the way
+    _cli_delegate hands work to Claude: at once when it only looks, after the
+    user's confirm when it may change things. Before 2026-09-13 these ran with
+    no confirm at all."""
+    global _PENDING_HERMES_CALL
+    import jobs as jobreg
+    raw = (raw_task or task).strip()
+    pending = _PENDING_HERMES_CALL or {}
+    if confirm and pending.get("spec") and pending.get("task") == task:
+        return confirm_pending(on_done=on_done, background=background)
+    if _is_safe_task(raw):
+        return _run_specialist_now(task, agent, pi, timeout, background, on_done)
+    label = "Pi" if pi else (agent or "OpenCode")
+    jid = jobreg.create(raw[:200], tier="specialist", agent=agent, background=True)
+    _PENDING_DESTRUCTIVE["task"] = task
+    _PENDING_HERMES_CALL = dict(spec=agent or "opencode", pi=pi, task=task, raw_task=raw,
+                                timeout=timeout, background=background, on_done=on_done,
+                                jid=jid, ts=time.time())
+    jobreg.update(jid, state="waiting-on-confirm", note="needs confirm — say 'confirm' to run",
+                  summary=f"Waiting for confirm: {raw[:120]}")
+    _audit_log(f"delegate:{label}", raw[:200], "NEEDS_CONFIRM", extra={"jid": jid})
+    return (f"[NEEDS_CONFIRM:{jid}] {label} may change things for this, so I'm asking first. "
+            f"Say 'confirm' and I'll run it through {label}: \"{raw}\" (job {jid})")
+
+
+def _run_specialist_now(task, agent, pi, timeout, background, on_done) -> str:
+    """Run a specialist: in the background (its ack) or in the turn (its reply)."""
+    if background:
+        run = _run_pi_specialist_bg if pi else _run_specialist_bg
+        return run(task, agent, timeout=timeout, on_done=on_done)[0]
+    return (_run_pi_specialist if pi else _run_specialist)(task, agent, timeout=timeout)
 
 
 def _run_specialist(task: str, agent: str | None = None, timeout: int = 300) -> str:
@@ -3315,7 +3396,7 @@ def _run_pi_specialist_bg(task: str, agent: str | None, timeout: int,
     return f"⟳ PI_BACKGROUND:{ack}", jid
 
 
-def run_autonomous(goal: str, timeout: int = 1800) -> str:
+def run_autonomous(goal: str, timeout: int = 1800, confirm: bool = False) -> str:
     """Phase 15: launch a supervised autonomous Hermes job — allowlist-gated (Phase 1)."""
     import autonomous
     goal = str(goal or "").strip()
@@ -3327,18 +3408,36 @@ def run_autonomous(goal: str, timeout: int = 1800) -> str:
     # Hermes' autonomous runner, which the model picked for it on 2026-09-12.
     forced, name, cleaned = _explicit_cli_agent(goal)
     if forced:
-        return _cli_delegate(cleaned, name, raw_task=goal)
-    # Phase 1: autonomous goals that mutate state need confirm (allowlist flip)
+        return _cli_delegate(cleaned, name, raw_task=goal, confirm=confirm)
+    # A goal that may change things waits for the user's confirm. Asking for
+    # the same goal again is not one: before 2026-09-13 the model calling this
+    # twice in a turn launched it unasked.
     if not _is_safe_task(goal):
-        if not _PENDING_DESTRUCTIVE.get("autonomous") or _PENDING_DESTRUCTIVE["autonomous"] != goal:
-            _PENDING_DESTRUCTIVE["autonomous"] = goal
-            _PENDING_DESTRUCTIVE["autonomous_ts"] = time.time()
-            _audit_log("run_autonomous", goal, "NEEDS_CONFIRM")
-            return ("[NEEDS_CONFIRM] That goal could change state on this machine and isn't on the safe allowlist. "
-                    f"Say 'confirm' to let me run it autonomously: \"{goal}\"")
-        _PENDING_DESTRUCTIVE.pop("autonomous", None)
-        _PENDING_DESTRUCTIVE.pop("autonomous_ts", None)
-        _audit_log("run_autonomous", goal, "confirmed")
+        if confirm and _PENDING_DESTRUCTIVE.get("autonomous") == goal:
+            return confirm_autonomous()
+        _PENDING_DESTRUCTIVE["autonomous"] = goal
+        _PENDING_DESTRUCTIVE["autonomous_ts"] = time.time()
+        _PENDING_DESTRUCTIVE["autonomous_timeout"] = timeout
+        _audit_log("run_autonomous", goal, "NEEDS_CONFIRM")
+        return ("[NEEDS_CONFIRM] That goal could change state on this machine and isn't on the safe allowlist. "
+                f"Say 'confirm' to let me run it autonomously: \"{goal}\"")
+    return _start_autonomous(goal, timeout)
+
+
+def confirm_autonomous() -> str | None:
+    """Run the goal waiting for the user's confirm; None when none is."""
+    goal = _PENDING_DESTRUCTIVE.get("autonomous")
+    if not goal:
+        return None
+    timeout = _PENDING_DESTRUCTIVE.pop("autonomous_timeout", None) or 1800
+    _PENDING_DESTRUCTIVE["autonomous"] = None
+    _PENDING_DESTRUCTIVE["autonomous_ts"] = 0.0
+    _audit_log("run_autonomous", goal, "confirmed")
+    return _start_autonomous(goal, timeout)
+
+
+def _start_autonomous(goal: str, timeout: int) -> str:
+    import autonomous
     ack, jid = autonomous.start_goal(goal, timeout=timeout,
                                      progress_cb=getattr(_tools_tls, "cb", None))
     _audit_log("run_autonomous", goal, "queued", extra={"jid": jid})
@@ -3891,19 +3990,10 @@ def delegate(
     forced, forced_agent, cleaned = _explicit_specialist(task)
     if forced:
         # SPIKE: 'using pi' / 'via pi' routes to the sandboxed Pi backend.
-        if (forced_agent or "").lower() == "pi":
-            if background:
-                ack, jid = _run_pi_specialist_bg(cleaned, None,
-                                                 timeout=timeout, on_done=on_done)
-                return ack
-            result = _run_pi_specialist(cleaned, None, timeout=timeout)
-            return result
-        if background:
-            ack, jid = _run_specialist_bg(cleaned, forced_agent,
-                                          timeout=timeout, on_done=on_done)
-            return ack
-        result = _run_specialist(cleaned, forced_agent, timeout=timeout)
-        return result
+        pi = (forced_agent or "").lower() == "pi"
+        return _specialist_delegate(cleaned, None if pi else forced_agent, raw_task=task,
+                                    confirm=confirm, pi=pi, timeout=timeout,
+                                    background=background, on_done=on_done)
 
     if backend:                          # the model may say "Claude Code" or "Gemini CLI"
         backend = str(backend).strip().lower()
@@ -3930,21 +4020,16 @@ def delegate(
     # Specialist tier: opencode or hermes floor with domain match
     if backend == "opencode":
         # Direct opencode delegate (verb code/debug/refactor)
-        if background:
-            ack, jid = _run_specialist_bg(task, None, timeout=timeout, on_done=on_done)
-            return ack
-        result = _run_specialist(task, None, timeout=timeout)
+        result = _specialist_delegate(task, None, confirm=confirm, timeout=timeout,
+                                      background=background, on_done=on_done)
         if not result.startswith("[specialist]"):
             return result
         # fall through to hermes if opencode failed/unavailable
     if backend == "hermes":
         agent = _pick_specialist(task)
         if agent:
-            if background:
-                ack, jid = _run_specialist_bg(task, agent,
-                                              timeout=timeout, on_done=on_done)
-                return ack
-            result = _run_specialist(task, agent, timeout=timeout)
+            result = _specialist_delegate(task, agent, confirm=confirm, timeout=timeout,
+                                          background=background, on_done=on_done)
             if not result.startswith("[specialist]"):
                 return result
 
@@ -5024,7 +5109,8 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "goal": {"type": "string", "description": "The complete self-contained goal to accomplish"},
-                "timeout": {"type": "integer", "description": "Max seconds for the whole goal (default 1800)"}
+                "timeout": {"type": "integer", "description": "Max seconds for the whole goal (default 1800)"},
+                "confirm": {"type": "boolean", "description": "True only when the user just said confirm for this exact goal"}
             },
             "required": ["goal"]
         }
@@ -5410,7 +5496,7 @@ TOOL_MAP = {
     "list_installed_apps": lambda **kw: list_installed_apps(),
     "close_application": lambda **kw: close_application(kw["app"], force=bool(kw.get("force"))),
     "run_autonomous": lambda **kw: run_autonomous(
-        kw["goal"], int(kw.get("timeout", 1800) or 1800)),
+        kw["goal"], int(kw.get("timeout", 1800) or 1800), _truthy(kw.get("confirm", False))),
     "job_control": lambda **kw: job_control(
         kw["action"], kw.get("jid")),
     "delegate_task": lambda **kw: delegate_task(kw["task"], kw.get("agent", "claude")),

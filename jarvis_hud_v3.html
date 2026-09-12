@@ -422,15 +422,19 @@
   #jv-log { display: none; }
 
   /* The box grows with the message (autosizeInput), so everything in it sits
-     on the last line and the corners stay round at any height. */
-  #jv-input-wrap { pointer-events: auto; display: flex; align-items: flex-end; gap: 10px;
-    padding: 8px 15px; border-radius: 22px;
+     on the last line and the corners stay round at any height. --jv-row is the
+     height of one line of text; the wave, the mic and the '>' centre on it, so
+     all of them share one midline. The right padding matches the mic's
+     top/bottom inset, so it sits evenly in the end of the bar. */
+  #jv-input-wrap { --jv-row: 36px; --jv-mic: 34px;
+    pointer-events: auto; display: flex; align-items: flex-end; gap: 10px;
+    padding: 8px 8px 8px 15px; border-radius: 22px;
     background: color-mix(in srgb, #070a0e 80%, transparent);
     border: 1px solid var(--hairline);
     box-shadow: 0 12px 32px rgba(0, 0, 0, .45);
     backdrop-filter: blur(8px); transition: border-color .2s, box-shadow .2s; }
   #jv-input-wrap::before { content: '>'; flex: 0 0 auto; opacity: .7; align-self: flex-start;
-    font: 700 13px/1 var(--font-data); color: var(--holo); padding-top: 11px; }
+    font: 700 13px/1 var(--font-data); color: var(--holo); padding-top: calc((var(--jv-row) - 13px) / 2); }
   #jv-input-wrap:focus-within { border-color: color-mix(in srgb, var(--holo) 60%, transparent);
     box-shadow: 0 0 0 1px color-mix(in srgb, var(--holo) 35%, transparent),
                 0 12px 34px rgba(0, 0, 0, .5); }
@@ -439,8 +443,9 @@
   /* A textarea: long messages wrap onto new lines and the box grows up to
      about six lines, then scrolls (max-height; overflow set by autosizeInput). */
   #jv-input { flex: 1 1 auto; min-width: 0; border: 0; outline: 0; background: transparent;
-    resize: none; overflow-y: hidden; display: block; margin: 0; padding: 8px 0;
-    line-height: 1.45; max-height: calc(1.45em * 6 + 16px);
+    resize: none; overflow-y: hidden; display: block; margin: 0;
+    padding: calc((var(--jv-row) - 1.45em) / 2) 0;
+    line-height: 1.45; max-height: calc(1.45em * 5 + var(--jv-row));
     scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--holo) 35%, transparent) transparent;
     font-family: var(--font-body);
     font-size: 13.5px; font-weight: 500; letter-spacing: .01em;
@@ -475,6 +480,11 @@
     transform: translateY(-1px); }
   .jv-chip:active { transform: translateY(0); }
   .jv-chip:focus-visible { outline: 2px solid var(--holo); outline-offset: 2px; }
+  /* A turn that failed, said plainly (plain_reply.for_error), with the user's
+     own words one tap from being sent again. */
+  .jv-line-jarvis.jv-line-error { border-color: rgba(255, 110, 90, .45);
+    background: rgba(255, 90, 70, .07); }
+  .jv-retry { flex: 0 0 auto; align-self: center; padding: 6px 12px; font-size: 12px; }
 
   /* ---- Apps modal: same holo/dark language as the rest of the HUD. ---- */
   #jv-apps-modal { position: fixed; inset: 0; display: none; z-index: 80;
@@ -581,7 +591,9 @@
      state: green while listening, blue while thinking. Android Chrome has no
      wake word (Web Speech cannot share the page's mic), so on the phone this
      is how a capture starts. */
-  #jv-mic { flex: 0 0 auto; width: 34px; height: 34px; margin: -4px -9px -4px 0; border-radius: 50%;
+  #jv-mic { flex: 0 0 auto; width: var(--jv-mic); height: var(--jv-mic);
+    --jv-mic-gap: calc((var(--jv-row) - var(--jv-mic)) / 2);
+    margin: var(--jv-mic-gap) var(--jv-mic-gap) var(--jv-mic-gap) 0; border-radius: 50%;
     display: grid; place-items: center; cursor: pointer; color: var(--holo);
     border: 1.5px solid var(--holo); background: color-mix(in srgb, var(--holo) 10%, transparent);
     -webkit-tap-highlight-color: transparent; touch-action: manipulation;
@@ -601,7 +613,9 @@
   #jv-input-wrap.listening { border-color: rgba(157, 255, 138, .5); box-shadow: 0 0 0 3px rgba(157, 255, 138, .08); }
   #jv-input-wrap.listening::before { display: none; }
   #jv-input-wrap.listening #jv-input::placeholder { color: #cfeec6; }
-  .jv-wave { display: none; gap: 3px; align-items: center; height: 16px; flex: 0 0 auto; }
+  /* One text line tall with the bars centred, so they grow up and down
+     from the same midline as the text and the mic. */
+  .jv-wave { display: none; gap: 3px; align-items: center; height: var(--jv-row); flex: 0 0 auto; }
   #jv-input-wrap.listening .jv-wave { display: flex; }
   .jv-wave i { width: 3px; height: 5px; border-radius: 2px; background: #9dff8a; animation: jvWave .9s ease-in-out infinite; }
   .jv-wave i:nth-child(2) { animation-delay: .15s; }
@@ -615,7 +629,7 @@
   @media (pointer: coarse) {
     .jv-btn, .jv-npbtn, .jv-gate-btn, #jv-apps-close, #jv-drawer-close { min-height: 44px; min-width: 44px; }
     .vf-opt { min-height: 44px; display: flex; align-items: center; justify-content: center; }
-    #jv-mic { width: 44px; height: 44px; margin: -6px -10px -6px 0; }
+    #jv-input-wrap { --jv-row: 44px; --jv-mic: 44px; padding: 6px 6px 6px 15px; }
     #jv-input { font-size: 16px; }
   }
 
@@ -1801,7 +1815,7 @@
     if (role !== 'jarvis') {                    // user: immediate, right-aligned
       span.textContent = full;
       chatLog.scrollTop = chatLog.scrollHeight;
-      return;
+      return line;
     }
 
     // Reply lands whole, no character-by-character reveal. The typewriter used
@@ -1816,6 +1830,7 @@
     hudSay(full, false);
     chatLog.scrollTop = chatLog.scrollHeight;
     if (audio) speak(audio); else if (mode !== 'speaking') goIdle();
+    return line;
   }
 
   // -------------------------------------------------------- live interim text
@@ -1951,7 +1966,7 @@
       chatInput.value = ''; autosizeInput();
       return;
     }
-    if (!send({ type: 'text', text: value, speak: true })) {
+    if (!sendUserText(value)) {
       // WS down: keep the typed text, say so, log nothing as a reply.
       notice('NOT CONNECTED — MESSAGE NOT SENT');
       chatWrap.classList.add('jv-err');
@@ -1959,17 +1974,39 @@
       chatInput.focus();
       return;
     }
-    logConv('user', value);
-    // Typed input logs its own line here; the server still echoes a transcript
-    // for it, and without this the echo would render the same words twice.
-    userLoggedThisTurn = true;
     chatInput.value = ''; autosizeInput();
     chatInput.placeholder = '> ';
     setTimeout(function () { chatInput.placeholder = PLACEHOLDER; }, 900);
     chatInput.focus();                          // typing stays the active path
+  }
+
+  // One message from the user (typed, or a failed turn tried again): sent,
+  // logged as their line, HUD busy. False when the socket is down.
+  function sendUserText(value) {
+    if (!send({ type: 'text', text: value, speak: true })) return false;
+    logConv('user', value);
+    // Typed input logs its own line here; the server still echoes a transcript
+    // for it, and without this the echo would render the same words twice.
+    userLoggedThisTurn = true;
     pendingReply = true;
     mode = 'busy'; busySince = Date.now();      // mic stays deaf until the reply lands
     setState('thinking', 'THINKING…');
+    return true;
+  }
+
+  // "Try again" on a failed turn: the same words, sent as a new turn. Used
+  // once; the input box is left alone, so nothing half-typed is lost.
+  function addRetry(line, words) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'jv-chip jv-retry';
+    b.textContent = 'Try again';
+    b.title = words;
+    b.addEventListener('click', function () {
+      if (sendUserText(words)) b.remove();
+      else notice('NOT CONNECTED — MESSAGE NOT SENT');
+    });
+    line.appendChild(b);
   }
 
   var pendingReply = false;
@@ -2186,7 +2223,14 @@
         if (mode === 'busy') setState('thinking', 'THINKING…');
       }
     } else if (m.type === 'error') {
-      goIdle();
+      // A failed turn is a reply like any other: in the transcript, spoken
+      // when the server sent audio, with "Try again" when it sent the words.
+      pendingReply = false;
+      var errLine = logConv('jarvis', m.text, m.audio);
+      if (errLine) {
+        errLine.classList.add('jv-line-error');
+        if (m.retry) addRetry(errLine, m.retry);
+      } else if (m.audio) speak(m.audio); else goIdle();
       notice('ERROR — ' + m.text);
     } else if (m.type === 'job') {
       // Background job card: created/updated by jobs.py via the WS bridge.

@@ -66,8 +66,14 @@ def _vault_context(task: str, max_hits=3, delegate: str = "hermes") -> str:
         pass
     return ""
 
+# CLI agents are named by their cli_agents.json key; the brief styles below
+# use the -cli names, so Claude Code was getting Hermes's brief.
+_CLI_BRIEF_NAMES = {"claude": "claude-cli", "gemini": "gemini-cli", "codex": "codex-cli"}
+
+
 def assemble_brief(task: str, delegate: str = "hermes") -> str:
     """Build per-delegate brief and log it. Returns brief prefix to prepend to task."""
+    delegate = _CLI_BRIEF_NAMES.get(delegate, delegate)
     profile = _load_profile()
     recent = _recent_summary(6)
     appctx = _app_context(task)

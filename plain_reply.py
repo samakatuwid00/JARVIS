@@ -155,6 +155,30 @@ def _reason(err: str) -> str:
     return _first_sentence(e).rstrip(".") or "something went wrong"
 
 
+# A turn that raised, as the user is told it. First match wins. The raw
+# exception stays in the server log: the HUD showed "ERROR — 'choices'" and
+# went quiet, which told the owner nothing and said nothing aloud.
+_ERROR_KINDS = [
+    (re.compile(r"timed? ?out|timeout|deadline exceeded", re.I),
+     "That took too long, so I stopped waiting."),
+    (re.compile(r"\b429\b|rate.?limit|quota|resource.?exhausted|overloaded|\b503\b", re.I),
+     "The model service is busy or out of quota right now."),
+    (re.compile(r"\b40[13]\b|api.?key|unauthori[sz]ed|forbidden", re.I),
+     "The model service turned down my key."),
+    (re.compile(r"connect|getaddrinfo|name resolution|unreachable|network|max retries", re.I),
+     "I couldn't reach a service I needed. The internet connection may be down."),
+]
+
+
+def for_error(err) -> str:
+    """A failed turn in one plain sentence, for the HUD and the voice."""
+    raw = f"{type(err).__name__}: {err}" if isinstance(err, BaseException) else str(err or "")
+    for pat, line in _ERROR_KINDS:
+        if pat.search(raw):
+            return line
+    return "Something went wrong on my side while handling that."
+
+
 def _full_result(event: dict) -> str:
     """The job's whole result (the event carries only a 200-character summary)."""
     try:

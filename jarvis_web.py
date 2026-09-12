@@ -1828,6 +1828,33 @@ async def websocket_endpoint(websocket: WebSocket):
         """Called from the think() thread to enqueue a progress update."""
         _progress_q.put(msg)
 
+    async def _end_failed_turn(wd, reader):
+        """What a turn that raised still owes: no 'still working' cue after the
+        failure, and its progress reader ended. A reader left waiting took the
+        next turn's end signal, so that turn waited on its own reader forever."""
+        if wd is not None:
+            wd.stop()
+        if reader is not None and not reader.done():
+            _progress_q.put(None)
+            try:
+                await asyncio.wait_for(reader, 5)
+            except Exception:
+                reader.cancel()
+
+    async def _send_error(err, retry=None, speak=False):
+        """A failed turn in plain words (plain_reply.for_error), spoken when the
+        turn was. `retry` is what the user asked, so the HUD can send it again."""
+        import plain_reply
+        line = plain_reply.for_error(err)
+        audio = None
+        if speak:
+            try:
+                audio = await tts_to_b64(line)
+            except Exception:
+                pass
+        await websocket.send_text(json.dumps({
+            "type": "error", "text": line, "audio": audio, "retry": retry}))
+
     try:
         while True:
             data = await websocket.receive_text()
@@ -1885,7 +1912,8 @@ async def websocket_endpoint(websocket: WebSocket):
                 except Exception:
                     pass
                 if not audio_b64:
-                    await websocket.send_text(json.dumps({"type": "error", "text": "empty audio"}))
+                    await websocket.send_text(json.dumps({
+                        "type": "error", "text": "I didn't get any sound from the microphone."}))
                     continue
 
                 if not scan:
@@ -1903,6 +1931,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 except Exception:
                     pass
 
+                text, _wd, reader_task = None, None, None
                 try:
                     audio_bytes = base64.b64decode(audio_b64)
                     wav_path = decode_audio_to_wav(audio_bytes)
@@ -2039,9 +2068,9 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 except Exception as e:
                     print(f"[WS] audio error: {e}", flush=True)
-                    await websocket.send_text(json.dumps({
-                        "type": "error", "text": str(e)
-                    }))
+                    await _end_failed_turn(_wd, reader_task)
+                    await _send_error(e, retry=None if scan else (text or "").strip() or None,
+                                      speak=not scan)
                 finally:
                     try:
                         wake_engine.resume()
@@ -2094,9 +2123,8 @@ async def websocket_endpoint(websocket: WebSocket):
                                 "audio": await tts_to_b64(result)
                             }))
                     except Exception as e:
-                        await websocket.send_text(json.dumps({
-                            "type": "error", "text": f"redirect failed: {e}"
-                        }))
+                        print(f"[WS] redirect error: {e}", flush=True)
+                        await _send_error(e)
                     await websocket.send_text(json.dumps({"type": "status", "state": "idle"}))
                 else:
                     await websocket.send_text(json.dumps({
@@ -2130,6 +2158,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 await websocket.send_text(json.dumps({"type": "status", "state": "thinking"}))
                 _wd = _ThinkingWatchdog(websocket, vf)
                 _wd.start()
+                reader_task = None
                 try:
                     loop = asyncio.get_running_loop()
 
@@ -2181,7 +2210,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     await websocket.send_text(json.dumps({"type": "status", "state": "idle"}))
                 except Exception as e:
                     print(f"[WS] text error: {e}", flush=True)
-                    await websocket.send_text(json.dumps({"type": "error", "text": str(e)}))
+                    await _end_failed_turn(_wd, reader_task)
+                    await _send_error(e, retry=user_text, speak=speak)
 
             else:
                 await websocket.send_text(json.dumps({

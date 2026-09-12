@@ -29,14 +29,47 @@ def isolated(monkeypatch, tmp_path):
     ("have Claude Code fix the chat box", "claude"),
     ("summarize the notes using gemini", "gemini"),
     ("hand it off to claude: tidy the README", "claude"),
+    ("delegate claude to fix your terminal chat send and mic buttons", "claude"),
+    ("delegate to claude code: tidy the README", "claude"),
+    ("fix your send, mic, and listening progress icon in the terminal chat since it is "
+     "not quite aligned, use claude", "claude"),
+    ("can you use claude to fix the chat box", "claude"),
+    ("ask claude code to fix the chat box", "claude"),
+    ("tell claude to tidy the README", "claude"),
+    ("Claude, fix the mic button", "claude"),
 ])
 def test_naming_a_helper_picks_it(text, agent):
     forced, name, cleaned = tools._explicit_cli_agent(text)
     assert forced and name == agent
     assert "claude" not in cleaned.lower() and "gemini" not in cleaned.lower()
+    assert not cleaned.lower().startswith("to ")
 
 
-@pytest.mark.parametrize("text", ["I have claude installed", "ask claude what time it is", "open github"])
+@pytest.mark.parametrize("text", [
+    "delegate claude to fix your terminal chat especially the placement layout of buttons "
+    "send, mic, and listening icon animation. use playwright to confirm and also when in "
+    "widget or panel mode you are unclickable. double check it",
+    "check the chat box and fix it",
+    "can you tweak the mic button?",
+])
+def test_an_instruction_to_fix_is_not_look_only(text):
+    assert not tools._is_safe_task(text)
+
+
+@pytest.mark.parametrize("text", ["how do I fix my wifi?", "check the current state", "what time is it"])
+def test_questions_and_looks_stay_safe(text):
+    assert tools._is_safe_task(text)
+
+
+def test_delegate_claude_to_fix_asks_then_goes_to_claude(isolated, monkeypatch):
+    _fake_claude(monkeypatch)
+    out = tools.delegate("delegate claude to fix the send button layout in the chat. double check it")
+    assert out.startswith("[NEEDS_CONFIRM:") and "Claude Code" in out
+
+
+@pytest.mark.parametrize("text", ["I have claude installed", "ask claude what time it is", "open github",
+                                  "I use claude every day", "do you use claude?",
+                                  "ask claude code what time is it", "hey claude code, what's up"])
 def test_mentioning_one_does_not(text):
     assert tools._explicit_cli_agent(text)[0] is False
 

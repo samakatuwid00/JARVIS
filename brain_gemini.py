@@ -1393,7 +1393,8 @@ TOOL_DECLARATIONS = [
         "(Claude, Gemini, OpenCode): use delegate with that backend.",
         {"type": "object", "properties": {
             "goal": {"type": "STRING", "description": "The complete self-contained goal"},
-            "timeout": {"type": "INTEGER", "description": "Max seconds for the whole goal (default 1800)"}
+            "timeout": {"type": "INTEGER", "description": "Max seconds for the whole goal (default 1800)"},
+            "confirm": {"type": "BOOLEAN", "description": "True only when the user just said confirm for this exact goal"}
         }, "required": ["goal"]}),
 
     _make_tool("job_control",
@@ -1495,7 +1496,7 @@ _CONFIRM_WORDS = re.compile(
     r"(?i)\b(confirm(?:ed)?|proceed|go ahead|do it|yes|approved?|"
     r"run it|execute it|send it|that'?s right|correct)\b")
 for _consent_tool in ("desktop_control", "run_opencli", "delegate_to_hermes",
-                      "delegate_to_hermes_grounded", "delegate"):
+                      "delegate_to_hermes_grounded", "delegate", "run_autonomous"):
     _CONSENT_FLAGS[_consent_tool] = ("confirm", _CONFIRM_WORDS)
 
 # A bare confirm utterance: ONLY the confirm words, nothing else. Must never
@@ -1936,9 +1937,7 @@ class JarvisBrain:
                     # Release whichever latch is NEWEST — that's the one whose
                     # NEEDS_CONFIRM the user actually just heard.
                     if auton_pending and auton_ts >= hermes_ts:
-                        # run_autonomous re-called with the same goal matches
-                        # its own latch and launches.
-                        out = _t.run_autonomous(auton_pending)
+                        out = _t.confirm_autonomous()
                         backend = "autonomous-confirm"
                     elif hermes_pending:
                         out = _t.confirm_pending(on_done=on_hermes_done, progress_cb=progress_cb,
