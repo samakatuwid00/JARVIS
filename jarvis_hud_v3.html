@@ -897,6 +897,10 @@
   var talkBtn = document.getElementById('jv-talk');
   if (IS_MOBILE && talkBtn) talkBtn.classList.add('show');
   if (IS_MOBILE) { PLACEHOLDER = 'TYPE TO JARVIS…'; chatInput.placeholder = PLACEHOLDER; }
+  // Inside the desktop app (Electron) Chrome's cloud speech recognition is
+  // unavailable, so the server's Whisper wake word is the wake word, and the
+  // app's global hotkey opens a capture the way a TALK tap does.
+  var IS_DESKTOP = /\bElectron\//.test(navigator.userAgent);
 
   // ---------------------------------------------------------------- hud link
   // The HUD artifact re-sets `--spd` on ITS OWN documentElement on every render,
@@ -1540,6 +1544,9 @@
     ws = new WebSocket(proto + '//' + location.host + '/ws');
     ws.onopen = function () {
       wsReady = true; reconnectDelay = 800;
+      // The desktop window claims the server's wakes (a Chrome tab on this PC
+      // then stays quiet); sent on every reconnect, the server forgets on close.
+      if (IS_DESKTOP) ws.send(JSON.stringify({ type: 'hello', client: 'desktop' }));
       var netPill = document.getElementById('jv-pill-net');
       if (netPill) { netPill.classList.remove('offline'); netPill.classList.add('online');
                      if (netPill.firstElementChild) netPill.firstElementChild.textContent = '\u25cf ONLINE'; }
@@ -2083,7 +2090,9 @@
   function startWakeListener() {
     // Android Chrome: SpeechRecognition never starts while getUserMedia holds
     // the mic (no error, no beep, no results). The talk button is the wake.
-    if (IS_MOBILE) return;
+    // Electron: it fails with 'network' forever (no Google key), a silent
+    // restart loop. The server's wake engine takes over there.
+    if (IS_MOBILE || IS_DESKTOP) return;
     var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) {
       notice('WAKE-WORD UNAVAILABLE — use Enable Mic + type, or Chrome');
@@ -2484,7 +2493,8 @@
   // Tap-to-talk: one tap opens the command window (as a wake word would), a
   // second tap while it is open ends the clip early instead of waiting for
   // the silence timeout. The tap is also the user gesture that unlocks audio.
-  if (talkBtn) talkBtn.onclick = async function () {
+  // The desktop app's global hotkey calls the same function.
+  async function tapToTalk() {
     if (ctx && ctx.state !== 'running') { try { await ctx.resume(); } catch (e) {} }
     if (ampCtx && ampCtx.state !== 'running') { try { await ampCtx.resume(); } catch (e) {} }
     audioUnlocked = true; unlockBtn.classList.remove('show');
@@ -2492,10 +2502,13 @@
     if (mode === 'command') { endCapture(); return; }
     if (mode !== 'idle') return;                 // busy / speaking / booting
     sessionClosePending = false;
-    talkBtn.classList.add('live');
+    if (talkBtn) talkBtn.classList.add('live');
     var wait = playTick(880, TICK_MS, 0.18);
     setTimeout(function () { beginCapture('command', false); }, wait);
-  };
+  }
+  if (talkBtn) talkBtn.onclick = tapToTalk;
+  // preload.js exposes window.jarvisDesktop in the desktop app only.
+  if (IS_DESKTOP && window.jarvisDesktop) window.jarvisDesktop.onHotkey(tapToTalk);
 
   // ---------------------------------------------------------------- apps modal
   var appsData = null, appCat = 'all';

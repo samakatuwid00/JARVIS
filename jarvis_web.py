@@ -30,7 +30,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.websockets import WebSocketDisconnect
 
 from voice_engine import VoiceEngine
-from wake_engine import WakeEngine
+from wake_engine import WakeEngine, wake_targets
 from brain_gemini import JarvisBrain
 from session_store import log as sstore_log
 import intake
@@ -92,12 +92,16 @@ async def _guard_apps_writes(request: Request, call_next):
     return await call_next(request)
 
 # Connected voice clients (JARVIS HUD tabs) — the server-side wake engine alerts
-# all of them so a wake detected on the server opens the command window in the UI.
+# the local ones (see wake_targets) so a wake detected on the server opens the
+# command window in the UI.
 WS_CLIENTS = set()
 # The subset that came in through the tailscale proxy (the phone). The PC's
 # wake engine hears the PC's room, so its wakes must not open a capture on a
 # phone somewhere else; those clients are tap-to-talk.
 WS_REMOTE = set()
+# The desktop app's window (it says hello on connect). While one is
+# connected, server wakes go to it alone, so a Chrome tab stays quiet.
+WS_DESKTOP = set()
 
 # Global singletons (Whisper load is slow, do it once)
 print("[JARVIS Web] Loading VoiceEngine (Whisper)...", flush=True)
@@ -162,9 +166,10 @@ def broadcast_wake():
             print("[WakeEngine] wake heard but no server loop yet (no HUD connected); "
                   "clients kept", flush=True)
         return False
-    clients = [ws for ws in WS_CLIENTS if ws not in WS_REMOTE]
-    print(f"[WakeEngine] broadcasting wake to {len(clients)} local HUD client(s) "
-          f"({len(WS_REMOTE)} remote skipped)", flush=True)
+    clients = wake_targets(WS_CLIENTS, WS_REMOTE, WS_DESKTOP)
+    target = "desktop app" if WS_DESKTOP.intersection(clients) else "local"
+    print(f"[WakeEngine] broadcasting wake to {len(clients)} HUD client(s) "
+          f"({target}; {len(WS_REMOTE)} remote skipped)", flush=True)
     payload = json.dumps({"type": "wake", "source": "server"})
     scheduled = 0
     for ws in clients:
@@ -1761,6 +1766,11 @@ async def websocket_endpoint(websocket: WebSocket):
             if mtype == "ping":
                 await websocket.send_text(json.dumps({"type": "pong"}))
 
+            elif mtype == "hello":
+                if message.get("client") == "desktop":
+                    WS_DESKTOP.add(websocket)
+                    print("[WS] desktop app window connected", flush=True)
+
             elif mtype == "speech":
                 # Phase C: duck music while JARVIS speaks, restore when done.
                 # Failsafe auto-unduck guards against a lost "end" message.
@@ -2108,6 +2118,7 @@ async def websocket_endpoint(websocket: WebSocket):
         WS_CLIENTS.discard(websocket)
     finally:
         WS_REMOTE.discard(websocket)
+        WS_DESKTOP.discard(websocket)
         # This connection's job listener must not outlive it: stale listeners
         # spoke every finished job into closed sockets (5x after 5 reconnects).
         try:

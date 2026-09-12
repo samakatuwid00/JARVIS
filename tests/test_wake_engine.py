@@ -6,7 +6,26 @@ import time
 
 import numpy as np
 
-from wake_engine import WakeEngine
+from wake_engine import WakeEngine, wake_targets
+
+
+# --- who a server wake is delivered to -------------------------------------
+
+def test_remote_clients_never_get_a_server_wake():
+    assert set(wake_targets({"tab", "phone"}, remote={"phone"}, desktop=set())) == {"tab"}
+
+
+def test_the_desktop_window_wins_over_a_local_tab():
+    assert wake_targets({"tab", "desk"}, remote=set(), desktop={"desk"}) == ["desk"]
+
+
+def test_without_the_desktop_app_every_local_tab_gets_it():
+    assert set(wake_targets({"tab1", "tab2"}, remote=set(), desktop=set())) == {"tab1", "tab2"}
+
+
+def test_a_remote_client_claiming_desktop_is_ignored():
+    assert wake_targets({"tab", "phone"}, remote={"phone"}, desktop={"phone"}) == ["tab"]
+
 
 BLOCK = 1600          # 0.1 s at 16 kHz, what the audio callback delivers
 

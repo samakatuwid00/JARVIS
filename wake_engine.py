@@ -71,6 +71,15 @@ def wake_word_in(text):
     return False
 
 
+def wake_targets(clients, remote, desktop):
+    """Which HUD clients a server-side wake goes to. Remote clients (the phone
+    through tailscale serve) are in another room and never get one. While the
+    desktop app's window is connected it alone does, so a Chrome tab on the
+    same PC does not open a second capture for the same "jarvis"."""
+    local = [c for c in clients if c not in remote]
+    return [c for c in local if c in desktop] or local
+
+
 class WakeEngine:
     def __init__(self, voice_engine, sample_rate=16000,
                  window_s=2.5, step_s=1.0, cooldown_ms=4000,

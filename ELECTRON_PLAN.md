@@ -162,16 +162,25 @@ the test suite passes inside the venv.
 
 ## Phase 1 — HUD knows it is inside the desktop app
 
-- [ ] `IS_DESKTOP` in the HUD (Electron's user agent contains `Electron/`):
+- [x] `IS_DESKTOP` in the HUD (Electron's user agent contains `Electron/`):
       skip `startWakeListener()` like phones do; the server `WakeEngine` is
       the wake word.
-- [ ] HUD announces itself on connect (`{"type": "hello", "client":
+- [x] HUD announces itself on connect (`{"type": "hello", "client":
       "desktop"}`); while a desktop client is connected, server wakes go
-      only to it (caveat 4).
-- [ ] Preload bridge `window.jarvisDesktop.onHotkey(fn)`: the hotkey opens a
-      command capture exactly like the phone's TALK tap.
+      only to it (caveat 4). Rule is `wake_targets()` in `wake_engine.py`,
+      with four tests.
+- [x] Preload bridge `window.jarvisDesktop.onHotkey(fn)`: the hotkey opens a
+      command capture exactly like the phone's TALK tap (`tapToTalk()`).
 - [ ] Drop the "Activate audio" unlock in the desktop app (Electron can
-      allow autoplay without a gesture).
+      allow autoplay without a gesture). No HUD change needed: the button
+      only appears when the audio context is suspended, so setting
+      `autoplayPolicy` in phase 2 removes it.
+
+*Done 2026-09-12 in browser emulation* (Playwright with an Electron user
+agent and a mocked preload bridge): the server logs `[WS] desktop app
+window connected`, no `[wake]` lines appear, the mocked hotkey switches the
+status to LISTENING, and a Chrome tab alongside connects normally. The
+"done when" below still needs the real Electron window (phase 2).
 
 Done when: in Electron there is no `[wake]` restart loop in the console;
 saying "jarvis" at the PC opens a capture through the server wake; with a
@@ -189,6 +198,16 @@ Chrome tab also open, only the desktop window reacts.
       development workflow: tray says so, "Restart backend" greyed out).
 - [ ] Window: loads the HUD, closes to the tray, `backgroundThrottling:
       false`, hardening from caveat 14.
+- [ ] Sticky/expanded window (decision 2), modelled on Sticky Brain:
+      frameless, `alwaysOnTop` at `'floating'`, `skipTaskbar`, docked
+      top-right; a drag strip and expand / collapse / hide controls in the
+      HUD topbar (`-webkit-app-region: drag`, buttons `no-drag`); the TALK
+      button shows in the desktop app too, since the phone layout it uses
+      at sticky width is where TALK lives.
+- [ ] Reuse what Sticky Brain already learned (vault note "Sticky Brain —
+      Installer, Tray and Autostart"): tray icon from a real file (an empty
+      image is an invisible tray entry), single-instance lock, `--hidden`
+      at login, the close button hides instead of quitting, Electron ^33.
 - [ ] Tray: Show, Restart backend, Open logs, Quit. Tooltip shows
       Starting / Ready / Backend stopped.
 - [ ] Global hotkey (see decisions) shows the window and opens a capture;
@@ -217,7 +236,13 @@ the shell runs with `npm start`.
 
 - [ ] `electron-builder` NSIS, per-user install (`%LOCALAPPDATA%\Programs`),
       Start menu entry, desktop shortcut, uninstaller.
-- [ ] Launch at login (`app.setLoginItemSettings`), toggle in the tray.
+- [ ] Launch at login (`app.setLoginItemSettings`, args `--hidden`), toggle
+      in the tray. Set it once behind a marker file, as Sticky Brain does, so
+      the app never switches back on a setting the owner turned off.
+- [ ] Expect electron-builder's `winCodeSign` extraction to fail on this
+      account (macOS symlinks need a privilege it lacks); Sticky Brain's
+      hand-promoted `Cache/winCodeSign/winCodeSign-2.6.0` already works
+      around it on this machine.
 - [ ] The app finds the repo and venv from a small config file written at
       install time (option A).
 
@@ -231,14 +256,25 @@ Bundle the backend with PyInstaller; move `memory/`, `sessions/`,
 hard-coded `C:\Users\deped` paths (8 in `tools.py`, 3 in
 `project_agent.py`); download the 338 MB of Whisper models on first run.
 
-## Decisions needed
+## Decisions (2026-09-12)
 
-1. Hotkey. Suggest Ctrl+Alt+J (Ctrl+Space / Alt+Space are often taken).
-2. Window style: normal window, or a frameless always-on-top HUD panel?
-3. At login: tray only (window hidden until the hotkey or wake word), or
-   show the window?
-4. Chrome tab alongside the app: allowed (desktop window wins wakes,
-   phase 1), or discouraged?
+1. Hotkey: **Ctrl+Alt+J**.
+2. Window style: **"hybrid, like the Sticky Brain app"** (the owner's own
+   Electron app, `Documents/sticky-brain`). Its window, read from
+   `src/main/index.js`: frameless, transparent, always on top at the
+   `floating` level, off the taskbar, 360x704 docked 20px from the top-right
+   of the work area, draggable and resizable, with an "expanded" full view
+   and a mini mode. For JARVIS (interpretation, to be confirmed by the
+   owner):
+   - **Sticky mode** (default): a narrow always-on-top panel at the
+     top-right. Under 700px wide the HUD already switches to the phone
+     layout (transcript, input, TALK), so this needs no new HUD layout.
+   - **Expanded mode**: the full HUD with its side columns, toggled from the
+     panel and restored to the sticky bounds afterwards.
+3. At login: **tray only**; the window appears on the hotkey or the wake
+   word.
+4. Chrome tab alongside the app: **allowed, the desktop window wins** server
+   wakes (phase 1).
 
 ## Open questions
 
