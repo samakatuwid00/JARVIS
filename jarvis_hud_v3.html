@@ -713,6 +713,23 @@
     scrollbar-width: thin;
     scrollbar-color: color-mix(in srgb, var(--holo) 35%, transparent) transparent; }
   #jv-drawer-body > * { flex: 0 0 auto; width: auto; }
+  /* One section per tab (see DRAWER_TABS); the script marks the others off. */
+  #jv-drawer-tabs { display: flex; gap: 4px; padding: 0 12px 10px; overflow-x: auto; scrollbar-width: none; flex: 0 0 auto; }
+  #jv-drawer-tabs::-webkit-scrollbar { display: none; }
+  #jv-drawer-tabs [data-tab] { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; padding: 8px 11px;
+    border-radius: 8px; border: 1px solid transparent; background: transparent; cursor: pointer;
+    font: 700 11.5px/1 var(--font-display); letter-spacing: .12em; text-transform: uppercase; color: #d8b98a; }
+  #jv-drawer-tabs [data-tab]:hover { color: #ffe7c4; }
+  #jv-drawer-tabs [data-tab][aria-selected="true"] { color: var(--holo); border-color: var(--hairline);
+    background: color-mix(in srgb, var(--holo) 9%, transparent); }
+  #jv-drawer-tabs [data-tab]:focus-visible { outline: 2px solid var(--holo); outline-offset: 1px; }
+  @media (pointer: coarse) { #jv-drawer-tabs [data-tab] { min-height: 40px; } }
+  #jv-tab-count { min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--holo); color: #1a1005;
+    font: 700 9.5px/16px var(--font-data); letter-spacing: 0; text-align: center; }
+  #jv-tab-count[hidden] { display: none; }
+  .jv-tab-off { display: none !important; }
+  /* Inside the drawer the sections are tighter than in the wide columns. */
+  #jv-drawer-body > .jv-sec { padding: 13px 14px; }
   @media (max-width: 1099px) {
     #jv-shell { grid-template-columns: minmax(0, 1fr); }
     #jv-col-left, #jv-col-right { display: none; }
@@ -956,7 +973,14 @@
         <span>Panels</span>
         <button id="jv-drawer-close" class="jv-btn" type="button" aria-label="Close panels">&times;</button>
       </div>
-      <div id="jv-drawer-body"></div>
+      <div id="jv-drawer-tabs" role="tablist" aria-label="Panels">
+        <button type="button" role="tab" data-tab="tasks">Tasks<span id="jv-tab-count" hidden></span></button>
+        <button type="button" role="tab" data-tab="music">Music</button>
+        <button type="button" role="tab" data-tab="voice">Voice</button>
+        <button type="button" role="tab" data-tab="system">System</button>
+        <button type="button" role="tab" data-tab="model">Model</button>
+      </div>
+      <div id="jv-drawer-body" role="tabpanel"></div>
     </div>
   </div>
 
@@ -1508,24 +1532,40 @@
     var col = document.getElementById(id);
     return { col: col, kids: [].slice.call(col.children) };
   });
-  var DRAWER_ORDER = [
-    document.getElementById('job-tray').parentNode,             // Active Tasks
-    document.getElementById('jv-np'),
-    document.getElementById('jv-vf'),
-    statsEl,
-    document.getElementById('st-backend').closest('.jv-sec'),   // Last Turn
-    leftEl
+  // One section per tab, so each fits the phone and the widget without a
+  // long scroll. Last Turn rides with System Status.
+  var DRAWER_TABS = [
+    [document.getElementById('job-tray').parentNode, 'tasks'],             // Active Tasks
+    [document.getElementById('jv-np'), 'music'],
+    [document.getElementById('jv-vf'), 'voice'],
+    [statsEl, 'system'],
+    [document.getElementById('st-backend').closest('.jv-sec'), 'system'],  // Last Turn
+    [leftEl, 'model']
   ];
+  var drawerTabs = [].slice.call(document.querySelectorAll('#jv-drawer-tabs [data-tab]'));
+  var activeTab = 'tasks';
+  try { activeTab = localStorage.getItem('cy-panels-tab') || 'tasks'; } catch (e) {}
+  if (!drawerTabs.some(function (b) { return b.dataset.tab === activeTab; })) activeTab = 'tasks';
+
+  function showTab(tab) {
+    activeTab = tab;
+    try { localStorage.setItem('cy-panels-tab', tab); } catch (e) {}
+    drawerTabs.forEach(function (b) { b.setAttribute('aria-selected', b.dataset.tab === tab ? 'true' : 'false'); });
+    DRAWER_TABS.forEach(function (pair) { pair[0].classList.toggle('jv-tab-off', pair[1] !== tab); });
+  }
+  drawerTabs.forEach(function (b) { b.onclick = function () { showTab(b.dataset.tab); }; });
 
   function openDrawer() { drawerEl.classList.add('show'); panelsBtn.setAttribute('aria-expanded', 'true'); }
   function closeDrawer() { drawerEl.classList.remove('show'); panelsBtn.setAttribute('aria-expanded', 'false'); }
 
   function placePanels() {
     if (narrowMq.matches) {
-      DRAWER_ORDER.forEach(function (el) { drawerBody.appendChild(el); });
+      DRAWER_TABS.forEach(function (pair) { drawerBody.appendChild(pair[0]); });
+      showTab(activeTab);
       return;
     }
     closeDrawer();
+    DRAWER_TABS.forEach(function (pair) { pair[0].classList.remove('jv-tab-off'); });
     PANEL_HOMES.forEach(function (h) { h.kids.forEach(function (el) { h.col.appendChild(el); }); });
   }
 
@@ -1544,6 +1584,8 @@
     var n = parseInt(taskCountEl.textContent, 10) || 0;
     panelsBadge.textContent = String(n);
     panelsBadge.hidden = n === 0;
+    var tabCount = document.getElementById('jv-tab-count');
+    if (tabCount) { tabCount.textContent = String(n); tabCount.hidden = n === 0; }
   }
   new MutationObserver(syncPanelsBadge).observe(taskCountEl, { childList: true, characterData: true, subtree: true });
   syncPanelsBadge();
