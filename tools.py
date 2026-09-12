@@ -1286,9 +1286,10 @@ def _clean_site_name(name: str) -> str:
     return _SITE_SUFFIX_RE.sub("", s).strip() or s
 
 
-# Conversational lead-ins: "Now search me X", "okay, jarvis, visit Y".
+# Conversational lead-ins: "Now search me X", "okay, jarvis, visit Y", "hey
+# cygnus, play some music" ("hey" / "hi" were missing, so that one stayed whole).
 _FILLER_START = re.compile(
-    r"^(?:now|so|ok(?:ay)?|well|please|jarvis|cygnus|sir)\b[,.!:]?\s*", re.I)
+    r"^(?:now|so|ok(?:ay)?|well|please|hey|hi|jarvis|cygnus|sir)\b[,.!:]?\s*", re.I)
 
 
 def strip_fillers(text: str) -> str:
@@ -2693,8 +2694,11 @@ def _detect_backend_by_task(task: str) -> str:
             task, re.I):
         return "opencli"
     # Phase 5: coding heuristic — catches "code a website" even when intake verb misses "code"
-    if re.search(r"\b(code|debug|refactor|implement|fix\s+(the\s+)?code|build\s+(a\s+)?(website|site|app|api)|create\s+(a\s+)?(website|web\s*app|react|laravel|python\s+file|html\s+page))\b", task, re.I) or \
-       (re.search(r"\b(website|web\s*site|html|react|laravel|python\s+file|javascript|api)\b", task, re.I) and re.search(r"\b(create|make|build|generate|code|implement)\b", task, re.I)):
+    # "VS Code" / "Claude Code" are names, not coding work: "open VS Code"
+    # went to the OpenCode coding agent on 2026-09-12.
+    _code_text = re.sub(r"\b(?:vs|visual\s+studio|claude)\s+code\b", " ", task, flags=re.I)
+    if re.search(r"\b(code|debug|refactor|implement|fix\s+(the\s+)?code|build\s+(a\s+)?(website|site|app|api)|create\s+(a\s+)?(website|web\s*app|react|laravel|python\s+file|html\s+page))\b", _code_text, re.I) or \
+       (re.search(r"\b(website|web\s*site|html|react|laravel|python\s+file|javascript|api)\b", _code_text, re.I) and re.search(r"\b(create|make|build|generate|code|implement)\b", _code_text, re.I)):
         return "opencode"
     # Try registry verb_map first (declarative, no hardcoded list)
     reg = _load_delegate_registry()
@@ -2914,8 +2918,10 @@ _NOT_A_TASK_RE = re.compile(
 
 
 def _is_not_a_task(task: str) -> bool:
-    t = (task or "").strip()
-    return bool(_NOT_A_TASK_RE.fullmatch(strip_fillers(t).strip() or t))
+    # Trailing "?" / "." off first: "Cygnus?" left a lone "?" after the name
+    # was stripped as a lead-in, so a check-in waited on a model.
+    t = re.sub(r"[\s.!?,]+$", "", (task or "").strip())
+    return bool(t) and bool(_NOT_A_TASK_RE.fullmatch(strip_fillers(t).strip() or t))
 
 
 def _not_a_task_reply(task: str) -> str:

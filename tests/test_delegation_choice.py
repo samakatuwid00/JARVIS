@@ -48,6 +48,37 @@ def test_a_word_is_not_a_task(isolated, word):
     assert jobs.recent(5) == []
 
 
+@pytest.mark.parametrize("word", ["Cygnus?", "jarvis?", "Hey Cygnus.", "cygnus"])
+def test_a_check_in_with_the_name_is_not_a_task(word):
+    assert tools._is_not_a_task(word)
+
+
+@pytest.mark.parametrize("text", ["?", "", "cygnus open notepad", "delete the file old.txt"])
+def test_real_requests_and_blanks_are_not_check_ins(text):
+    assert not tools._is_not_a_task(text)
+
+
+@pytest.mark.parametrize("text, rest", [
+    ("hey cygnus, play some music", "play some music"),
+    ("Hi Jarvis, open notepad", "open notepad"),
+    ("cygnus open notepad", "open notepad"),
+    ("hey", "hey"),                              # nothing behind it: left as said
+])
+def test_the_name_and_a_greeting_are_lead_ins(text, rest):
+    assert tools.strip_fillers(text) == rest
+
+
+@pytest.mark.parametrize("text", ["open VS Code", "launch Visual Studio Code", "open claude code"])
+def test_an_editor_named_code_is_not_coding_work(text):
+    assert tools._detect_backend(text) != "opencode"
+
+
+@pytest.mark.parametrize("text", ["code a small website", "debug the login page",
+                                  "create a react app for my notes"])
+def test_real_coding_work_still_goes_to_opencode(text):
+    assert tools._detect_backend(text) == "opencode"
+
+
 class _Proc:
     returncode = 0
     cmd = None
