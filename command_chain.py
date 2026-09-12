@@ -16,6 +16,14 @@ _ACTION = (r"(?:open|launch|start|(?:force\s+)?close|quit|exit|kill|play|pause|r
 _ACTION_RE = re.compile(rf"^{_ACTION}\b", re.I)
 # Verbs whose objects form a list of targets: "close spotify, notepad and calculator".
 _LIST_VERBS = {"close", "quit", "exit", "kill"}
+# Open verbs share their verb with a list too, but only when each item is a
+# registered app or site: garbled "Open chat, GPT, and prompt" must not open "GPT".
+_OPEN_VERBS = {"open", "launch", "start"}
+# "open my coding environment like VS Code, Notepad, and Chrome": the items
+# after "like" are what to open (2026-09-12: became one OpenCode job instead).
+_EXAMPLES_RE = re.compile(r"^((?:open|launch|start)\b).*?\b(?:like|such\s+as|including|namely)\s+(.+)$",
+                          re.I)
+_LIST_SEP_RE = re.compile(r"\s*,\s*(?:and\s+)?|\s+and\s+", re.I)
 # A goal or a destructive step: the whole request belongs to the autonomous runner.
 _GOAL_RE = re.compile(r"\b(?:create|make|build|write|delete|remove|erase|install|uninstall|"
                       r"summari[sz]e|compare|research|fix|verify|double\s+check|set\s*up|"
@@ -38,7 +46,28 @@ def _clean(clause):
     return _TAIL_RE.sub("", _LEAD_RE.sub("", (clause or "").strip())).strip()
 
 
-def _clauses(parts):
+def _examples(t):
+    """["open A", "open B", ...] for "open X like A, B and C", else None."""
+    m = _EXAMPLES_RE.match(t)
+    if not m:
+        return None
+    items = [i.strip(" .") for i in _LIST_SEP_RE.split(m.group(2)) if i.strip(" .")]
+    if len(items) < 2 or any(len(i.split()) > 4 for i in items):
+        return None
+    return [f"{m.group(1)} {i}" for i in items]
+
+
+def _shares_verb(verb, chunk, is_target):
+    """Whether a verb-less chunk is another object of `verb`."""
+    word = verb.split()[-1].lower()
+    if len(chunk.split()) > 4:
+        return False
+    if word in _LIST_VERBS:
+        return True
+    return word in _OPEN_VERBS and bool(is_target) and is_target(chunk)
+
+
+def _clauses(parts, is_target=None):
     """Commands from the pieces between separators, or None when a piece
     before the first command is not one."""
     clauses, verb = [], None
@@ -54,7 +83,7 @@ def _clauses(parts):
             clauses.append(chunk)
         elif not clauses:
             return None
-        elif verb.split()[-1].lower() in _LIST_VERBS and len(chunk.split()) <= 4:
+        elif _shares_verb(verb, chunk, is_target):
             clauses.append(f"{verb} {chunk}")
         else:
             clauses[-1] += parts[i - 1] + chunk       # not a command: part of the last one
@@ -75,12 +104,17 @@ def _carry_place(clauses):
     return out
 
 
-def split_commands(text):
-    """The commands in `text`, in order; [text] when it is not a chain."""
+def split_commands(text, is_target=None):
+    """The commands in `text`, in order; [text] when it is not a chain.
+    `is_target(name)` says whether a name is a registered app or site; an
+    open list shares its verb only through it."""
     t = _clean(text)
     if not t or _GOAL_RE.search(t) or _QUESTION_RE.match(t):
         return [text]
-    clauses = _clauses(_SEP_RE.split(t)) or []
+    examples = _examples(t)
+    if examples:
+        return examples
+    clauses = _clauses(_SEP_RE.split(t), is_target) or []
     # "play some music, play some music": once is what was meant.
     clauses = [c for i, c in enumerate(clauses) if i == 0 or c.lower() != clauses[i - 1].lower()]
     if len(clauses) < 2:

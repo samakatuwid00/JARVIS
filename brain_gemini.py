@@ -229,6 +229,20 @@ def _announce_model_switch(failed, model):
         cb(notice)
 
 
+def _is_open_target(name):
+    """Whether `name` is a registered app or site (the chain splitter's test
+    for "open vscode, notepad and chrome")."""
+    try:
+        import tools
+        if tools.resolve_open_target(name)[0] in ("app", "site", "clarify"):
+            return True
+        # What open_application finds by alias or product name ("calculator",
+        # "vs code") counts too.
+        return tools._find_app_by_name(tools._clean_app_name(name)) is not None
+    except Exception:
+        return False
+
+
 def _lead_llm(prompt):
     """The intent router's model call on a reply's path: answering cloud
     models only. The dead 9router model, then the CPU model, held a delete
@@ -1704,7 +1718,7 @@ class JarvisBrain:
         _progress_local.grounded = None
         try:
             import command_chain
-            clauses = command_chain.split_commands(user_input)
+            clauses = command_chain.split_commands(user_input, is_target=_is_open_target)
         except Exception:
             clauses = [user_input]
         try:

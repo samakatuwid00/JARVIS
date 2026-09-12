@@ -45,6 +45,23 @@ def test_goals_questions_and_sentences_stay_whole(text):
     assert split_commands(text) == [text]
 
 
+def test_open_like_a_list_opens_each_one():
+    assert split_commands("Can you open my coding environment like VS Code, Notepad, and Chrome?") == \
+        ["open VS Code", "open Notepad", "open Chrome"]
+    assert split_commands("launch my tools such as obsidian and spotify") == \
+        ["launch obsidian", "launch spotify"]
+
+
+def test_an_open_list_shares_its_verb_only_with_real_targets():
+    known = {"notepad", "chrome", "calculator"}
+    is_target = lambda name: name.lower() in known
+    assert split_commands("open notepad, chrome and calculator", is_target=is_target) == \
+        ["open notepad", "open chrome", "open calculator"]
+    garbled = "Open chat, GPT, and prompt, what is AI?"                 # GPT is not an app
+    assert split_commands(garbled, is_target=is_target) == [garbled]
+    assert split_commands("open notepad and chrome") == ["open notepad and chrome"]   # no checker
+
+
 def test_a_chain_runs_each_command_and_stops_at_a_confirm():
     brain = object.__new__(brain_gemini.JarvisBrain)
     ran = []
