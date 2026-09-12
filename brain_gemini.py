@@ -249,6 +249,18 @@ def _is_open_target(name):
         return False
 
 
+def _changes_things(text):
+    """A request that changes the machine (delete, write, install ...). It goes
+    to the confirm gate whatever the router says, so the router's model call
+    is skipped: it took 8-10 s and came back "invalid" for "delete the file
+    ..." (2026-09-12)."""
+    try:
+        import tools
+        return bool(tools._MUTATING_RE.search(text or ""))
+    except Exception:
+        return False
+
+
 def _lead_llm(prompt):
     """The intent router's model call on a reply's path: answering cloud
     models only. The dead 9router model, then the CPU model, held a delete
@@ -2060,7 +2072,7 @@ class JarvisBrain:
                 import dialogue_state as _ds
                 import intent_router as _ir
                 if _ir.MODE == "lead" and not _fast_lane_opens(user_input) \
-                        and _router_may_lead(user_input):
+                        and _router_may_lead(user_input) and not _changes_things(user_input):
                     _apps = _aa.load_apps()["apps"]
                     _snap = _ds.snapshot()
                     if _ir.worth_asking(user_input, _snap, _apps):

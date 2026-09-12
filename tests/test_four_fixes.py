@@ -258,6 +258,14 @@ def test_the_rules_model_asks_answering_models_first_and_can_skip_local(monkeypa
     assert asked[0] == config.ROUTER_MODEL                             # nothing known: configured
 
 
+@pytest.mark.parametrize("text, changes", [
+    (r"delete the file C:\cygnus_smoke_missing\old.txt", True), ("install spotify", True),
+    ("write hello world in notepad", True), ("turn the spotify volume down", False),
+    ("open new tab on brave", False)])
+def test_requests_that_change_things_skip_the_router_model(text, changes):
+    assert b._changes_things(text) is changes
+
+
 def test_the_router_lead_never_waits_on_the_local_model(monkeypatch):
     import rules_ai
     seen = []
