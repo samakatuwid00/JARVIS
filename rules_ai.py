@@ -186,22 +186,34 @@ def _parse_json(raw):
     return data if isinstance(data, dict) else None
 
 
-def _ask_llm(prompt):
+def _router_models(config):
+    """9router models to ask: the three router_health says answer right now,
+    else the brain's model and two of its fallbacks. The configured model has
+    been dead for days (503), and asking it first cost every call."""
+    try:
+        import router_health
+        healthy = [m for m in router_health.healthy_models() if m][:3]
+    except Exception:
+        healthy = []
+    return healthy or [config.ROUTER_MODEL] + list(
+        getattr(config, "ROUTER_FALLBACK_MODELS", []) or [])[:2]
+
+
+def _ask_llm(prompt, local=True):
     """(parsed JSON dict, model) from the first model that answers, else
-    (None, reason). Router first, then the local Ollama model."""
+    (None, reason). 9router's answering models first, then - unless
+    local=False - the local Ollama model, which on this CPU takes ~20 s or
+    more and must not sit on a reply's path."""
     try:
         from openai import OpenAI
         import config
     except Exception as e:
         return None, f"no LLM client ({type(e).__name__})"
-    # Cloud models through 9router first (the brain's model, then two of its
-    # fallbacks), then the local Ollama model.
-    router_models = [config.ROUTER_MODEL] + list(
-        getattr(config, "ROUTER_FALLBACK_MODELS", []) or [])[:2]
     tries = [(config.ROUTER_BASE_URL, config.ROUTER_API_KEY or "dummy", m, 20)
-             for m in dict.fromkeys(router_models)]
-    tries.append((config.OLLAMA_BASE_URL, config.OLLAMA_API_KEY or "ollama",
-                  config.OLLAMA_MODEL, 90))
+             for m in dict.fromkeys(_router_models(config))]
+    if local:
+        tries.append((config.OLLAMA_BASE_URL, config.OLLAMA_API_KEY or "ollama",
+                      config.OLLAMA_MODEL, 90))
     errors = []
     router_down = False
     for base, key, model, timeout in tries:

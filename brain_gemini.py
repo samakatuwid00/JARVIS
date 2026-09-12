@@ -229,6 +229,15 @@ def _announce_model_switch(failed, model):
         cb(notice)
 
 
+def _lead_llm(prompt):
+    """The intent router's model call on a reply's path: answering cloud
+    models only. The dead 9router model, then the CPU model, held a delete
+    request for 25 s before its confirm (2026-09-12); with no cloud model up
+    the router simply does not lead, and routing carries on."""
+    import rules_ai
+    return rules_ai._ask_llm(prompt, local=False)
+
+
 def _client_key():
     """Whose conversation this thread's turn belongs to (think(client=...))."""
     return getattr(_progress_local, "client", None) or "default"
@@ -2035,7 +2044,7 @@ class JarvisBrain:
                     _apps = _aa.load_apps()["apps"]
                     _snap = _ds.snapshot()
                     if _ir.worth_asking(user_input, _snap, _apps):
-                        _led, self._lead_record = _ir.route(user_input, _snap, _apps)
+                        _led, self._lead_record = _ir.route(user_input, _snap, _apps, llm=_lead_llm)
                         if _led is not None:
                             self.conversation.append({"role": "assistant", "content": _led})
                             self.last_backend = "router-lead"

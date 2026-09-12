@@ -227,6 +227,45 @@ def test_the_switch_signal_goes_out_only_once_router_health_exists(monkeypatch):
     assert heard == ["model_switch:a->b"]                         # router_health words it
 
 
+def _asked_models(monkeypatch):
+    import openai
+    asked = []
+
+    class Client:
+        def __init__(self, **kw):
+            self.chat = type("C", (), {})()
+            self.chat.completions = type("Q", (), {})()
+            self.chat.completions.create = lambda model, **k: asked.append(model) or \
+                (_ for _ in ()).throw(RuntimeError("503"))
+    monkeypatch.setattr(openai, "OpenAI", Client)
+    return asked
+
+
+def test_the_rules_model_asks_answering_models_first_and_can_skip_local(monkeypatch):
+    import sys
+    import config
+    import rules_ai
+    asked = _asked_models(monkeypatch)
+    monkeypatch.setitem(sys.modules, "router_health", _Health(["oc/big-pickle", "oc/ling"]))
+    assert rules_ai._ask_llm("x", local=False)[0] is None
+    assert asked == ["oc/big-pickle", "oc/ling"]                     # no dead model, no Ollama
+    asked.clear()
+    rules_ai._ask_llm("x")
+    assert asked[:2] == ["oc/big-pickle", "oc/ling"] and asked[-1] == config.OLLAMA_MODEL
+    asked.clear()
+    monkeypatch.setitem(sys.modules, "router_health", None)
+    rules_ai._ask_llm("x", local=False)
+    assert asked[0] == config.ROUTER_MODEL                             # nothing known: configured
+
+
+def test_the_router_lead_never_waits_on_the_local_model(monkeypatch):
+    import rules_ai
+    seen = []
+    monkeypatch.setattr(rules_ai, "_ask_llm", lambda prompt, local=True: seen.append(local) or (None, "x"))
+    b._lead_llm("prompt")
+    assert seen == [False]
+
+
 def test_a_real_request_is_not_a_check_in():
     assert b._is_bare_check_in("test the login page") is False
     assert b._is_bare_check_in("open notepad") is False
