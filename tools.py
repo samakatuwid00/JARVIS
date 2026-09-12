@@ -2290,7 +2290,7 @@ def _look_only_report(before: dict, result: str, jid) -> str:
 def delegate_to_hermes(task: str, timeout: int = 300, max_turns: int = 15,
                        confirm: bool = False, raw_task: str = None,
                        background: bool = False, on_done=None,
-                       progress_cb=None) -> str:
+                       progress_cb=None, grounded: bool = False) -> str:
     """Hand a task to the local Hermes agent (full toolset) and report its answer.
 
     Hermes is the executor: it can use the terminal, files, browser, code,
@@ -2353,7 +2353,7 @@ def delegate_to_hermes(task: str, timeout: int = 300, max_turns: int = 15,
             _PENDING_HERMES_CALL = dict(
                 task=task, timeout=timeout, max_turns=max_turns, raw_task=raw_task,
                 background=background, on_done=on_done, progress_cb=progress_cb, jid=jid,
-                ts=time.time())
+                ts=time.time(), grounded=grounded)
             _jobs.update(jid, state="waiting-on-confirm", note="needs confirm — say 'confirm' to run", summary=f"Waiting for confirm: {gate_target[:120]}")
             _audit_log("delegate_to_hermes", gate_target, "NEEDS_CONFIRM", confirm=False, extra={"jid": jid})
             return (f"[NEEDS_CONFIRM:{jid}] That task changes state or isn't on the pre-approved safe list. "
@@ -2364,7 +2364,7 @@ def delegate_to_hermes(task: str, timeout: int = 300, max_turns: int = 15,
             _PENDING_HERMES_CALL = dict(
                 task=task, timeout=timeout, max_turns=max_turns, raw_task=raw_task,
                 background=background, on_done=on_done, progress_cb=progress_cb, jid=jid,
-                ts=time.time())
+                ts=time.time(), grounded=grounded)
             _jobs.update(jid, state="waiting-on-confirm", note="latch mismatch — re-issue exact task then confirm")
             _audit_log("delegate_to_hermes", gate_target, "NEEDS_CONFIRM_latch_mismatch", confirm=True, extra={"jid": jid})
             return ("[NEEDS_CONFIRM] Please re-issue the exact task and then "
@@ -2492,6 +2492,11 @@ def confirm_pending(on_done=None, progress_cb=None, background: bool | None = No
         import jobs as _jobs
         _jobs.update(superseded_jid, state="timeout",
                      note="superseded — re-confirmed, running as a new job")
+    if kw.pop("grounded", False):         # asked before its brief was built: build it now
+        return delegate_to_hermes_grounded(
+            kw.get("raw_task") or kw["task"], timeout=kw["timeout"], max_turns=kw["max_turns"],
+            confirm=True, background=kw["background"], on_done=kw["on_done"],
+            progress_cb=kw["progress_cb"])
     return delegate_to_hermes(confirm=True, **kw)
 
 
@@ -2557,7 +2562,16 @@ def delegate_to_hermes_grounded(task: str, timeout: int = 300, max_turns: int = 
                                  on_done=None, progress_cb=None) -> str:
     """Delegate to Hermes WITH per-delegate context assembly (Phase 4).
     Uses context_assembler.assemble_brief for hermes formatting, logs brief.
+
+    A task that needs a confirm asks first and gathers after: building the
+    brief (vault search, session index) took 37-60 s before "please confirm"
+    was even said, long enough to drop the client's socket (2026-09-12). The
+    latch remembers the task is grounded; confirm_pending builds the brief.
     """
+    if not confirm and not _is_safe_task(task):
+        return delegate_to_hermes(task, timeout=timeout, max_turns=max_turns, confirm=False,
+                                  raw_task=task, background=background, on_done=on_done,
+                                  progress_cb=progress_cb, grounded=True)
     try:
         import context_assembler as ca
         prefix = ca.assemble_brief(task, delegate="hermes")
@@ -2578,6 +2592,10 @@ def delegate_to_hermes_grounded(task: str, timeout: int = 300, max_turns: int = 
         if appctx:
             prefix += appctx + "\n"
         prefix += "TASK:\n"
+    if confirm and _PENDING_DESTRUCTIVE.get("task") == task:
+        # The user confirmed this exact task: the latch now holds the briefed
+        # text that is about to run, so the confirm releases it.
+        _PENDING_DESTRUCTIVE["task"] = prefix + task
     return delegate_to_hermes(prefix + task, timeout=timeout, max_turns=max_turns,
                               confirm=confirm, raw_task=task,
                               background=background, on_done=on_done,
