@@ -785,8 +785,13 @@
   html[data-desk="sticky"] #jv-topbar.dragging { cursor: grabbing; }
   /* The panel window is transparent; the page paints it with round corners
      and a hairline edge instead of the square box Windows would draw. */
-  html[data-desk="sticky"] { background: transparent; }
+  /* Both transparent: a body background would spread to the whole canvas,
+     past the clip. The ink is a rounded layer instead; the clip trims the
+     full-window overlays (#jv-backdim, the fades) to the same corners. */
+  html[data-desk="sticky"], html[data-desk="sticky"] body { background: transparent; }
   html[data-desk="sticky"] body { clip-path: inset(0 round 16px); }
+  html[data-desk="sticky"] body::before { content: ''; position: fixed; inset: 0; z-index: -1;
+    border-radius: 16px; background: var(--ink); }
   html[data-desk="sticky"] body::after { content: ''; position: fixed; inset: 0; z-index: 1000;
     pointer-events: none; border-radius: 16px; border: 1px solid var(--hairline); }
   #jv-mini-orb { display: none; }
