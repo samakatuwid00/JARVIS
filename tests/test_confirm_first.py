@@ -40,6 +40,31 @@ def test_confirm_builds_the_brief_then_runs_the_same_task(hermes):
     assert hermes["brief"] == ["delete the file C:/tmp/old.txt"]
     assert hermes["ran"] == ["BRIEF\ndelete the file C:/tmp/old.txt"]
     assert tools._PENDING_HERMES_CALL is None
+    (job,) = jobs.recent(5)                     # the card that waited is the one that ran
+    assert job["state"] == "done"
+
+
+def test_a_background_confirm_answers_at_once(hermes):
+    import threading, time
+    gate = threading.Event()
+    import context_assembler
+    slow = context_assembler.assemble_brief
+    context_assembler.assemble_brief = lambda task, delegate=None: (gate.wait(5), slow(task))[1]
+    try:
+        tools.delegate_to_hermes_grounded("delete the file C:/tmp/old.txt")
+        got = []
+        ack = tools.confirm_pending(on_done=got.append, background=True)
+        assert ack.startswith("⟳ HERMES_BACKGROUND:")        # before the brief is even built
+        (job,) = jobs.recent(5)
+        assert job["state"] == "running" and job["progress"][-1] == "getting ready"
+        gate.set()
+        for _ in range(200):
+            if got:
+                break
+            time.sleep(.02)
+        assert got == ["Deleted it."] and jobs.recent(5)[0]["state"] == "done"
+    finally:
+        context_assembler.assemble_brief = slow
 
 
 def test_no_releases_it_without_building_anything(hermes):

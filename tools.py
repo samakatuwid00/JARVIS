@@ -2290,7 +2290,7 @@ def _look_only_report(before: dict, result: str, jid) -> str:
 def delegate_to_hermes(task: str, timeout: int = 300, max_turns: int = 15,
                        confirm: bool = False, raw_task: str = None,
                        background: bool = False, on_done=None,
-                       progress_cb=None, grounded: bool = False) -> str:
+                       progress_cb=None, grounded: bool = False, jid: str = None) -> str:
     """Hand a task to the local Hermes agent (full toolset) and report its answer.
 
     Hermes is the executor: it can use the terminal, files, browser, code,
@@ -2345,7 +2345,8 @@ def delegate_to_hermes(task: str, timeout: int = 300, max_turns: int = 15,
     # Phase 2: session registry — every delegation gets a job ID, non-blocking, proactive.
     import jobs as _jobs
     # create job early so waiting-on-confirm is also tracked (queryable, not hidden in latch)
-    jid = _jobs.create(gate_target[:200], tier="hermes", background=background)
+    # `jid`: the card that waited for this confirm carries on (no new card).
+    jid = jid or _jobs.create(gate_target[:200], tier="hermes", background=background)
     if needs_confirm:
         global _PENDING_HERMES_CALL
         if not confirm:
@@ -2488,16 +2489,44 @@ def confirm_pending(on_done=None, progress_cb=None, background: bool | None = No
         kw["progress_cb"] = progress_cb
     if background is not None:
         kw["background"] = background
+    if kw.pop("grounded", False):         # asked before its brief was built: build it now
+        return _confirm_grounded(kw, superseded_jid)
     if superseded_jid:
         import jobs as _jobs
         _jobs.update(superseded_jid, state="timeout",
                      note="superseded — re-confirmed, running as a new job")
-    if kw.pop("grounded", False):         # asked before its brief was built: build it now
-        return delegate_to_hermes_grounded(
-            kw.get("raw_task") or kw["task"], timeout=kw["timeout"], max_turns=kw["max_turns"],
-            confirm=True, background=kw["background"], on_done=kw["on_done"],
-            progress_cb=kw["progress_cb"])
     return delegate_to_hermes(confirm=True, **kw)
+
+
+def _confirm_grounded(kw: dict, jid: str | None) -> str:
+    """Run a confirmed task whose brief was not built for the question: build
+    it now, on the card that waited, in the background when the turn allows,
+    so "confirm" is answered at once instead of after the ~37 s brief."""
+    import jobs as _jobs
+    if jid:
+        _jobs.update(jid, state="running", note="getting ready")
+    raw = kw.get("raw_task") or kw["task"]
+
+    def run():
+        return delegate_to_hermes_grounded(raw, timeout=kw["timeout"], max_turns=kw["max_turns"],
+                                           confirm=True, progress_cb=kw.get("progress_cb"), jid=jid)
+
+    on_done = kw.get("on_done")
+    if not (kw.get("background") and callable(on_done)):
+        return run()
+
+    def _bg():
+        try:
+            result = run()
+        except Exception as e:
+            result = f"[Error] Hermes task failed: {type(e).__name__}: {e}"
+        try:
+            on_done(result)
+        except Exception as e:
+            print(f"[HERMES] on_done callback raised: {e}", flush=True)
+
+    threading.Thread(target=_bg, daemon=True, name=f"hermes-confirm-{jid}").start()
+    return f"{HERMES_BACKGROUND_ACK} (job {jid})" if jid else HERMES_BACKGROUND_ACK
 
 
 # ── Grounded Hermes delegation (Pillar C: memory layer) ─────────────────────
@@ -2559,7 +2588,7 @@ def _app_context(task: str) -> str:
 
 def delegate_to_hermes_grounded(task: str, timeout: int = 300, max_turns: int = 15,
                                  confirm: bool = False, background: bool = False,
-                                 on_done=None, progress_cb=None) -> str:
+                                 on_done=None, progress_cb=None, jid: str = None) -> str:
     """Delegate to Hermes WITH per-delegate context assembly (Phase 4).
     Uses context_assembler.assemble_brief for hermes formatting, logs brief.
 
@@ -2599,7 +2628,7 @@ def delegate_to_hermes_grounded(task: str, timeout: int = 300, max_turns: int = 
     return delegate_to_hermes(prefix + task, timeout=timeout, max_turns=max_turns,
                               confirm=confirm, raw_task=task,
                               background=background, on_done=on_done,
-                              progress_cb=progress_cb)
+                              progress_cb=progress_cb, jid=jid)
 
 
 # ── Phase 3: Unified delegate() — single routing primitive ────────────────

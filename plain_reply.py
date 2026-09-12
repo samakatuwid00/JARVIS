@@ -197,6 +197,8 @@ def _detail(note: str) -> str:
         return note
     if (note or "").startswith("handed to "):
         return "H" + note[1:]
+    if note == "getting ready":
+        return "Getting ready"
     return "Started"
 
 
