@@ -119,6 +119,76 @@ def test_model_clients_never_retry_a_timed_out_call(monkeypatch, method, kwargs)
     assert made and made[0]["max_retries"] == 0
 
 
+class _Health:
+    """A stand-in router_health: live ordering, failure reports, notice."""
+
+    def __init__(self, healthy):
+        self.healthy, self.marked = healthy, []
+
+    def healthy_models(self):
+        return self.healthy
+
+    def mark_unhealthy(self, model, reason):
+        self.marked.append((model, reason))
+
+    def switch_notice(self, failed, model):
+        return f"{failed} is down, so {model} is answering."
+
+
+def test_router_models_follow_the_live_health_list(monkeypatch):
+    import sys
+    monkeypatch.setattr(b, "ROUTER_MODEL", "a")
+    monkeypatch.setattr(b, "ROUTER_FALLBACK_MODELS", ["b", "c"])
+    monkeypatch.setitem(sys.modules, "router_health", None)
+    assert b._router_models() == ["a", "b", "c"]                  # no health module yet
+    monkeypatch.setitem(sys.modules, "router_health", _Health(["c", "b"]))
+    assert b._router_models() == ["c", "b"]
+    monkeypatch.setitem(sys.modules, "router_health", _Health([]))
+    assert b._router_models() == ["a", "b", "c"]                  # nothing known: configured
+
+
+def test_a_down_model_hands_over_and_says_which_one_answered(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+    import openai
+    health = _Health(["a", "b"])
+    monkeypatch.setitem(sys.modules, "router_health", health)
+
+    def create(model, **kw):
+        if model == "a":
+            raise RuntimeError("Error code: 503 - Unavailable")
+        msg = SimpleNamespace(content="Blue, sir.", tool_calls=None)
+        return SimpleNamespace(choices=[SimpleNamespace(message=msg)], usage=None)
+
+    class Client:
+        def __init__(self, **kw):
+            self.chat = SimpleNamespace(completions=SimpleNamespace(create=create))
+    monkeypatch.setattr(openai, "OpenAI", Client)
+    heard = []
+    monkeypatch.setattr(b._progress_local, "cb", heard.append, raising=False)
+    monkeypatch.setattr(b._progress_local, "deadline", None, raising=False)
+    brain = object.__new__(b.JarvisBrain)
+    brain.conversation = [{"role": "user", "content": "what colour is the sky?"}]
+    brain.last_stats = {}
+    assert brain._think_router("what colour is the sky?") == "Blue, sir."
+    assert brain.last_stats == {"model": "b", "switched_from": "a"}
+    assert heard == ["a is down, so b is answering."]
+    assert health.marked and health.marked[0][0] == "a"
+
+
+def test_the_switch_signal_goes_out_only_once_router_health_exists(monkeypatch):
+    import sys
+    heard = []
+    monkeypatch.setattr(b._progress_local, "cb", heard.append, raising=False)
+    monkeypatch.setitem(sys.modules, "router_health", None)
+    b._announce_model_switch("a", "b")
+    assert heard == []                                            # nobody to read it yet
+    bare = type("Health", (), {"healthy_models": staticmethod(lambda: [])})()
+    monkeypatch.setitem(sys.modules, "router_health", bare)
+    b._announce_model_switch("a", "b")
+    assert heard == ["model_switch:a->b"]                         # router_health words it
+
+
 def test_a_real_request_is_not_a_check_in():
     assert b._is_bare_check_in("test the login page") is False
     assert b._is_bare_check_in("open notepad") is False

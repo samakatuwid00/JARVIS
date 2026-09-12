@@ -179,6 +179,56 @@ def _call_timeout(cap):
     return min(cap, left)
 
 
+def _router_health():
+    """The live 9router health module, or None until it exists."""
+    try:
+        import router_health
+        return router_health
+    except Exception:
+        return None
+
+
+def _router_models():
+    """9router models to try, best first: the models router_health says are
+    answering right now, else the configured primary and its fallbacks."""
+    configured = [ROUTER_MODEL] + [m for m in ROUTER_FALLBACK_MODELS if m != ROUTER_MODEL]
+    health = _router_health()
+    try:
+        healthy = [m for m in (health.healthy_models() if health else []) if m]
+    except Exception:
+        healthy = []
+    return healthy or configured
+
+
+def _report_unhealthy(model, reason):
+    """Tell router_health a model just failed a live call, if it listens."""
+    health = _router_health()
+    if health and hasattr(health, "mark_unhealthy"):
+        try:
+            health.mark_unhealthy(model, str(reason)[:200])
+        except Exception:
+            pass
+
+
+def _announce_model_switch(failed, model):
+    """Say, while the turn runs, that another model is taking over. The words
+    are router_health's: its switch_notice() when it has one, else the
+    "model_switch:<from>-><to>" signal its reader turns into words and a HUD
+    line. Nothing before router_health exists, so the raw signal is never
+    spoken."""
+    health = _router_health()
+    if not health:
+        return
+    try:
+        notice = (health.switch_notice(failed, model) if hasattr(health, "switch_notice")
+                  else f"model_switch:{failed}->{model}")
+    except Exception:
+        notice = None
+    cb = getattr(_progress_local, "cb", None)
+    if notice and callable(cb):
+        cb(notice)
+
+
 def _client_key():
     """Whose conversation this thread's turn belongs to (think(client=...))."""
     return getattr(_progress_local, "client", None) or "default"
@@ -2417,9 +2467,11 @@ class JarvisBrain:
         class _RateLimited(Exception):
             pass
 
-        model_list = [ROUTER_MODEL] + [m for m in ROUTER_FALLBACK_MODELS if m != ROUTER_MODEL]
-        last_err = None
+        model_list = _router_models()
+        last_err, failed = None, None
         for model in model_list:
+            if failed:
+                _announce_model_switch(failed, model)
             try:
                 pending = []
                 for _ in range(10):
@@ -2446,7 +2498,6 @@ class JarvisBrain:
                         cs = str(ce)
                         if "429" in cs or "rate" in cs.lower() or "quota" in cs.lower():
                             print(f"[JARVIS] 9router model {model} rate-limited; trying next...")
-                            time.sleep(2)
                             raise _RateLimited(cs)
                         raise
 
@@ -2505,17 +2556,23 @@ class JarvisBrain:
                         break
                     pending.append({"role": "assistant", "content": text})
                     self.conversation.extend(pending)
+                    self.last_stats["model"] = model
+                    if failed:
+                        self.last_stats["switched_from"] = failed
                     return text
 
                 # inner loop ended with no answer from this model -> try next model
                 last_err = last_err or "no answer"
+                failed = model
                 continue
             except _RateLimited:
                 last_err = "rate-limited"
-                continue
+            except _OutOfTime:
+                raise
             except Exception as e:
                 last_err = str(e)
-                continue
+            failed = model
+            _report_unhealthy(model, last_err)
         # All 9router models failed (rate-limited or errored) -> caller falls
         # back to Ollama, then demo mode only if Ollama also fails.
         if last_err:
