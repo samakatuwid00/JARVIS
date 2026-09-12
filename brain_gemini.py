@@ -1349,9 +1349,42 @@ def _apply_consent_policy(name: str, args: dict, last_user_text: str) -> dict:
     return args
 
 
+# A question about what already happened ("what happened?", "explain it",
+# "status?") is answered, never acted on. On 2026-09-12 "What happened with
+# that? Explain it simply." typed a prompt into Claude's site and tried to
+# rewrite the page a job had just made.
+_REPORT_ASK_RE = re.compile(
+    r"^\s*(?:(?:please|cygnus|jarvis|hey|ok(?:ay)?|so|and|sir)[,\s]+)*"
+    r"(?:what(?:'s|\s+is)?\s+(?:happened|the\s+status|going\s+on|did\s+you\s+(?:do|change|make))"
+    r"|what\s+went\s+wrong|why\s+did|how\s+did\s+(?:it|that)\s+go|status\b"
+    r"|explain|summari[sz]e|recap|tell\s+me\s+what\s+(?:happened|you\s+did))", re.I)
+# Tools that only look. Everything else changes something (files, apps,
+# sites, other AIs, jobs) and waits until the user asks for it.
+_LOOK_ONLY_TOOLS = {"read_file", "list_directory", "search_web", "get_memory_context",
+                    "search_vault_semantic", "read_vault_note", "recall_facts",
+                    "search_chatgpt_history", "browser_status", "list_installed_apps",
+                    "job_control"}
+
+
+def _held_for_question(name: str, args: dict, last_user_text: str) -> str | None:
+    """The tool result to give instead of running `name`, or None to run it."""
+    looks = name in _LOOK_ONLY_TOOLS and not (
+        name == "job_control" and str((args or {}).get("action", "")).lower() == "stop")
+    if looks or not _REPORT_ASK_RE.match(last_user_text or ""):
+        return None
+    print(f"[POLICY] {name} held - the user asked what happened, not for an action: "
+          f"{last_user_text[:70]!r}", flush=True)
+    return ("[Held] The user only asked what happened, so nothing was run or changed. "
+            "Answer from what you already know, in plain words, and offer to do it "
+            "if they want.")
+
+
 def execute_tool(name: str, args: dict, last_user_text: str = "") -> str:
     """Execute a tool by name with arguments."""
     import tools
+    held = _held_for_question(name, args, last_user_text)
+    if held:
+        return held
     return tools.execute_tool(name, _apply_consent_policy(name, args, last_user_text))
 
 

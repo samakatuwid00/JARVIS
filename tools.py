@@ -2233,6 +2233,48 @@ def _run_hermes_sync(task: str, timeout: int, max_turns: int,
                      progress_cb=progress_cb)
 
 
+# A "safe" task is one the user asked to look at, not change, so Hermes is
+# told so. Its toolsets cannot be narrowed to reading (the file toolset reads
+# and writes), so Cygnus's own folder is checked afterwards as well: on
+# 2026-09-12 a look-only job rewrote jarvis_hud_v3.html and nobody was told.
+_LOOK_ONLY_BRIEF = ("LOOK-ONLY TASK: read, search and report back. Do not create, edit, "
+                    "move or delete any file, and do not run anything that changes the "
+                    "machine. If the task needs a change, say what you would change.\n\n")
+
+
+def _repo_changes() -> dict:
+    """{path: mtime} for every file git sees as changed in Cygnus's folder."""
+    root = os.path.dirname(os.path.abspath(__file__))
+    try:
+        out = subprocess.run(["git", "status", "--porcelain"], cwd=root, capture_output=True,
+                             text=True, timeout=10).stdout
+    except Exception:
+        return {}
+    seen = {}
+    for line in out.splitlines():
+        path = line[3:].strip().strip('"')
+        try:
+            seen[path] = os.path.getmtime(os.path.join(root, path))
+        except OSError:
+            seen[path] = None
+    return seen
+
+
+def _look_only_report(before: dict, result: str, jid) -> str:
+    """`result`, plus a plain note if files changed while a look-only job ran."""
+    changed = sorted(p for p, m in _repo_changes().items() if before.get(p, -1) != m)
+    if not changed:
+        return result
+    note = "Files in Cygnus's folder changed while this look-only job ran: " + ", ".join(changed[:8])
+    _audit_log("delegate_to_hermes", note, "look_only_changed_files", extra={"jid": jid})
+    try:
+        import jobs as _jobs
+        _jobs.update(jid, note=note)
+    except Exception:
+        pass
+    return f"{result}\n\n[{note}]"
+
+
 def delegate_to_hermes(task: str, timeout: int = 300, max_turns: int = 15,
                        confirm: bool = False, raw_task: str = None,
                        background: bool = False, on_done=None,
@@ -2319,6 +2361,8 @@ def delegate_to_hermes(task: str, timeout: int = 300, max_turns: int = 15,
         _audit_log("delegate_to_hermes", gate_target, "confirmed", confirm=True, extra={"jid": jid})
     else:
         _jobs.update(jid, state="running", note="safe — launching Hermes")
+        task = _LOOK_ONLY_BRIEF + task
+    before = _repo_changes() if is_safe else None
 
     # --- Execution path -----------------------------------------------------
     # Phase 2+4: non-blocking. Front never blocks; status via jobs registry + WS listener.
@@ -2328,6 +2372,8 @@ def delegate_to_hermes(task: str, timeout: int = 300, max_turns: int = 15,
             j = jid_bg
             try:
                 result = _run_hermes_sync(task, timeout, max_turns, progress_cb)
+                if before is not None:
+                    result = _look_only_report(before, result, j)
                 if result.startswith("[Error]"):
                     _jobs.update(j, state="error", error=result[:500], result=result, summary=result[:120])
                     _audit_log("delegate_to_hermes", gate_target, "background_error", result=result, confirm=confirm, extra={"jid": j})
@@ -2349,6 +2395,8 @@ def delegate_to_hermes(task: str, timeout: int = 300, max_turns: int = 15,
     # sync path — still tracked in registry so HUD shows it even while blocked
     _jobs.update(jid, state="running", note="sync execution")
     result = _run_hermes_sync(task, timeout, max_turns, progress_cb)
+    if before is not None:
+        result = _look_only_report(before, result, jid)
     if result.startswith("[Error]"):
         _jobs.update(jid, state="error", error=result[:500], result=result, summary=result[:120])
     else:
