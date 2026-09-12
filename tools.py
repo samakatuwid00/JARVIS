@@ -3032,6 +3032,7 @@ def _run_specialist(task: str, agent: str | None = None, timeout: int = 300) -> 
     cmd = [oc, "run"]
     if agent:
         cmd += ["--agent", agent]
+    cmd += _specialist_model_args(agent)      # a working model when its own is down
     cmd.append(task)
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True,
@@ -3116,6 +3117,7 @@ def _run_specialist_bg(task: str, agent: str | None, timeout: int,
     cmd = [oc, "run"]
     if agent:
         cmd += ["--agent", agent]
+    cmd += _specialist_model_args(agent)      # a working model when its own is down
     cmd.append(full_task)
 
     try:
@@ -3537,6 +3539,32 @@ _SPECIALIST_ROUTES = (
     (r"\b(dev server|irims|portfolio project|start .* project)\b", "project-runner"),
     (r"\b(generate|create|make)\b.*\b(image|video|logo|thumbnail|document)\b", "media-creator"),
 )
+
+
+def _specialist_model_args(agent: str | None) -> list:
+    """["-m", "ninerouter/<model>"] when the OpenCode agent's own 9router model
+    is not answering (router_health) and another is. OpenCode's agents are set
+    to cx/gpt-5.4-mini (no key) and antigravity models (out of quota), so on
+    2026-09-12 every hand-off failed with "Missing API key"."""
+    try:
+        import router_health
+        healthy = router_health.healthy_models()
+        if not healthy:
+            return []
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "opencode.json"),
+                  encoding="utf-8") as f:
+            cfg = json.load(f)
+        model = (((cfg.get("agent") or {}).get(agent or "") or {}).get("model")
+                 or cfg.get("model") or "")
+        # OpenCode refuses a 9router model its config does not list.
+        listed = set(((cfg.get("provider") or {}).get("ninerouter") or {}).get("models") or {})
+    except Exception:
+        return []
+    provider, _, name = model.partition("/")
+    usable = [m for m in healthy if m in listed]
+    if provider != "ninerouter" or name in healthy or not usable:
+        return []
+    return ["-m", f"ninerouter/{usable[0]}"]
 
 
 def _pick_specialist(task: str) -> str | None:

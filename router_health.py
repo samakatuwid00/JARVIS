@@ -191,15 +191,44 @@ def answering(model: str | None, backend: str | None) -> str | None:
     return {"cerebras": "Cerebras", "groq": "Groq", "gemini": "Gemini"}.get(backend or "")
 
 
+_PROVIDER = {"oc": "OpenCode's free model", "gc": "through Gemini CLI", "cu": "through Cursor",
+             "gh": "through GitHub Copilot", "cl": "through Cline", "kc": "through Kilo Code"}
+
+
 def answer_notice(model: str | None, backend: str | None, previous: str | None) -> str | None:
     """The line said with a reply when the model answering changed since the
-    last reply to this client ('Claude 4.5 Sonnet is answering now.'), else None."""
+    last one this user heard, else None. Says why when it is a stand-in:
+    "Big Pickle, OpenCode's free model, is answering while Gemini 3.8 Flash is
+    unavailable." A bare "Big Pickle is answering now." puzzled the owner."""
     who = answering(model, backend)
     if not who or who == previous:
         return None
     if backend == "ollama":
         return "The cloud models are unavailable, so the local model is answering; it's slower."
-    return f"{who} is answering now."
+    usual = primary()
+    if who == usual:
+        return f"{who} is back and answering again."
+    prefix = str(model or "").split("/")[0]
+    via = _PROVIDER.get(prefix)
+    who_via = f"{who}, {via}," if via and not via.startswith("through") else (f"{who} {via}" if via else who)
+    return (f"{who_via} is answering while {usual} is unavailable." if usual
+            else f"{who_via} is answering now.")
+
+
+# Who each user last heard was answering, by client ("local", "remote",
+# "desktop", "session:<id>"). Per socket, every phone reconnect announced the
+# stand-in model again (2026-09-12).
+_heard: dict[str, str] = {}
+
+
+def notice_for(client: str | None, model: str | None, backend: str | None) -> str | None:
+    """answer_notice for this client, remembered across its reconnects."""
+    key = client or "local"
+    who = answering(model, backend)
+    line = answer_notice(model, backend, _heard.get(key, primary()))
+    if who:
+        _heard[key] = who
+    return line
 
 
 def primary() -> str | None:

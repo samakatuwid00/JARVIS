@@ -65,6 +65,11 @@ def test_tidy_still_drops_machine_tics_and_dashes():
     assert pr.tidy("⟳ HERMES_BACKGROUND: On it, sir (job c6112ad0)") == "On it, sir"
 
 
+def test_terminal_colour_codes_are_never_read_out():
+    raw = "\x1b[0m > build · cx/gpt-5.4-mini \x1b[0m \x1b[91m\x1b[1mError: \x1b[0mMissing API key."
+    assert "\x1b" not in pr.for_user(raw) and "Missing API key" in pr.for_user(raw)
+
+
 def test_ordinary_replies_are_untouched():
     assert pr.for_user("Your name is Roger, sir.") == "Your name is Roger, sir."
 

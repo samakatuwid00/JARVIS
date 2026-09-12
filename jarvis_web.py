@@ -726,7 +726,34 @@ def _job_cards(recent_s: float = 900) -> list[dict]:
     return rows
 
 
-async def deliver_result(websocket: WebSocket, text: str, speak: bool):
+# Replies that could not be sent because the client's socket closed mid-turn
+# (a phone reconnecting, 2026-09-12: "websocket.send after websocket.close"),
+# kept per client and sent when that client connects again. Last 3, 10 min.
+_UNDELIVERED: dict[str, list] = {}
+_UNDELIVERED_TTL_S = 600
+
+
+def _stash_reply(client: str | None, text: str) -> None:
+    if not client or not text:
+        return
+    rows = [r for r in _UNDELIVERED.get(client, []) if time.time() - r[0] < _UNDELIVERED_TTL_S]
+    _UNDELIVERED[client] = (rows + [(time.time(), strip_ai_artifacts(text))])[-3:]
+    print(f"[WS] reply kept for {client} (socket closed): {text[:60]!r}", flush=True)
+
+
+async def _flush_undelivered(websocket: WebSocket, client: str) -> None:
+    rows = [r for r in _UNDELIVERED.pop(client, []) if time.time() - r[0] < _UNDELIVERED_TTL_S]
+    for _ts, text in rows:
+        try:
+            await websocket.send_text(json.dumps({
+                "type": "response", "text": "While you were reconnecting: " + text,
+                "audio": None, "deferred": True}))
+        except Exception:
+            _UNDELIVERED.setdefault(client, []).append((_ts, text))
+            return
+
+
+async def deliver_result(websocket: WebSocket, text: str, speak: bool, client: str | None = None):
     """Phase 4: deliver a deferred Hermes answer (called from the background thread
     via run_coroutine_threadsafe once Hermes returns). Sends it as a fresh
     `response` event with TTS, so the voice client hears the result whenever it
@@ -750,6 +777,7 @@ async def deliver_result(websocket: WebSocket, text: str, speak: bool):
         await websocket.send_text(json.dumps({"type": "status", "state": "idle"}))
     except Exception as e:
         print(f"[WS] deliver_result error: {e}", flush=True)
+        _stash_reply(client, text)
 
 
 
@@ -1654,6 +1682,16 @@ async def websocket_endpoint(websocket: WebSocket):
     # Whose conversation this socket's turns join: the phone's or this PC's
     # browser, unless "hello" names the desktop window or a session of its own.
     client_key = "remote" if _ws_is_remote(websocket) else "local"
+    await _flush_undelivered(websocket, client_key)     # a reply this client missed
+
+    async def _send_response(payload: dict):
+        """Send a turn's reply; if the socket closed mid-turn, keep it for the
+        client's next connection instead of losing it."""
+        try:
+            await websocket.send_text(json.dumps(payload))
+        except Exception:
+            _stash_reply(client_key, payload.get("text") or "")
+            raise
     # Per-connection feedback policy: each client decides (and hears) its own
     # cues; the synthesizer and audio cache are shared module-wide.
     vf = _vf.Policy()
@@ -1716,14 +1754,13 @@ async def websocket_endpoint(websocket: WebSocket):
         except Exception:
             pass
 
-    # Which model answered this client's last reply (router_health.answering).
-    # Starts as the configured model, so only a change is announced: "Claude
-    # 4.5 Sonnet is answering now." (the owner's ask, 2026-09-12).
+    # Which model is answering, said when it changes for this client: kept by
+    # client in router_health (notice_for), so a phone that reconnects does not
+    # hear "Big Pickle ... is answering" again (the owner's ask, 2026-09-12).
     try:
         import router_health as _rh
-        _answered_by = {"who": _rh.primary()}
     except Exception:
-        _rh, _answered_by = None, {"who": None}
+        _rh = None
 
     async def _say_model_notice():
         """Show and speak who is answering, when it changed since the last reply."""
@@ -1733,10 +1770,7 @@ async def websocket_endpoint(websocket: WebSocket):
             st = dict(getattr(brain, "last_stats", {}) or {})
             backend = st.get("backend") or brain.last_backend
             _note_answering_model(st, backend)        # the top bar keeps it between turns
-            line = _rh.answer_notice(st.get("model"), backend, _answered_by["who"])
-            who = _rh.answering(st.get("model"), backend)
-            if who:
-                _answered_by["who"] = who
+            line = _rh.notice_for(client_key, st.get("model"), backend)
             if line:
                 tts_b64 = await tts_to_b64(line)
                 await websocket.send_text(json.dumps({"type": "progress", "text": line, "audio": tts_b64}))
@@ -1810,6 +1844,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     print("[WS] desktop app window connected", flush=True)
                 if message.get("session"):
                     client_key = "session:" + str(message["session"])[:64]
+                if client_key not in ("remote", "local"):
+                    await _flush_undelivered(websocket, client_key)
 
             elif mtype == "speech":
                 # Phase C: duck music while JARVIS speaks, restore when done.
@@ -1948,7 +1984,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         # Called from the background Hermes thread; hop back to the
                         # event loop to ship the answer to the client.
                         asyncio.run_coroutine_threadsafe(
-                            deliver_result(websocket, result, speak=True), loop)
+                            deliver_result(websocket, result, speak=True, client=client_key), loop)
 
                     # Off the event loop: a turn that drives the browser can run for
                     # a minute, and blocking here stalls the WebSocket for its duration.
@@ -1993,11 +2029,11 @@ async def websocket_endpoint(websocket: WebSocket):
                         wake_engine.suspend()
                     except Exception:
                         pass
-                    await websocket.send_text(json.dumps({
+                    await _send_response({
                         "type": "response",
                         "text": strip_ai_artifacts(response),
                         "audio": tts_b64
-                    }))
+                    })
                     await send_telemetry(websocket)
                     await websocket.send_text(json.dumps({"type": "status", "state": "idle"}))
 
@@ -2103,7 +2139,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
                     def on_hermes_done(result):
                         asyncio.run_coroutine_threadsafe(
-                            deliver_result(websocket, result, speak), loop)
+                            deliver_result(websocket, result, speak, client=client_key), loop)
 
                     response = await asyncio.to_thread(
                         brain.think, user_text, on_hermes_done, _push_progress, client=client_key)
@@ -2138,9 +2174,9 @@ async def websocket_endpoint(websocket: WebSocket):
                             wake_engine.suspend()
                         except Exception:
                             pass
-                    await websocket.send_text(json.dumps({
+                    await _send_response({
                         "type": "response", "text": strip_ai_artifacts(response), "audio": tts_b64
-                    }))
+                    })
                     await send_telemetry(websocket)
                     await websocket.send_text(json.dumps({"type": "status", "state": "idle"}))
                 except Exception as e:

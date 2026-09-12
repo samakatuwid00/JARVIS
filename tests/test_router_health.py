@@ -62,9 +62,25 @@ def test_a_switch_is_announced_once_per_turn():
     assert rh.switch_notice("ag/claude-sonnet-4-6", "gc/gemini-2.5-flash") is None
 
 
-def test_the_answering_model_is_named_when_it_changes():
-    assert rh.answer_notice("cu/claude-4.5-sonnet", "router", "Gemini 3.8 Flash") == "Claude 4.5 Sonnet is answering now."
+def test_the_answering_model_is_named_when_it_changes(monkeypatch):
+    monkeypatch.setattr(rh, "primary", lambda: "Gemini 3.8 Flash")
+    assert rh.answer_notice("oc/big-pickle", "router", "Gemini 3.8 Flash") == \
+        "Big Pickle, OpenCode's free model, is answering while Gemini 3.8 Flash is unavailable."
+    assert rh.answer_notice("cu/claude-4.5-sonnet", "router", "Gemini 3.8 Flash") == \
+        "Claude 4.5 Sonnet through Cursor is answering while Gemini 3.8 Flash is unavailable."
+    assert rh.answer_notice("ag/gemini-3.8-flash-low", "router", "Big Pickle") == \
+        "Gemini 3.8 Flash is back and answering again."
     assert rh.answer_notice("ag/gemini-3.8-flash-low", "router", "Gemini 3.8 Flash") is None
     assert "local model is answering" in rh.answer_notice(None, "ollama", "Gemini 3.8 Flash")
     assert rh.answer_notice(None, "ollama", "the local model") is None
     assert rh.answer_notice(None, "tool", "Gemini 3.8 Flash") is None
+
+
+def test_a_reconnecting_client_is_not_told_again(monkeypatch):
+    monkeypatch.setattr(rh, "primary", lambda: "Gemini 3.8 Flash")
+    monkeypatch.setattr(rh, "_heard", {})
+    assert rh.notice_for("remote", "oc/big-pickle", "router")          # first time: said
+    assert rh.notice_for("remote", "oc/big-pickle", "router") is None  # same phone, new socket
+    assert rh.notice_for("desktop", "oc/big-pickle", "router")         # another device: said once
+    assert rh.notice_for("remote", None, "instant") is None            # a tool turn changes nothing
+    assert rh.notice_for("remote", "oc/big-pickle", "router") is None

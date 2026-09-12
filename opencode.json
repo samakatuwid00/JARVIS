@@ -21,14 +21,19 @@
       "npm": "@ai-sdk/openai-compatible",
       "name": "OmniRoute (local)",
       "options": {
-        "baseURL": "http://localhost:20128/v1"
+        "baseURL": "http://localhost:20128/v1",
+        "apiKey": "{env:ROUTER_API_KEY}"
       },
       "models": {
         "cx/gpt-5.4-mini": {},
         "ag/gemini-3.6-flash-low": {},
         "ag/gemini-3-flash": {},
         "codex": {},
-        "ag/claude-sonnet-4-6": {}
+        "ag/claude-sonnet-4-6": {},
+        "oc/big-pickle": {},
+        "oc/ling-3.0-flash-fin-free": {},
+        "oc/mimo-v2.5-free": {},
+        "oc/nemotron-3.5-lightning-free": {}
       }
     },
     "ollama": {

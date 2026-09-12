@@ -18,6 +18,7 @@ from __future__ import annotations
 import re
 import time
 
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07")
 _JOB_ID = re.compile(r"\s*\((?:job|jid)\s+[0-9a-f]{6,}\)|\bjob\s+[0-9a-f]{8}\b", re.I)
 _BACKGROUND_MARK = re.compile(r"⟳\s*[A-Z_]+_BACKGROUND:\s*")
 _CONFIRM = re.compile(r'^\[NEEDS_CONFIRM(?::[0-9a-f]+)?\](?P<pre>[^"“]*)["“](?P<task>.+?)["”]'
@@ -68,7 +69,9 @@ def for_user(text):
     """A reply as the user should see and hear it."""
     if not isinstance(text, str) or not text.strip():
         return text
-    t = text.strip()
+    # Terminal colour codes from a CLI agent's output ("\x1b[91m Error: ...")
+    # were read out loud on 2026-09-12.
+    t = _ANSI.sub("", text).strip()
     if t.startswith(_REISSUE):
         return "I lost track of which task you meant. Please say the task again, then say confirm."
     m = _CONFIRM.match(t)
