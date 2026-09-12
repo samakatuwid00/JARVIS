@@ -23,7 +23,10 @@ const PORT = Number(readEnv('JARVIS_PORT') || 8000)
 const HUD_URL = `http://127.0.0.1:${PORT}/`
 const HUD_ORIGIN = HUD_URL.slice(0, -1)
 const HOTKEY = 'Control+Alt+J'
-const TRAY_ICON = path.join(REPO, 'static', 'icon-192.png')
+// A ring on a transparent background: the app icon shrunk to 16px was a dark
+// square that vanished on a dark taskbar. tray@2x.png is picked on scaled
+// displays.
+const TRAY_ICON = path.join(__dirname, 'assets', 'tray.png')
 const LOG_FILE = path.join(REPO, 'logs', 'desktop-backend.log')
 const READY_TIMEOUT_MS = 180000
 // What the tray checks besides the backend: Chrome started with its debugging
@@ -424,9 +427,26 @@ function buildTrayMenu () {
 function createTray () {
   const image = nativeImage.createFromPath(TRAY_ICON)
   if (image.isEmpty()) console.error(`[desktop] tray icon missing: ${TRAY_ICON}`)
-  tray = new Tray(image.isEmpty() ? image : image.resize({ width: 16, height: 16 }))
+  tray = new Tray(image)
   tray.on('click', () => showMode(mode === 'mini' ? 'sticky' : mode))
   buildTrayMenu()
+  showTrayHintOnce()
+}
+
+// Windows 11 puts new tray icons under the ^ arrow, so on first start JARVIS
+// says where it went. Once per profile, behind a marker file (the same
+// pattern Sticky Brain uses for autostart).
+function showTrayHintOnce () {
+  const marker = path.join(app.getPath('userData'), 'tray-hint-shown')
+  if (fs.existsSync(marker)) return
+  tray.displayBalloon({
+    title: 'JARVIS is running',
+    content: 'Ctrl+Alt+J opens the panel. The tray icon may be under the ^ arrow on the taskbar; drag it onto the taskbar to keep it visible.'
+  })
+  try {
+    fs.mkdirSync(path.dirname(marker), { recursive: true })
+    fs.writeFileSync(marker, new Date().toISOString(), 'utf8')
+  } catch {}
 }
 
 // ---------------------------------------------------------------- app
