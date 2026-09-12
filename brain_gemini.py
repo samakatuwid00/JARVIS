@@ -1497,8 +1497,16 @@ class JarvisBrain:
         self._lead_record = None
         self._grounded = None
         try:
-            reply = self._think_turn(user_input, on_hermes_done=on_hermes_done,
-                                     progress_cb=progress_cb)
+            import command_chain
+            clauses = command_chain.split_commands(user_input)
+        except Exception:
+            clauses = [user_input]
+        try:
+            if len(clauses) > 1:
+                reply = self._run_chain(clauses, on_hermes_done, progress_cb)
+            else:
+                reply = self._think_turn(user_input, on_hermes_done=on_hermes_done,
+                                         progress_cb=progress_cb)
         finally:
             # The facts rode along for this one answer; history keeps the
             # user's own words so they are not re-sent on every later turn.
@@ -1522,6 +1530,23 @@ class JarvisBrain:
             except Exception as e:
                 print(f"[shadow] observer failed: {type(e).__name__}", flush=True)
         return reply
+
+    def _run_chain(self, clauses, on_hermes_done=None, progress_cb=None):
+        """Each command of "open Spotify and play X" in turn, each routed on
+        its own. Stops at one that asks for a confirm or a pick: the rest
+        may depend on it."""
+        replies = []
+        for i, clause in enumerate(clauses):
+            print(f"[chain] {i + 1}/{len(clauses)}: {clause!r}", flush=True)
+            reply = self._think_turn(clause, on_hermes_done=on_hermes_done,
+                                     progress_cb=progress_cb)
+            replies.append(reply)
+            if ("[NEEDS_CONFIRM" in reply or reply.startswith("[NEEDS_PICK]")) \
+                    and i + 1 < len(clauses):
+                replies.append("I'll wait on that before the rest: "
+                               + "; ".join(clauses[i + 1:]) + ".")
+                break
+        return "\n".join(replies)
 
     def _ground_own_work(self):
         """Attach what JARVIS recently did to this turn's user message, for
