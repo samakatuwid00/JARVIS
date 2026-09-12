@@ -119,6 +119,17 @@ Tablet and desktop keep the artifact as today.
    step 1. Keyboard behaviour still needs the real phone.
 3. **Panel drawer** — markup for the sheet + Panels button + task badge;
    move the side sections into it under 1100px.
+   *Done 2026-09-12.* Below 1100px the columns collapse and `placePanels()`
+   moves the section nodes into `#jv-drawer` in the order Active Tasks,
+   Now Playing, Voice Feedback, System Status, Last Turn, Language Model;
+   at 1100px+ they return to their columns in the original order. Right
+   sheet (380px) on tablets, bottom sheet (82dvh) on phones; closes on the
+   x, the backdrop or Escape. Panels button mirrors `#jv-taskcount` as a
+   badge. `positionStats()` no longer anchors System Status to the
+   artifact's THREAT ASSESSMENT block (it vanished whenever the artifact
+   lacked it, and on phones); `#jv-stats` now takes wheel/touch so its
+   column scrolls under it. Only desktop change: System Status at 1280px
+   is 300px wide (its column) instead of 287px.
 4. **Tablet + landscape** — two-region layout, docked drawer on wide
    tablets, landscape rule with TALK on the right.
 5. **Apps modal** — full screen on phones, tab row scroll.

@@ -514,7 +514,11 @@
   #jv-center .jv-spacer { flex: 0 0 auto; height: 15vh; min-height: 100px; max-height: 200px; }
 
   /* Panels live inside columns now: static flow, always shown. */
-  #jv-col-left #jv-left, #jv-col-left #jv-stats, #jv-col-right #jv-stats { position: static; }
+  #jv-col-left #jv-left, #jv-col-left #jv-stats, #jv-col-right #jv-stats,
+  #jv-drawer #jv-left, #jv-drawer #jv-stats { position: static; }
+  /* #jv-stats was a click-through overlay once; in flow it must take the
+     wheel and touch so its column (or the drawer) scrolls under it. */
+  #jv-col-left #jv-stats, #jv-drawer #jv-stats { pointer-events: auto; }
   .jv-sec { background: rgba(7, 10, 14, .92); border: 1px solid var(--hairline);
     border-radius: 12px; padding: 16px 17px; box-shadow: 0 14px 36px rgba(0, 0, 0, .38);
     backdrop-filter: blur(8px); }
@@ -586,6 +590,41 @@
 
   /* Job tray lives in the right column now. */
   #job-tray { position: static; width: auto; pointer-events: auto; }
+
+  /* Panel drawer. Below 1100px the side columns collapse and their sections
+     move in here (see placePanels): a right-hand sheet on tablets, a bottom
+     sheet on phones. */
+  #jv-panels { display: none; }
+  #jv-panels-badge { display: inline-block; min-width: 18px; height: 18px; margin-left: 6px;
+    padding: 0 5px; border-radius: 9px; background: var(--holo); color: #1a1005;
+    font: 700 10px/18px var(--font-data); letter-spacing: 0; text-align: center; }
+  #jv-panels-badge[hidden] { display: none; }
+  #jv-drawer { position: fixed; inset: 0; z-index: 75; display: none;
+    background: rgba(4, 6, 10, .6); backdrop-filter: blur(4px); }
+  #jv-drawer.show { display: flex; justify-content: flex-end; align-items: stretch; }
+  #jv-drawer-card { width: min(380px, 92vw); height: 100%; display: flex; flex-direction: column;
+    background: linear-gradient(165deg, #0c1118, #080c12);
+    border-left: 1px solid color-mix(in srgb, var(--holo) 32%, transparent);
+    box-shadow: -24px 0 60px rgba(0, 0, 0, .55); padding-bottom: env(safe-area-inset-bottom); }
+  #jv-drawer-head { display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 14px 8px; font: 700 13px/1 var(--font-display); letter-spacing: .22em;
+    text-transform: uppercase; color: #ffd9a0; }
+  #jv-drawer-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+    display: flex; flex-direction: column; gap: 12px; padding: 4px 12px 16px;
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--holo) 35%, transparent) transparent; }
+  #jv-drawer-body > * { flex: 0 0 auto; width: auto; }
+  @media (max-width: 1099px) {
+    #jv-shell { grid-template-columns: minmax(0, 1fr); }
+    #jv-col-left, #jv-col-right { display: none; }
+    #jv-panels { display: inline-flex; align-items: center; justify-content: center; }
+  }
+  @media (max-width: 700px) {
+    #jv-drawer.show { align-items: flex-end; }
+    #jv-drawer-card { width: 100%; height: 82vh; height: 82dvh; border-left: 0;
+      border-top: 1px solid color-mix(in srgb, var(--holo) 32%, transparent);
+      border-radius: 16px 16px 0 0; box-shadow: 0 -24px 60px rgba(0, 0, 0, .55); }
+  }
 </style>
 </head>
 <body>
@@ -618,6 +657,8 @@
       <span class="jv-pill" id="jv-pill-voice"><i data-lucide="audio-lines"></i><span>VOICE: KOKORO</span></span>
       <span class="jv-pill" id="jv-pill-fb"><i data-lucide="volume-2"></i><span>FB: ESSENTIAL</span></span>
       <span id="jv-actions" style="display:flex; gap:8px">
+        <button id="jv-panels" class="jv-btn" type="button" aria-controls="jv-drawer"
+                aria-expanded="false">Panels<span id="jv-panels-badge" hidden></span></button>
         <button id="jv-apps" class="jv-btn" title="Apps JARVIS can open">Apps</button>
         <button id="jv-unlock" class="jv-btn">Activate audio</button>
         <button id="jv-retry" class="jv-btn">Enable mic</button>
@@ -720,6 +761,16 @@
   </div>
 
   <button id="jv-talk" type="button" aria-label="Tap to talk">Talk</button>
+
+  <div id="jv-drawer" role="dialog" aria-modal="true" aria-label="Panels">
+    <div id="jv-drawer-card">
+      <div id="jv-drawer-head">
+        <span>Panels</span>
+        <button id="jv-drawer-close" class="jv-btn" type="button" aria-label="Close panels">&times;</button>
+      </div>
+      <div id="jv-drawer-body"></div>
+    </div>
+  </div>
 
   <div id="jv-apps-modal">
     <div id="jv-apps-card">
@@ -1035,31 +1086,14 @@
     }
   }
 
-  // Covers the static rows only: from the THREAT ASSESSMENT label down to the
-  // bottom of the column's real content (the PROTOCOL row). The transcript
-  // panel already owns everything below that.
+  // System Status lives in flow, in the left column or the panel drawer, like
+  // the LM panel. It used to anchor to the artifact's THREAT ASSESSMENT
+  // block, which hid it whenever the artifact laid out without one, and
+  // always on phones, where the artifact is hidden.
   function positionStats() {
     if (!statsEl) return;
-    var aside = hudAside();
-    if (!aside) { statsEl.classList.remove('show'); return; }
-    var label = null, kids = aside.querySelectorAll('*');
-    for (var i = 0; i < kids.length; i++) {
-      if (kids[i].children.length) continue;
-      if (/THREAT ASSESSMENT/i.test(kids[i].textContent || '')) { label = kids[i]; break; }
-    }
-    var band = hudRightBand();
-    if (!label || !band) { statsEl.classList.remove('show'); return; }
-    var lr = label.getBoundingClientRect(), ar = aside.getBoundingClientRect();
-    var f = hud.getBoundingClientRect();
-    // Height is NOT clamped to the gap above the transcript: the panel grew when
-    // the telemetry rows were added and simply overflowed, drawing on top of the
-    // transcript. It sizes to its own content instead, and the transcript starts
-    // below whatever height that turns out to be.
-    statsEl.style.left   = (f.left + ar.left + 10) + 'px';
-    statsEl.style.top    = (f.top + lr.top - 8) + 'px';
-    statsEl.style.width  = (ar.width - 20) + 'px';
-    statsEl.style.height = 'auto';
     statsEl.classList.add('show');
+    statsEl.style.left = ''; statsEl.style.top = ''; statsEl.style.width = ''; statsEl.style.height = '';
   }
 
   function statsBottom() {
@@ -1182,6 +1216,58 @@
       })
       .catch(function () { setVal(stBrain, 'unreachable', 'bad'); syncBrainPill(); });
   }
+
+  // ---------------------------------------------------------------- panel drawer
+  // Below 1100px the side columns collapse and their sections move into the
+  // drawer, most-used first. The nodes themselves move, so everything that
+  // updates them by id keeps working; at 1100px and up they go back home.
+  var drawerEl = document.getElementById('jv-drawer');
+  var drawerBody = document.getElementById('jv-drawer-body');
+  var panelsBtn = document.getElementById('jv-panels');
+  var narrowMq = window.matchMedia('(max-width: 1099px)');
+  var PANEL_HOMES = ['jv-col-left', 'jv-col-right'].map(function (id) {
+    var col = document.getElementById(id);
+    return { col: col, kids: [].slice.call(col.children) };
+  });
+  var DRAWER_ORDER = [
+    document.getElementById('job-tray').parentNode,             // Active Tasks
+    document.getElementById('jv-np'),
+    document.getElementById('jv-vf'),
+    statsEl,
+    document.getElementById('st-backend').closest('.jv-sec'),   // Last Turn
+    leftEl
+  ];
+
+  function openDrawer() { drawerEl.classList.add('show'); panelsBtn.setAttribute('aria-expanded', 'true'); }
+  function closeDrawer() { drawerEl.classList.remove('show'); panelsBtn.setAttribute('aria-expanded', 'false'); }
+
+  function placePanels() {
+    if (narrowMq.matches) {
+      DRAWER_ORDER.forEach(function (el) { drawerBody.appendChild(el); });
+      return;
+    }
+    closeDrawer();
+    PANEL_HOMES.forEach(function (h) { h.kids.forEach(function (el) { h.col.appendChild(el); }); });
+  }
+
+  panelsBtn.onclick = openDrawer;
+  document.getElementById('jv-drawer-close').onclick = closeDrawer;
+  drawerEl.addEventListener('click', function (e) { if (e.target === drawerEl) closeDrawer(); });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeDrawer(); });
+  narrowMq.addEventListener('change', placePanels);
+  placePanels();
+
+  // The Panels button carries the running-task count, so a job finishing
+  // is visible without opening the drawer.
+  var taskCountEl = document.getElementById('jv-taskcount');
+  var panelsBadge = document.getElementById('jv-panels-badge');
+  function syncPanelsBadge() {
+    var n = parseInt(taskCountEl.textContent, 10) || 0;
+    panelsBadge.textContent = String(n);
+    panelsBadge.hidden = n === 0;
+  }
+  new MutationObserver(syncPanelsBadge).observe(taskCountEl, { childList: true, characterData: true, subtree: true });
+  syncPanelsBadge();
 
   window.addEventListener('resize', function () {
     positionHudLine(); positionLeft(); positionStats(); positionSidePanel();
