@@ -433,6 +433,11 @@ def strip_ai_artifacts(text: str) -> str:
     brisk replies untouched. Does not alter meaning."""
     if not text:
         return text
+    # Internal markers, job ids and Markdown out first (plain_reply.py). Only
+    # here, where replies leave the server: brain.think's own return value keeps
+    # its markers for the command chain.
+    import plain_reply
+    text = plain_reply.for_user(text)
     for pat in _AI_ARTIFACT_PATTERNS:
         text = pat.sub("", text)
     # em dash / double-hyphen -> comma (read naturally)
@@ -2101,7 +2106,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         except Exception:
                             pass
                     await websocket.send_text(json.dumps({
-                        "type": "response", "text": response, "audio": tts_b64
+                        "type": "response", "text": strip_ai_artifacts(response), "audio": tts_b64
                     }))
                     await send_telemetry(websocket)
                     await websocket.send_text(json.dumps({"type": "status", "state": "idle"}))

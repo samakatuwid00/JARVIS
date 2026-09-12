@@ -3149,6 +3149,11 @@ def job_control(action: str, jid: str | None = None) -> str:
         return (autonomous.cancel(jid) and "Stopped, sir."
                 or "[Error] No running autonomous job to stop.")
     if action == "status":
+        # No id: every kind of task (Hermes hand-offs too, which the autonomous
+        # status file never saw), in plain words.
+        if jid is None:
+            import plain_reply
+            return plain_reply.job_status()
         return autonomous.latest_status(jid)
     return f"[Error] Unknown job_control action '{action}' (use status|stop)."
 

@@ -225,19 +225,12 @@ def distill_episodes() -> str:
 
 # Proactive reporting hook: called by jobs listener to voice completions
 def proactive_job_announcement(event: dict) -> str | None:
-    """Return a short spoken line for a terminal job event, or None if not terminal."""
-    state = event.get("state")
-    if state not in ("done", "error", "timeout", "unverified"):
-        return None
-    task = (event.get("task") or "")[:60]
-    summary = (event.get("summary") or event.get("error") or "")[:120]
-    if state == "done":
-        return f"Finished, sir — {task}: {summary}"
-    if state == "error":
-        return f"Task failed, sir — {task}: {summary}"
-    if state == "timeout":
-        return f"Task timed out, sir — {task}"
-    return f"Task {state}, sir — {task}: {summary}"
+    """Return a short spoken line for a terminal job event, or None if not terminal.
+    Plain words (plain_reply.announce_job): a short title, no Markdown, the
+    job's closing question if it has one, and nothing for a job that was only
+    replaced by its re-confirmed run."""
+    import plain_reply
+    return plain_reply.announce_job(event)
 
 # Background hygiene loop (for jarvis_web to start as daemon thread)
 def start_hygiene_loop(interval_hours: int = 6):
