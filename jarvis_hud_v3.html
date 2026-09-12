@@ -500,25 +500,46 @@
   #jv-col-left > .jv-sec, #jv-col-right > .jv-sec, #jv-col-left > #jv-left { flex: 1 1 auto; }
   #jv-center { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 
-  /* Tap-to-talk. Android Chrome's Web Speech cannot share the mic with the
-     page's own getUserMedia stream, so the phone has no wake word: this
-     button opens the same command capture the wake word would. */
-  #jv-talk { display: none; position: fixed; left: 50%; bottom: max(22px, env(safe-area-inset-bottom));
-      transform: translateX(-50%); z-index: 60; width: 84px; height: 84px; border-radius: 50%;
-      border: 2px solid var(--holo); background: color-mix(in srgb, var(--holo) 14%, #05070c);
-      color: var(--holo); font: 700 11px/1.2 var(--font-display); letter-spacing: .18em;
-      text-transform: uppercase; box-shadow: 0 0 28px color-mix(in srgb, var(--holo) 35%, transparent);
-      -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
-  #jv-talk.show { display: block; }
-  #jv-talk.live { background: #9dff8a; border-color: #9dff8a; color: #0b1a0d;
-      box-shadow: 0 0 34px #9dff8a; animation: jvPulse .9s infinite; }
-  #jv-talk:active { transform: translateX(-50%) scale(.95); }
+  /* The mic lives in the chat bar (it replaced the TALK circle): tap to
+     talk, tap again to stop, Send while there is text. Colour follows the
+     state: green while listening, blue while thinking. Android Chrome has no
+     wake word (Web Speech cannot share the page's mic), so on the phone this
+     is how a capture starts. */
+  #jv-mic { flex: 0 0 auto; width: 34px; height: 34px; margin: -4px -9px -4px 0; border-radius: 50%;
+    display: grid; place-items: center; cursor: pointer; color: var(--holo);
+    border: 1.5px solid var(--holo); background: color-mix(in srgb, var(--holo) 10%, transparent);
+    -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+    transition: background .15s, color .15s, border-color .15s, box-shadow .15s; }
+  #jv-mic:hover { background: color-mix(in srgb, var(--holo) 22%, transparent); }
+  #jv-mic:focus-visible { outline: 2px solid var(--holo); outline-offset: 2px; }
+  #jv-mic svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.9;
+    stroke-linecap: round; stroke-linejoin: round; }
+  #jv-mic .i-stop, #jv-mic .i-send { display: none; }
+  #jv-mic.live { background: #9dff8a; border-color: #9dff8a; color: #06110a; box-shadow: 0 0 0 5px rgba(157, 255, 138, .16); }
+  #jv-mic.live .i-mic { display: none; }
+  #jv-mic.live .i-stop { display: block; fill: currentColor; stroke: none; }
+  #jv-mic.send:not(.live) { background: var(--holo); border-color: var(--holo); color: #1a1005; }
+  #jv-mic.send:not(.live) .i-mic { display: none; }
+  #jv-mic.send:not(.live) .i-send { display: block; }
+  #jv-mic.busy { border-color: rgba(124, 196, 255, .6); color: #7cc4ff; background: rgba(124, 196, 255, .08); }
+  #jv-input-wrap.listening { border-color: rgba(157, 255, 138, .5); box-shadow: 0 0 0 3px rgba(157, 255, 138, .08); }
+  #jv-input-wrap.listening::before { display: none; }
+  #jv-input-wrap.listening #jv-input::placeholder { color: #cfeec6; }
+  .jv-wave { display: none; gap: 3px; align-items: center; height: 16px; flex: 0 0 auto; }
+  #jv-input-wrap.listening .jv-wave { display: flex; }
+  .jv-wave i { width: 3px; height: 5px; border-radius: 2px; background: #9dff8a; animation: jvWave .9s ease-in-out infinite; }
+  .jv-wave i:nth-child(2) { animation-delay: .15s; }
+  .jv-wave i:nth-child(3) { animation-delay: .3s; }
+  .jv-wave i:nth-child(4) { animation-delay: .45s; }
+  @keyframes jvWave { 50% { height: 16px; } }
+  @media (prefers-reduced-motion: reduce) { .jv-wave i { animation: none; height: 10px; } }
 
   /* Touch screens: every control at least 44px, and a 16px input so the
      browser does not zoom in on focus. */
   @media (pointer: coarse) {
     .jv-btn, .jv-npbtn, .jv-gate-btn, #jv-apps-close { min-height: 44px; min-width: 44px; }
     .vf-opt { min-height: 44px; display: flex; align-items: center; justify-content: center; }
+    #jv-mic { width: 44px; height: 44px; margin: -6px -10px -6px 0; }
     #jv-input { font-size: 16px; }
   }
 
@@ -541,7 +562,7 @@
     #jv-status { order: 10; flex: 1 0 100%; font-size: 11px; letter-spacing: .14em; }
     #jv-pill-brain, #jv-pill-voice, #jv-pill-fb, #jv-level { display: none; }
     #jv-pill-net { margin-left: auto; }
-    #jv-center { align-self: stretch; margin-bottom: calc(112px + env(safe-area-inset-bottom)); }
+    #jv-center { align-self: stretch; margin-bottom: max(8px, env(safe-area-inset-bottom)); }
     #jv-center .jv-spacer { display: none; }
     #jv-feed { flex: 1 1 auto; min-height: 0; max-height: none; }
   }
@@ -667,21 +688,13 @@
   @media (max-width: 700px), (pointer: coarse) and (max-height: 500px) {
     #cy-stage { top: 38%; width: clamp(150px, 46vw, 210px); }
   }
-  /* Touch tablets in portrait: keep the TALK dock clear under the input. */
-  @media (pointer: coarse) and (max-width: 1099px) and (min-height: 501px) {
-    #jv-center { margin-bottom: calc(112px + env(safe-area-inset-bottom)); }
-  }
-  /* Phones in landscape: thin topbar, transcript fills the height, TALK
-     docked on the right edge so it never covers text. */
+  /* Phones in landscape: thin topbar, transcript fills the height. */
   @media (pointer: coarse) and (max-height: 500px) {
     #jv-shell { gap: 6px; margin-top: 6px; height: calc(100vh - 6px); height: calc(100dvh - 6px); }
     #jv-topbar { padding: 4px 12px; }
-    #jv-center { align-self: stretch; margin: 0 116px 6px 0; }
+    #jv-center { align-self: stretch; margin: 0 0 6px; }
     #jv-center .jv-spacer { display: none; }
     #jv-feed { flex: 1 1 auto; min-height: 0; max-height: none; }
-    #jv-talk { left: auto; right: max(16px, env(safe-area-inset-right)); bottom: auto; top: 50%;
-      transform: translateY(-50%); }
-    #jv-talk:active { transform: translateY(-50%) scale(.95); }
   }
 
   /* Desktop app (Electron): one window, three sizes (ELECTRON_PLAN.md,
@@ -692,7 +705,6 @@
   #jv-desk-ctl .jv-btn { width: 32px; height: 32px; padding: 0; font-size: 16px; line-height: 1; }
   html[data-desk] #jv-topbar { -webkit-app-region: drag; }
   html[data-desk] #jv-topbar button { -webkit-app-region: no-drag; }
-  html[data-desk="expanded"] #jv-talk { display: none; }
   /* Sticky panel: the status dot and the tray already show the link, and
      row one must fit two more buttons at 380px. */
   @media (max-width: 700px) { html[data-desk] #jv-pill-net { display: none; } }
@@ -826,8 +838,14 @@
         <div id="jv-side-log"></div>
         <div id="jv-cues" style="margin-top:8px"></div>
         <div id="jv-input-wrap" style="margin-top:10px">
+          <span class="jv-wave" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
           <input id="jv-input" type="text" autocomplete="off" spellcheck="false"
                  placeholder="SPEAK TO CYGNUS - TYPE, THEN PRESS ENTER" />
+          <button id="jv-mic" type="button" aria-label="Talk" title="Talk (Ctrl+Alt+J)">
+            <svg class="i-mic" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>
+            <svg class="i-stop" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>
+            <svg class="i-send" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13M12 5l7 7-7 7"/></svg>
+          </button>
         </div>
       </div>
     </main>
@@ -875,8 +893,6 @@
       </div>
     </aside>
   </div>
-
-  <button id="jv-talk" type="button" aria-label="Tap to talk">Talk</button>
 
   <div id="jv-mini-orb" class="cy-idle" role="button" aria-label="Open Cygnus panel"><svg><use href="#cy-bh"/></svg></div>
 
@@ -971,15 +987,16 @@
   var chatWrap = document.getElementById('jv-input-wrap');
   var rootStyle = document.documentElement.style;
   var PLACEHOLDER = 'SPEAK TO CYGNUS - TYPE, THEN PRESS ENTER';
-  // Phones get tap-to-talk instead of the always-on wake listener (see #jv-talk).
+  // Phones get tap-to-talk (the mic in the chat bar, #jv-mic) instead of the
+  // always-on wake listener.
   var IS_MOBILE = /Android|iPhone|iPad/i.test(navigator.userAgent) ||
                   (window.matchMedia && matchMedia('(pointer: coarse) and (max-width: 900px)').matches);
-  var talkBtn = document.getElementById('jv-talk');
+  // The mic in the chat bar (it replaced the TALK circle; same role).
+  var talkBtn = document.getElementById('jv-mic');
   // Inside the desktop app (Electron) Chrome's cloud speech recognition is
   // unavailable, so the server's Whisper wake word is the wake word, and the
   // app's global hotkey opens a capture the way a TALK tap does.
   var IS_DESKTOP = /\bElectron\//.test(navigator.userAgent);
-  if ((IS_MOBILE || IS_DESKTOP) && talkBtn) talkBtn.classList.add('show');
   // The phone and the desktop panel are narrow; the long hint gets cut off.
   if (IS_MOBILE || IS_DESKTOP) { PLACEHOLDER = 'TYPE TO CYGNUS…'; chatInput.placeholder = PLACEHOLDER; }
 
@@ -1027,6 +1044,15 @@
       : st === 'speaking' ? 'cy-speak' : 'cy-idle';
     if (miniOrb) miniOrb.className = cyClass;
     if (cyStage) cyStage.className = cyClass;
+    // The chat bar's mic and the bar itself show it too, whatever started
+    // the capture (wake word, hotkey or a tap).
+    if (talkBtn) {
+      talkBtn.classList.toggle('live', st === 'listening');
+      talkBtn.classList.toggle('busy', st === 'thinking' || st === 'transcribing');
+    }
+    if (chatWrap) chatWrap.classList.toggle('listening', st === 'listening');
+    if (st === 'listening') chatInput.placeholder = 'LISTENING… SPEAK NOW';
+    else if (chatInput.placeholder !== '> ') chatInput.placeholder = PLACEHOLDER;
     // The HUD artifact is read-only; it ignores this, but forward anyway so a
     // future HUD build can react without touching hud_artifact.html.
     try { hud.contentWindow.postMessage({ source: 'jarvis', type: 'state', state: st }, '*'); } catch (e) {}
@@ -1660,7 +1686,7 @@
 
   var pendingReply = false;
   chatInput.addEventListener('keydown', function (e) {
-    if (e.key === 'Enter' || e.keyCode === 13) { e.preventDefault(); sendTyped(); }
+    if (e.key === 'Enter' || e.keyCode === 13) { e.preventDefault(); sendTyped(); syncMicMode(); }
   });
 
   // ---------------------------------------------------------------- websocket
@@ -1729,23 +1755,7 @@
       var now = Date.now();
       if (now - lastWakeAt < 2000) return;   // de-dupe against the browser listener
       lastWakeAt = now;
-      // Phase C barge-in: the user just spoke — JARVIS stops talking immediately
-      // and any ducked music is restored. pause() never fires onended, so run the
-      // clip's end handler by hand: it restores the pre-clip mode (or goIdle()).
-      // Without it mode stayed 'speaking' forever and nothing could reopen.
-      if (current) {
-        var cut = current, onCut = cut.onended;
-        current = null;
-        // Saying "jarvis" over the reply means carry on: drop a pending close,
-        // else goIdle() would tear the mic down right before the capture opens.
-        sessionClosePending = false;
-        cut.onended = cut.onerror = null;
-        try { cut.pause(); } catch (e) {}
-        if (onCut) { try { onCut(); } catch (e) {} }
-        stopSpeakLoop();
-      }
-      if (mode === 'speaking') goIdle();     // no clip left to end it: never strand
-      send({ type: 'speech', state: 'end' });
+      interruptReply();   // Phase C barge-in: the user just spoke over the reply
       // Open the voice session when resting (off after a reply, or idle from
       // enable-mic). Must match mode==='off' because goIdle() parks there.
       if (mode === 'off' || mode === 'idle') {
@@ -2376,8 +2386,7 @@
       return;
     }
     mode = 'idle';
-    setState('idle', IS_MOBILE ? 'TAP TALK, THEN SPEAK' : 'LISTENING FOR “JARVIS”');
-    if (talkBtn) talkBtn.classList.remove('live');
+    setState('idle', IS_MOBILE ? 'TAP THE MIC TO TALK' : 'LISTENING FOR “JARVIS”');
     // A live mic means a voice session is active — surface the End button so
     // the user can always stop it without relying on a spoken close word.
     if (endBtn) endBtn.classList.add('show');
@@ -2448,7 +2457,6 @@
     var data = b64(encodeWav(resample(flat, srcRate, TARGET_RATE)));
 
     mode = 'busy'; busySince = Date.now();
-    if (talkBtn) talkBtn.classList.remove('live');
     setState('transcribing', 'TRANSCRIBING…');
     // The browser's own live transcript rides along: the server compares it
     // with Whisper's and keeps the better one (Whisper alone misheard
@@ -2631,13 +2639,53 @@
     if (mode === 'command') { endCapture(); return; }
     if (mode !== 'idle') return;                 // busy / speaking / booting
     sessionClosePending = false;
-    if (talkBtn) talkBtn.classList.add('live');
     var wait = playTick(880, TICK_MS, 0.18);
     setTimeout(function () { beginCapture('command', false); }, wait);
   }
-  if (talkBtn) talkBtn.onclick = tapToTalk;
+
+  // Barge-in: the reply stops mid-sentence and any ducked music comes back.
+  // pause() never fires onended, so the clip's end handler runs by hand: it
+  // restores the pre-clip mode (or goIdle()); without it mode stayed
+  // 'speaking' forever and nothing could reopen. Shared by the wake word
+  // and the mic.
+  function interruptReply() {
+    if (current) {
+      var cut = current, onCut = cut.onended;
+      current = null;
+      // Speaking over the reply means carry on: drop a pending close, else
+      // goIdle() would tear the mic down right before the capture opens.
+      sessionClosePending = false;
+      cut.onended = cut.onerror = null;
+      try { cut.pause(); } catch (e) {}
+      if (onCut) { try { onCut(); } catch (e) {} }
+      stopSpeakLoop();
+    }
+    if (mode === 'speaking') goIdle();     // no clip left to end it: never strand
+    send({ type: 'speech', state: 'end' });
+  }
+
+  // Talk now: over a reply, cut it off first.
+  function talkNow() {
+    if (current || mode === 'speaking') interruptReply();
+    tapToTalk();
+  }
+
+  // With text in the bar the mic is Send; empty, it talks.
+  function syncMicMode() {
+    if (!talkBtn) return;
+    var hasText = !!chatInput.value.trim();
+    talkBtn.classList.toggle('send', hasText);
+    talkBtn.setAttribute('aria-label', hasText ? 'Send' : 'Talk');
+    talkBtn.title = hasText ? 'Send (Enter)' : 'Talk (Ctrl+Alt+J)';
+  }
+
+  if (talkBtn) talkBtn.onclick = function () {
+    if (chatInput.value.trim()) { sendTyped(); syncMicMode(); return; }
+    talkNow();
+  };
+  chatInput.addEventListener('input', syncMicMode);
   // preload.js exposes window.jarvisDesktop in the desktop app only.
-  if (IS_DESKTOP && window.jarvisDesktop) window.jarvisDesktop.onHotkey(tapToTalk);
+  if (IS_DESKTOP && window.jarvisDesktop) window.jarvisDesktop.onHotkey(talkNow);
 
   // ---------------------------------------------------------------- apps modal
   var appsData = null, appCat = 'all';
