@@ -1155,8 +1155,10 @@ def open_site(name: str, url: str = None, _rule_hops: int = 0,
     Precedence: that > the browser entry owning a matching site rule > Chrome.
     """
     import web_registry as wr
-    # A spoken sentence ends in a period; it is not part of the name.
-    name = (name or "").strip().rstrip(".!?").strip()
+    # A spoken sentence ends in a period; it is not part of the name, and
+    # neither are "for me" or a trailing "site" ("open GitHub site" failed
+    # as the unknown site "GitHub site", 2026-09-12).
+    name = _clean_site_name(name) if url is None else strip_target_noise(name)
     if url is None and not _exact_site_key(name):
         alias = _rule_site_url(name)
         if alias:
@@ -1248,6 +1250,28 @@ def strip_correction_prefix(text: str) -> str:
         if not rest:
             return out
         out = rest
+
+
+# What a spoken target carries besides its name: a leading "the" / "my" and
+# a trailing "for me" / "please" / "now" ("can you open github for me").
+_TARGET_LEAD_RE = re.compile(r"^(?:(?:the|my)\s+)+", re.I)
+_TARGET_TAIL_RE = re.compile(r"(?:\s+(?:for\s+me|please|now|right\s+now))+\s*$", re.I)
+# "open github site": the site is "github".
+_SITE_SUFFIX_RE = re.compile(r"\s+(?:web\s*site|site|web\s*page|page)$", re.I)
+
+
+def strip_target_noise(name: str) -> str:
+    """'the github for me.' -> 'github'; the name itself stays as spoken."""
+    s = (name or "").strip().rstrip(".!?").strip()
+    s = _TARGET_TAIL_RE.sub("", _TARGET_LEAD_RE.sub("", s)).strip()
+    return s or (name or "").strip()
+
+
+def _clean_site_name(name: str) -> str:
+    """The registry name inside a spoken site request: 'the GitHub website'
+    -> 'GitHub'."""
+    s = strip_target_noise(name)
+    return _SITE_SUFFIX_RE.sub("", s).strip() or s
 
 
 # Conversational lead-ins: "Now search me X", "okay, jarvis, visit Y".
@@ -1674,6 +1698,10 @@ def try_rule_action(text: str):
     return None
 
 
+def _is_app_key(name: str) -> bool:
+    return name in (_load_app_registry() or {})
+
+
 def resolve_open_target(text: str, force: str | None = None,
                         browser: str | None = None):
     """Dual-registry lookup for 'open X' style commands.
@@ -1684,7 +1712,7 @@ def resolve_open_target(text: str, force: str | None = None,
     'facebook site' phrasing. browser: a spoken 'on Brave' makes X a site,
     so an app hit never wins or asks.
     """
-    t = text.strip().lower().rstrip(".!?")
+    t = strip_target_noise(text).lower()
     # strip filler words
     for w in ("please", "jarvis", "cygnus", "the ", "my ", "up ", "now "):
         if t.startswith(w):
@@ -1692,7 +1720,8 @@ def resolve_open_target(text: str, force: str | None = None,
     for suffix, forced in ((" app", "app"), (" application", "app"),
                            (" program", "app"), (" site", "site"),
                            (" website", "site"), (" in browser", "site")):
-        if t.endswith(suffix):
+        # "ollama app" is itself an app's name: the suffix is not a hint.
+        if t.endswith(suffix) and not _is_app_key(t):
             t = t[: -len(suffix)].strip()
             force = force or forced
 
@@ -1726,6 +1755,12 @@ def resolve_open_target(text: str, force: str | None = None,
         return ("app", t) if app_hit else (None, text)
 
     if site_key and app_hit:
+        # An exact name on one side beats a fuzzy one on the other: "open
+        # grok" asked app-or-site because "grok" is close to the app ngrok.
+        site_exact = site_key == t or t in ((wr.get_site(site_key) or {}).get("aliases") or [])
+        app_exact = t in apps
+        if site_exact != app_exact:
+            return ("site", site_key) if site_exact else ("app", t)
         return ("clarify", {"name": t, "site": site_key})
     if site_key:
         return ("site", site_key)
@@ -3362,7 +3397,13 @@ def _desktop_dispatch(task: str):
         return None
     tool = "close_application" if m.group(1).lower() in ("close", "quit", "exit") \
         else "open_application"
-    return execute_tool(tool, {"app": m.group(2).strip()})
+    target = m.group(2).strip()
+    # A registered website is opened as one; "open github" is not an app.
+    if tool == "open_application":
+        kind, key = resolve_open_target(target)
+        if kind == "site":
+            return execute_tool("open_site", {"name": key})
+    return execute_tool(tool, {"app": target})
 
 
 _LOCAL_DISPATCH = {
@@ -3492,6 +3533,11 @@ def delegate(
     # act on. Ask instead — a bare open-site request never leaves JARVIS.
     # "I mean visit X" is matched as "visit X"; cw logs keep the spoken text.
     _otask = strip_fillers(strip_correction_prefix(_rtask))
+    # "Can you open github for me?" is "open github": without this it missed
+    # the registry fast path below and opened the app "github for me".
+    _asked = _REQUEST_LEAD_RE.match(_otask)
+    if _asked and _asked.end() < len(_otask):
+        _otask = _otask[_asked.end():].strip()
     _open_m = re.match(r"^\W*(?:(?:please|jarvis|cygnus|hey)\b\W*)*"
                        r"(open|launch|go\s+to|goto|visit|browse|take\s+me\s+to)\b(.*)$",
                        _otask, flags=re.I | re.S)
@@ -3528,8 +3574,9 @@ def delegate(
             return result
         # A visit always means a website: an unresolved one gets open_site's
         # registry-miss answer (or opens a raw URL), never a Hermes job.
-        # So does anything spoken "on <browser>".
-        if _otask.lower().startswith("visit") or browser8:
+        # So does anything spoken "on <browser>". Not a question, though:
+        # "can you visit websites?" asks what JARVIS can do.
+        if (_otask.lower().startswith("visit") and not _asked) or browser8:
             result = open_site(re.sub(r"^(?:the|my)\s+", "", stripped, flags=re.I),
                                browser=browser8)
             if cw is not None:
@@ -3712,7 +3759,9 @@ _APP_VERB_RE = re.compile(
     r"^(?:please\s+)?(?:can you\s+)?"
     r"(?:open|launch|start|run|boot|fire up|bring up|pull up|show me|"
     r"open up|start up)\s+(?:the\s+|my\s+|a\s+)*", re.IGNORECASE)
-_APP_TRAIL_RE = re.compile(r"[.\s]+$|[.,!?;:]+")
+# Trailing and sentence punctuation; a dot inside a name ("python 3.14",
+# "node.js") is part of it.
+_APP_TRAIL_RE = re.compile(r"[.\s]+$|[,!?;:]+|\.(?!\w)")
 
 
 def _clean_app_name(app: str) -> str:
@@ -3728,6 +3777,7 @@ def _clean_app_name(app: str) -> str:
         s = _APP_VERB_RE.sub("", s).strip()
         s = s.strip('"').strip("'").strip()
         s = _APP_TRAIL_RE.sub("", s).strip()
+        s = strip_target_noise(s)
     return s or str(app).strip()
 
 

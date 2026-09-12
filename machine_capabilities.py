@@ -469,6 +469,21 @@ def load_registry():
         return None
 
 
+def normalize_key(name) -> str:
+    """'Snipping Tool', 'snipping-tool' and 'SnippingTool' compare equal."""
+    return re.sub(r"[^a-z0-9]", "", str(name or "").lower())
+
+
+def resolve_normalized(apps, name):
+    """The key of `apps` equal to `name` once case, spaces and punctuation are
+    ignored, or None. open_application and _find_app_by_name import this;
+    while it was missing, their whole registry lookup raised and was skipped."""
+    want = normalize_key(name)
+    if not want:
+        return None
+    return next((key for key in apps if normalize_key(key) == want), None)
+
+
 def find_replacement(name: str) -> dict | None:
     """Try to find a working exe for a broken app by re-scanning."""
     for scanned in [_scan_windows, _scan_linux, _scan_macos]:

@@ -340,8 +340,10 @@ def classify_intent(text: str) -> str:
     if re.search(r"\b(write|compose|draft|prepare|produce|generate|make)\b"
                  r"[^.]{0,40}\b(report|write-?up|brief)\b", t):
         return "report"
+    # Not "app": "open the spotify app" is an app, and was sent to
+    # launch_project (2026-09-12).
     if re.search(r"\b(launch|start|open|run|boot)\b", t) and \
-       re.search(r"\b(project|app|server|dev)\b", t):
+       re.search(r"\b(project|server|dev)\b", t):
         return "launch"
     # rescan: JARVIS-local side-route — rescan installed software, no cloud needed.
     if re.search(r"\b(rescan|refresh|scan)\b", t) and \
@@ -611,8 +613,11 @@ def _own_work_facts():
             + "\n".join(parts) + "\n[END]")
 
 
+# "Can you open github for me?" is an open too; without the request lead it
+# went to the model router (3-7 s) instead of the registry fast lane.
 _OPEN_LEAD_RE = re.compile(
-    r"^(?:(?:please|jarvis|cygnus|hey|ok(?:ay)?|now)[,!\s]+)*(?:open|launch|go\s+to|goto|visit)\s+(.+)$", re.I)
+    r"^(?:(?:please|jarvis|cygnus|hey|ok(?:ay)?|now|(?:can|could|would)\s+you)[,!\s]+)*"
+    r"(?:open|launch|go\s+to|goto|visit)\s+(.+)$", re.I)
 
 
 def _fast_lane_opens(text):
