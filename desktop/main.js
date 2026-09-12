@@ -38,7 +38,9 @@ const HEALTH_EVERY_MS = 10000
 const CHECKS_EVERY_MS = 60000
 const MAX_RESTARTS = 3
 const RESTART_WINDOW_MS = 10 * 60 * 1000
-const STICKY = { width: 380, height: 720, margin: 20, minWidth: 320, minHeight: 420 }
+// 560 tall since the transcript is trimmed to the last exchange (owner's
+// choice, CYGNUS_UI_PLAN.md step 8).
+const STICKY = { width: 380, height: 560, margin: 20, minWidth: 320, minHeight: 420 }
 const MINI = { size: 96, margin: 24 }
 const MODES = ['sticky', 'expanded', 'mini']
 
