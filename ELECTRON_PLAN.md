@@ -32,6 +32,37 @@ Packaging option **A** (this plan): the installed app runs the backend
 from the repo's venv. Code edits take effect on the next restart; a broken
 edit also breaks the app, so commit before restarting.
 
+## Development workflow
+
+JARVIS is still changing daily, so the app must not get in the way of
+working on it.
+
+- **The app is a thin shell.** The installer carries only `desktop/`
+  (tray, hotkey, window). JARVIS itself runs from the repo, so changing
+  JARVIS never needs a rebuild or reinstall.
+- **HUD edits** (`jarvis_hud_v3.html`, CSS, JS): the server reads the file
+  on every request, so Ctrl+R in the window shows the change. DevTools open
+  with F12, as in Chrome.
+- **Python edits**: restart the backend (tray "Restart backend", or your own
+  restart in attach mode).
+- **Attach mode.** On start the app checks port 8001. If JARVIS is already
+  answering there, the app does not start a backend; it connects to that
+  one, the tray says "attached to dev server", and "Restart backend" is
+  greyed out. So:
+  - daily use: the app starts and supervises the backend;
+  - developing: run `python jarvis_web.py` (or `watch_and_restart.py`)
+    yourself; the app attaches, and the two never fight over the process.
+- **Chrome stays a dev tool.** `http://127.0.0.1:8001` still works in Chrome
+  (browser wake word, full DevTools) for comparing behaviour.
+- **When to install.** Phases 0–2 run from `desktop/` with `npm start`, no
+  installer. Phase 4 (installer, launch at login) waits until JARVIS feels
+  stable. Option B (bundled Python) only if it ever has to run on another
+  PC; it would mean rebuild + reinstall on every change.
+- **Costs to accept**: a broken edit breaks the daily JARVIS and the phone
+  (commit before restarting); one more layer when hunting a bug
+  (`logs/desktop-backend.log` and the same HUD in Chrome tell them apart);
+  two wake paths to test (browser in Chrome, server Whisper in Electron).
+
 ## Already done (from the phone work)
 
 - Server binds `127.0.0.1` by default (`JARVIS_HOST`), commit `980eeb2`.
@@ -141,7 +172,8 @@ Chrome tab also open, only the desktop window reacts.
 - [ ] Backend supervisor: spawn `.venv\Scripts\python.exe jarvis_web.py`
       with the repo as cwd; stdout/stderr to `logs/desktop-backend.log`;
       pid file; wait for `GET /` (timeout ~180 s); attach instead of spawn
-      when 8001 already serves JARVIS (caveat 6).
+      when 8001 already serves JARVIS (caveat 6, and "attach mode" in the
+      development workflow: tray says so, "Restart backend" greyed out).
 - [ ] Window: loads the HUD, closes to the tray, `backgroundThrottling:
       false`, hardening from caveat 14.
 - [ ] Tray: Show, Restart backend, Open logs, Quit. Tooltip shows
@@ -166,6 +198,9 @@ Done when: sleep and wake the laptop; JARVIS answers the wake word
 afterwards without a manual restart.
 
 ## Phase 4 — Installer
+
+Not before JARVIS feels stable (see "Development workflow"); until then
+the shell runs with `npm start`.
 
 - [ ] `electron-builder` NSIS, per-user install (`%LOCALAPPDATA%\Programs`),
       Start menu entry, desktop shortcut, uninstaller.
