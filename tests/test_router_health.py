@@ -56,6 +56,28 @@ def test_a_failure_waits_until_the_provider_says(reason, seconds):
     assert abs((until - before) - seconds) < 2
 
 
+def test_a_restart_knows_what_answered(tmp_path, monkeypatch):
+    path = str(tmp_path / "router_health.json")
+    rh.mark_healthy("cu/claude-4.5-sonnet", 0.6)
+    rh.mark_unhealthy("ag/claude-sonnet-4-6", "Unavailable (reset after 95h 47m 7s)")
+    rh.save(path)
+    monkeypatch.setattr(rh, "_state", {})                    # a fresh process
+    assert rh.load(path) is True
+    assert rh.healthy_models() == ["cu/claude-4.5-sonnet"]
+    assert "ag/claude-sonnet-4-6" not in rh.healthy_models()
+
+
+def test_an_old_saved_table_is_not_trusted_for_health(tmp_path, monkeypatch):
+    path = str(tmp_path / "router_health.json")
+    rh.mark_healthy("cu/claude-4.5-sonnet", 0.6)
+    rh.mark_unhealthy("ag/claude-sonnet-4-6", "Unavailable (reset after 95h 47m 7s)")
+    rh.save(path)
+    monkeypatch.setattr(rh, "_state", {})
+    rh.load(path, now=time.time() + rh.CACHE_FRESH_S + 5)    # saved too long ago
+    assert rh.healthy_models() == []                         # health must be re-checked
+    assert rh.snapshot()["ag/claude-sonnet-4-6"]["ok"] is False   # a named reset still holds
+
+
 def test_a_switch_is_announced_once_per_turn():
     first = rh.switch_notice("ag/gemini-3.8-flash-low", "ag/claude-sonnet-4-6")
     assert first == "Gemini 3.8 Flash isn't available right now, so I'm switching to another model, sir."

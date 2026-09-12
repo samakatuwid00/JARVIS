@@ -43,6 +43,10 @@ _lock = threading.Lock()
 _state: dict[str, dict] = {}       # model -> {"ok", "until", "latency", "reason", "ts"}
 _thread = None
 _last_switch_notice = 0.0
+# The table survives a restart: a turn in the ~20 s before the first probe
+# walked the dead models and ran out of time (2026-09-12, "Cygnus?" 47 s).
+CACHE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "router_health.json")
+CACHE_FRESH_S = 600.0
 
 
 def candidates() -> list[str]:
@@ -120,12 +124,45 @@ def probe_once(models: list[str] | None = None) -> dict:
 
     with cf.ThreadPoolExecutor(max_workers=6) as ex:
         list(ex.map(check, todo))
+    save()
     return snapshot()
 
 
 def snapshot() -> dict:
     with _lock:
         return {m: dict(v) for m, v in _state.items()}
+
+
+def save(path: str | None = None) -> None:
+    """Write the table so the next process starts knowing it."""
+    import json
+    path = path or CACHE_PATH
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"saved": time.time(), "state": snapshot()}, f)
+    except Exception:
+        pass
+
+
+def load(path: str | None = None, now: float | None = None) -> bool:
+    """Read a saved table if it is fresh. A healthy entry older than
+    CACHE_FRESH_S is dropped (it may have died since); cooldowns are kept
+    until they end, since the provider named the reset time."""
+    import json
+    path, now = path or CACHE_PATH, now or time.time()
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return False
+    fresh = now - float(data.get("saved") or 0) < CACHE_FRESH_S
+    kept = {m: v for m, v in (data.get("state") or {}).items()
+            if (v.get("ok") and fresh) or (not v.get("ok") and now < v.get("until", 0))}
+    with _lock:
+        for m, v in kept.items():
+            _state.setdefault(m, v)
+    return bool(kept)
 
 
 def _loop():
@@ -139,7 +176,9 @@ def _loop():
 
 def start() -> None:
     """Begin probing now (the server calls this at boot) rather than on the
-    first turn, which would otherwise still walk the dead models."""
+    first turn, which would otherwise still walk the dead models. The last
+    saved table is read first, so a restart knows at once what answers."""
+    load()
     _ensure_probing()
 
 
