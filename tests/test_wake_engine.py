@@ -27,6 +27,55 @@ def test_a_remote_client_claiming_desktop_is_ignored():
     assert wake_targets({"tab", "phone"}, remote={"phone"}, desktop={"phone"}) == ["tab"]
 
 
+# --- a microphone stream that went silent is reopened ----------------------
+
+class _FakeStream:
+    opened = 0
+
+    def __init__(self, **kwargs):
+        type(self).opened += 1
+
+    def start(self):
+        pass
+
+    def stop(self):
+        pass
+
+    def close(self):
+        pass
+
+
+def _silent_engine(monkeypatch, open_stream):
+    import wake_engine
+    _FakeStream.opened = 0
+    monkeypatch.setattr(wake_engine.sd, "InputStream", open_stream)
+    engine = WakeEngine(voice_engine=None)
+    engine._last_audio_ts = 1000.0          # the last audio block arrived at t=1000
+    return engine
+
+
+def test_a_silent_stream_is_reopened_at_most_every_ten_seconds(monkeypatch):
+    engine = _silent_engine(monkeypatch, _FakeStream)
+    engine._maybe_reopen(1003.0)            # 3 s of nothing: still just a pause
+    assert _FakeStream.opened == 0
+    engine._maybe_reopen(1006.0)            # past 5 s: the stream died, reopen it
+    assert _FakeStream.opened == 1
+    assert engine.last_err == "no microphone audio received"
+    engine._maybe_reopen(1010.0)            # 4 s after that try: wait
+    assert _FakeStream.opened == 1
+    engine._maybe_reopen(1016.5)            # 10.5 s after it: try again
+    assert _FakeStream.opened == 2
+
+
+def test_a_device_that_will_not_open_is_reported_not_raised(monkeypatch):
+    def refuse(**kwargs):
+        raise OSError("device gone")
+    engine = _silent_engine(monkeypatch, refuse)
+    engine._maybe_reopen(1006.0)
+    assert engine.healthy is False
+    assert "device gone" in engine.last_err
+
+
 BLOCK = 1600          # 0.1 s at 16 kHz, what the audio callback delivers
 
 

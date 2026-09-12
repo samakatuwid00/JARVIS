@@ -1,7 +1,8 @@
 # ELECTRON_PLAN.md — JARVIS as an installed desktop app with a tray icon
 
-Status (2026-09-12): phases 0–2 done; the shell runs with `npm run dev` in
-`desktop/`. Phases 3 (staying healthy) and 4 (installer) open.
+Status (2026-09-12): phases 0–3 done (the real sleep test is still owed);
+the shell runs with `npm run dev` in `desktop/`. Phase 4 (installer) waits
+until JARVIS feels stable.
 
 ## Goal
 
@@ -245,14 +246,32 @@ permission on first launch, the hotkey while another app has focus.
 
 ## Phase 3 — Staying healthy
 
-- [ ] `powerMonitor` resume: reload the window; restart the backend if the
-      mic stream is dead.
-- [ ] Startup checks surfaced in the tray: Ollama (`:11434`), Chrome
-      debugging port (`:9223`), mic permission.
-- [ ] Note in README: do not run `watch_and_restart.py` with the app.
+- [x] `powerMonitor` resume: reload the window (the page's microphone
+      stream dies in sleep). Instead of restarting the backend when its own
+      stream is dead, the wake engine now reopens it after 5 s without
+      audio, at most every 10 s (`_maybe_reopen`, two tests). That also
+      covers a headset unplugged while awake, with or without the app.
+- [x] Checks in the tray (at start, every 60 s, after resume): microphone
+      blocked for desktop apps (registry, machine/user/desktop-app level),
+      Ollama (`OLLAMA_BASE_URL`), Chrome's debugging port
+      (`JARVIS_BROWSER_PORT`), wake engine health (`/status` `wake_server`).
+- [x] README: how to run the web HUD and the app; do not run
+      `watch_and_restart.py` while the app owns the backend.
+- [x] Added: a health check every 10 s. An attached dev server that stops
+      shows as stopped and is picked up again when it answers; an owned
+      backend that dies is started again, at most 3 times in 10 minutes;
+      the tray offers "Start backend" whenever nothing runs.
 
 Done when: sleep and wake the laptop; JARVIS answers the wake word
 afterwards without a manual restart.
+
+*Done 2026-09-12, except the real sleep test.* Checked with the real app on
+spare ports: attached to a dev server, killed it (tray: "Your dev server
+stopped."), started it again (attached again); an owned backend killed and
+started again by the app on its own. The checks reported only "Chrome
+(JARVIS) is not open" (true: port 9223 was closed); microphone allowed,
+Ollama running, wake word healthy. Sleep itself was not simulated: the
+stream reopen is unit-tested and the resume handler only code-reviewed.
 
 ## Phase 4 — Installer
 

@@ -3,10 +3,11 @@
 // Brain). The backend stays in the repo: this process starts, watches and
 // stops it, or attaches to one already running (ELECTRON_PLAN.md, phase 2
 // and "Development workflow").
-const { app, BrowserWindow, Tray, Menu, globalShortcut, ipcMain, nativeImage, screen, session, shell } = require('electron')
+const { app, BrowserWindow, Tray, Menu, globalShortcut, ipcMain, nativeImage, powerMonitor, screen, session, shell } = require('electron')
 const { spawn, execFileSync } = require('child_process')
 const fs = require('fs')
 const http = require('http')
+const net = require('net')
 const path = require('path')
 
 // A child's exit handler can still write to a console that has gone away and
@@ -18,13 +19,22 @@ for (const stream of [process.stdout, process.stderr]) {
 
 const REPO = path.resolve(__dirname, '..')
 const PYTHON = path.join(REPO, '.venv', 'Scripts', 'python.exe')
-const PORT = readPort()
+const PORT = Number(readEnv('JARVIS_PORT') || 8000)
 const HUD_URL = `http://127.0.0.1:${PORT}/`
 const HUD_ORIGIN = HUD_URL.slice(0, -1)
 const HOTKEY = 'Control+Alt+J'
 const TRAY_ICON = path.join(REPO, 'static', 'icon-192.png')
 const LOG_FILE = path.join(REPO, 'logs', 'desktop-backend.log')
 const READY_TIMEOUT_MS = 180000
+// What the tray checks besides the backend: Chrome started with its debugging
+// port (clicks inside the browser) and Ollama (the offline fallback), read
+// from the same settings the backend uses.
+const CHROME_PORT = Number(readEnv('JARVIS_BROWSER_PORT') || 9223)
+const OLLAMA_PORT = Number(new URL(readEnv('OLLAMA_BASE_URL') || 'http://localhost:11434/v1').port || 11434)
+const HEALTH_EVERY_MS = 10000
+const CHECKS_EVERY_MS = 60000
+const MAX_RESTARTS = 3
+const RESTART_WINDOW_MS = 10 * 60 * 1000
 const STICKY = { width: 380, height: 720, margin: 20, minWidth: 320, minHeight: 420 }
 const MINI = { size: 96, margin: 24 }
 const MODES = ['sticky', 'expanded', 'mini']
@@ -45,16 +55,20 @@ let quitting = false
 // state: starting | ready | stopped | error. attached: the backend is someone
 // else's (a dev server started by hand), so it is never restarted or killed.
 let backend = { proc: null, attached: false, state: 'starting', note: '' }
+let checks = null          // tray warnings; null until the first check ran
+let restartTimes = []      // when an owned backend was restarted after dying
 
 // ---------------------------------------------------------------- backend
 
-function readPort () {
-  if (process.env.JARVIS_PORT) return Number(process.env.JARVIS_PORT)
+// A setting from the environment, else from the repo's .env (as the backend
+// reads it), else ''.
+function readEnv (name) {
+  if (process.env[name]) return process.env[name]
   try {
-    const m = fs.readFileSync(path.join(REPO, '.env'), 'utf8').match(/^\s*JARVIS_PORT\s*=\s*(\d+)/m)
-    if (m) return Number(m[1])
+    const m = fs.readFileSync(path.join(REPO, '.env'), 'utf8').match(new RegExp(`^\\s*${name}\\s*=\\s*(.+?)\\s*$`, 'm'))
+    if (m) return m[1].replace(/^["']|["']$/g, '')
   } catch {}
-  return 8000
+  return ''
 }
 
 // What answers on the port: 'jarvis' (the HUD page), 'other', or 'free'.
@@ -94,6 +108,7 @@ function killStaleBackend () {
 function setBackend (state, note = '') {
   backend.state = state
   backend.note = note
+  console.log(`[desktop] backend ${state}${backend.attached ? ' (attached)' : ''}${note ? ': ' + note : ''}`)
   buildTrayMenu()
   if (state === 'error') showStatusPage(note)
 }
@@ -127,10 +142,33 @@ function spawnBackend () {
     if (backend.proc !== proc) return
     try { fs.unlinkSync(pidFile()) } catch {}
     backend.proc = null
-    setBackend('stopped', `The backend exited (code ${code}).`)
+    onBackendExit(code)
   })
   buildTrayMenu()
   return proc
+}
+
+// An owned backend that dies on its own is started again, but at most three
+// times in ten minutes: one that keeps crashing needs a person, not a loop.
+// A deliberate stop never gets here (stopBackend lets go of the process first).
+function onBackendExit (code) {
+  const now = Date.now()
+  restartTimes = restartTimes.filter(t => now - t < RESTART_WINDOW_MS)
+  if (restartTimes.length >= MAX_RESTARTS) {
+    return setBackend('stopped', `The backend keeps exiting (code ${code}). See the backend log.`)
+  }
+  restartTimes.push(now)
+  setBackend('starting', `The backend exited (code ${code}); starting it again.`)
+  showStatusPage('JARVIS stopped unexpectedly. Starting it again…')
+  setTimeout(startBackend, 2000)
+}
+
+// "Start backend" in the tray: a fresh start, with the crash budget reset.
+function startFresh () {
+  restartTimes = []
+  setBackend('starting')
+  showStatusPage('Starting JARVIS…')
+  startBackend()
 }
 
 // Whisper loads before the port opens, so "the page answers" means ready.
@@ -146,6 +184,7 @@ async function waitForReady (proc) {
 function onBackendReady () {
   setBackend('ready')
   if (win && !win.isDestroyed()) win.loadURL(HUD_URL)
+  runChecks()
 }
 
 function stopBackend () {
@@ -162,6 +201,67 @@ async function restartBackend () {
   showStatusPage('Restarting JARVIS…')
   await new Promise(resolve => setTimeout(resolve, 1000))
   await startBackend()
+}
+
+// ---------------------------------------------------------------- health
+
+function fetchStatus () {
+  return new Promise(resolve => {
+    const req = http.get(HUD_URL + 'status', { timeout: 3000 }, res => {
+      let body = ''
+      res.on('data', chunk => { body += chunk })
+      res.on('end', () => { try { resolve(JSON.parse(body)) } catch { resolve(null) } })
+    })
+    req.on('timeout', () => req.destroy())
+    req.on('error', () => resolve(null))
+  })
+}
+
+// An attached dev server that goes away shows in the tray, and one that
+// answers again is picked up. An owned backend reports its own exit instead.
+async function healthTick () {
+  if (backend.state === 'starting' || backend.proc) return
+  const alive = await probe() === 'jarvis'
+  if (alive && backend.state !== 'ready') {
+    backend.attached = true
+    onBackendReady()
+  } else if (!alive && backend.state === 'ready') {
+    setBackend('stopped', 'Your dev server stopped.')
+  }
+}
+
+function portOpen (port) {
+  return new Promise(resolve => {
+    const socket = net.connect({ host: '127.0.0.1', port, timeout: 1000 })
+    socket.once('connect', () => { socket.destroy(); resolve(true) })
+    socket.once('timeout', () => { socket.destroy(); resolve(false) })
+    socket.once('error', () => resolve(false))
+  })
+}
+
+// Windows can switch the microphone off for all desktop apps, and the HUD
+// then only shows a dead mic. "Deny" at the machine, user or desktop-app
+// level blocks it.
+const MIC_STORE = 'Microsoft\\Windows\\CurrentVersion\\CapabilityAccessManager\\ConsentStore\\microphone'
+function micBlocked () {
+  const keys = [`HKLM\\SOFTWARE\\${MIC_STORE}`, `HKCU\\Software\\${MIC_STORE}`, `HKCU\\Software\\${MIC_STORE}\\NonPackaged`]
+  return keys.some(key => {
+    try { return /\bDeny\b/.test(execFileSync('reg', ['query', key, '/v', 'Value'], { encoding: 'utf8' })) } catch { return false }
+  })
+}
+
+async function runChecks () {
+  const found = []
+  if (micBlocked()) found.push('Microphone blocked for desktop apps (Settings > Privacy > Microphone)')
+  if (!await portOpen(OLLAMA_PORT)) found.push('Ollama is not running: no offline fallback')
+  if (!await portOpen(CHROME_PORT)) found.push('Chrome (JARVIS) is not open: no clicks inside the browser')
+  const wake = backend.state === 'ready' ? ((await fetchStatus()) || {}).wake_server : null
+  if (wake && !wake.healthy) found.push(`Wake word off: ${wake.error || 'microphone unavailable'}`)
+  if (checks === null || found.join('|') !== checks.join('|')) {
+    console.log(`[desktop] checks: ${found.join(' | ') || 'all clear'}`)
+  }
+  checks = found
+  buildTrayMenu()
 }
 
 // ---------------------------------------------------------------- window
@@ -295,9 +395,12 @@ function trayStatus () {
 function buildTrayMenu () {
   if (!tray) return
   const status = trayStatus()
-  tray.setToolTip(`JARVIS (${status})${isDev ? ' [dev]' : ''}`)
+  const warnings = checks || []
+  const ready = backend.state === 'ready'
+  tray.setToolTip(`JARVIS (${status})${warnings.length ? `, ${warnings.length} warning(s)` : ''}${isDev ? ' [dev]' : ''}`)
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: status, enabled: false },
+    ...warnings.map(w => ({ label: `⚠ ${w}`, enabled: false })),
     ...(hotkeyOk ? [] : [{ label: 'Ctrl+Alt+J is taken by another app', enabled: false }]),
     { type: 'separator' },
     { label: 'Panel', type: 'radio', checked: mode === 'sticky', click: () => showMode('sticky') },
@@ -305,7 +408,11 @@ function buildTrayMenu () {
     { label: 'Mini orb', type: 'radio', checked: mode === 'mini', click: () => showMode('mini', false) },
     { label: 'Hide', click: () => win.hide() },
     { type: 'separator' },
-    { label: 'Restart backend', enabled: !backend.attached && backend.state !== 'starting', click: restartBackend },
+    {
+      label: ready ? 'Restart backend' : 'Start backend',
+      enabled: backend.state !== 'starting' && !(ready && backend.attached),
+      click: ready ? restartBackend : startFresh
+    },
     { label: 'Open backend log', click: () => shell.openPath(LOG_FILE) },
     { type: 'separator' },
     { label: 'Quit JARVIS', click: () => { quitting = true; app.quit() } }
@@ -334,6 +441,14 @@ if (!app.requestSingleInstanceLock()) {
     hotkeyOk = globalShortcut.register(HOTKEY, onHotkey)
     if (!hotkeyOk) console.error(`[desktop] ${HOTKEY} could not be registered`)
     startBackend()
+    setInterval(healthTick, HEALTH_EVERY_MS)
+    setInterval(runChecks, CHECKS_EVERY_MS)
+    // After sleep the page's microphone stream is dead; a reload gives it a
+    // new one (the backend's wake engine reopens its own). Checks rerun too.
+    powerMonitor.on('resume', () => setTimeout(() => {
+      if (backend.state === 'ready' && win && !win.isDestroyed()) win.loadURL(HUD_URL)
+      runChecks()
+    }, 5000))
   })
   app.on('before-quit', () => { quitting = true })
   app.on('will-quit', () => {

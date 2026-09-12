@@ -53,6 +53,10 @@ WAKE_WORDS = ['jarvis', 'jarviss', 'jarvus', 'jervis', 'javis', 'jarvez', 'charv
 # room tone has no loud slice, so it is still skipped.
 SILENCE_FLOOR = float(os.environ.get("JARVIS_WAKE_SILENCE_FLOOR", "0.002"))
 BURST_S = 0.5
+# No audio for this long means the stream died (sleep, a device unplugged or
+# taken), and a dead stream is reopened at most this often.
+SILENT_STREAM_S = 5.0
+REOPEN_EVERY_S = 10.0
 
 
 def wake_word_in(text):
@@ -109,6 +113,7 @@ class WakeEngine:
         self.healthy = False
         self.last_err = ''
         self._last_err_print = 0.0  # throttles transcribe-error prints to 1/min
+        self._last_reopen = 0.0
 
     # -- external signals ---------------------------------------------------
     def set_callback(self, cb):
@@ -156,12 +161,9 @@ class WakeEngine:
         if self._running:
             return
         try:
-            self._stream = sd.InputStream(
-                device=self.device, samplerate=self.sr, channels=1,
-                dtype='float32', blocksize=int(self.sr * 0.1),
-                callback=self._audio_cb)
-            self._stream.start()
+            self._open_stream()
             self._running = True
+            self._last_audio_ts = time.time()
             self.healthy = True
             self.last_err = ''
             self._thread = threading.Thread(target=self._loop, daemon=True)
@@ -176,6 +178,16 @@ class WakeEngine:
 
     def stop(self):
         self._running = False
+        self._close_stream()
+
+    def _open_stream(self):
+        self._stream = sd.InputStream(
+            device=self.device, samplerate=self.sr, channels=1,
+            dtype='float32', blocksize=int(self.sr * 0.1),
+            callback=self._audio_cb)
+        self._stream.start()
+
+    def _close_stream(self):
         try:
             if self._stream:
                 self._stream.stop()
@@ -183,6 +195,25 @@ class WakeEngine:
         except Exception:
             pass
         self._stream = None
+
+    def _maybe_reopen(self, now):
+        """A stream that stopped delivering audio died (sleep, a headset
+        unplugged, the device taken). It used to be marked unhealthy and left
+        that way until a restart; reopen it instead, at most every
+        REOPEN_EVERY_S, so the wake word comes back on its own."""
+        if now - self._last_audio_ts <= SILENT_STREAM_S:
+            return
+        self.healthy = False
+        self.last_err = 'no microphone audio received'
+        if now - self._last_reopen < REOPEN_EVERY_S:
+            return
+        self._last_reopen = now
+        self._close_stream()
+        try:
+            self._open_stream()
+            print("[WakeEngine] microphone stream reopened", flush=True)
+        except Exception as e:
+            self.last_err = f'microphone unavailable: {e}'
 
     def _audio_cb(self, indata, frames, time_info, status):
         try:
@@ -197,10 +228,7 @@ class WakeEngine:
             try:
                 chunks = [self._q.get(timeout=1.0)]
             except queue.Empty:
-                # No audio arriving? Mark unhealthy only if it's been a while.
-                if time.time() - self._last_audio_ts > 5.0:
-                    self.healthy = False
-                    self.last_err = 'no microphone audio received'
+                self._maybe_reopen(time.time())
                 continue
             # Everything that arrived during the last decode, at once: only the
             # newest window matters, and one block per pass would fall behind.

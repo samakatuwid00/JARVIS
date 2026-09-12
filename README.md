@@ -17,6 +17,31 @@ python jarvis.py           # Voice mode (needs microphone)
 python jarvis.py --demo    # Pre-scripted demo
 ```
 
+## Web HUD and desktop app
+
+The HUD is served by `jarvis_web.py` (port: `JARVIS_PORT` in `.env`):
+
+```bash
+.venv\Scripts\python jarvis_web.py     # then open http://127.0.0.1:8001
+```
+
+The desktop app in `desktop/` puts it in a tray panel with Ctrl+Alt+J, a full
+HUD view and a mini orb:
+
+```bash
+cd desktop
+npm install                # Electron's install step is approved in package.json
+npm run unpack-electron    # only if node_modules/electron/dist has no electron.exe
+npm run dev
+```
+
+If a JARVIS backend is already running, the app attaches to it; otherwise it
+starts one from `.venv`, restarts it if it crashes, and stops it on quit.
+Do not run `watch_and_restart.py` while the app owns the backend: both would
+start a server on the same port. Start `watch_and_restart.py` first and the
+app attaches to it. Details: `ELECTRON_PLAN.md`; phone access over Tailscale:
+`PHONE_PLAN.md`.
+
 ## Features
 
 - 🎤 **Voice Activation** - Say "Hey Jarvis" to activate
