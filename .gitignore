@@ -59,3 +59,7 @@ logs/
 models/
 memory/
 nul
+
+# /ship gate: machine state, rewritten every run. Acknowledgements
+# (.ship/acknowledged.json) are a human decision and stay committed.
+.ship/findings.json

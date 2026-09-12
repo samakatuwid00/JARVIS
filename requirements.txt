@@ -16,6 +16,10 @@ playwright>=1.40.0
 # Clicking inside the user's own browser over its debugging port (browser_cdp)
 websockets>=13.0
 
+# Web HUD server (jarvis_web.py)
+fastapi>=0.139.0
+uvicorn>=0.51.0
+
 # Desktop app steps and deep window scans (desktop_driver, app_abilities)
 pywinauto>=0.6.9; sys_platform == "win32"
 
