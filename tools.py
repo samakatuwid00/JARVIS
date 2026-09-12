@@ -47,6 +47,30 @@ def _audit_log(caller: str, task: str, decision: str, result: str = "", confirm:
     except Exception:
         pass
 
+def recent_file_writes(hours: float = 2.0, limit: int = 8) -> list:
+    """Files JARVIS itself wrote with write_file in the last `hours`, oldest
+    first, as "HH:MM path". Reads only the tail of the audit trail."""
+    try:
+        with open(_AUDIT_PATH, "rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - 262144))
+            tail = f.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return []
+    cutoff = datetime.datetime.now() - datetime.timedelta(hours=hours)
+    out = []
+    for line in tail:
+        if '"write_file"' not in line:
+            continue
+        try:
+            rec = json.loads(line)
+            ts = datetime.datetime.fromisoformat(rec["ts"])
+        except (ValueError, KeyError, TypeError):
+            continue
+        if rec.get("caller") == "write_file" and rec.get("decision") == "executed" and ts >= cutoff:
+            out.append(f"{ts:%H:%M} {rec.get('task', '')}")
+    return out[-limit:]
+
 def _quarantine_external(text: str, label: str = "external") -> str:
     """Wrap external text (browser/chat/file) as data, quarantining instruction-like spans.
     

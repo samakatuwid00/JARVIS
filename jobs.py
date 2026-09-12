@@ -73,8 +73,13 @@ def _load_history() -> None:
                 if not jid:
                     continue
                 prev = _jobs.get(jid)
-                # last record wins
+                # last record wins, except the step notes: each record carries
+                # one, and keeping only the last lost which agent a job used.
                 merged = {**(prev or {}), **rec}
+                notes = list((prev or {}).get("progress") or [])
+                if rec.get("note"):
+                    notes.append(rec["note"])
+                merged["progress"] = notes[-20:]
                 _jobs[jid] = merged
     except Exception:
         return
@@ -242,6 +247,23 @@ def recent(limit: int = 10) -> list[dict]:
     with _lock:
         rows = sorted(_jobs.values(), key=lambda j: j.get("started") or 0)
     return [dict(j) for j in rows[-limit:]][::-1]
+
+
+def recent_work(limit: int = 3, max_notes: int = 6) -> str:
+    """The latest jobs as plain facts - task, who ran it, each step, the
+    outcome - so "what did you use to build that?" is answered from the
+    record rather than guessed."""
+    lines = []
+    for j in recent(limit):
+        when = time.strftime("%H:%M", time.localtime(j.get("started") or 0))
+        who = j.get("agent") or j.get("tier") or "unknown"
+        lines.append(f"- {when} job {j['id']} ({who}), state {j.get('state')}: "
+                     f"{(j.get('task') or '')[:120]}")
+        for note in (j.get("progress") or [])[-max_notes:]:
+            lines.append(f"    {note[:200]}")
+        if j.get("summary"):
+            lines.append(f"    outcome: {' '.join(j['summary'].split())[:200]}")
+    return "\n".join(lines)
 
 
 def status_line() -> str:

@@ -318,10 +318,15 @@ def classify_intent(text: str) -> str:
     # brain from thin air ("I can browse the web...") while web_registry.json
     # went unread. Excludes any navigation/registration verb so "open facebook"
     # and "add hackernews, ..." keep their own routes.
-    if re.search(r"\b(sites?|websites?|bookmarks?)\b", t) and \
-       not re.search(r"\b(open|go\s+to|visit|browse|add|register|bookmark|remove|delete|forget)\b", t) and \
-       (re.match(r"^(what|which|list|show|tell me)\b", t) or
-            re.search(r"\b(do you know|you know|are registered|i have|my sites|my websites)\b", t)):
+    # The sites must be what the question asks for ("what sites...", "list my
+    # sites", "sites you know"). Any what-question that merely said "website"
+    # used to land here: "What coding agent did you use to create this
+    # website?" was answered with the registry (2026-09-12).
+    if not re.search(r"\b(open|go\s+to|visit|browse|add|register|bookmark|remove|delete|forget)\b", t) and (
+            re.match(r"^(what|which)\s+(other\s+)?(web)?sites?\b", t) or
+            re.match(r"^(list|show|tell me)\b.*\b(web)?sites\b|^(list|show)\b.*\bbookmarks\b", t) or
+            re.search(r"\b(web)?sites?\s+(do\s+)?you\s+know\b|\bare registered\b|"
+                      r"\bmy (web)?sites\b|\bmy bookmarks\b|\bsites i have\b", t)):
         return "list_sites"
     # report / launch: JARVIS-specific side-routes (compose_report, launch_project).
     # These run on JARVIS's local brain + signed-in browser, NOT Hermes, so they
@@ -563,6 +568,47 @@ def _router_may_lead(text):
     brain repo" ran a Chrome web search (2026-09-11). "can you open hermes" is
     a command in question form and still leads."""
     return not _WH_QUESTION_RE.match(text or "")
+
+
+# A question about what JARVIS already did: "what coding agent did you use to
+# create this website?", "which tool built the site?". It asks for a fact from
+# the record, not for the work again - its verbs (create, build) read as a
+# multi-step goal and would have queued a second build (2026-09-12).
+_OWN_WORK_RE = re.compile(
+    r"\b(?:did|have|had)\s+you\b|"
+    r"\byou\s+(?:just\s+)?(?:used|made|created|built|wrote|generated|ran|picked|chose|did)\b|"
+    r"\b(?:built|made|created|wrote|generated|coded)\s+(?:this|that|it|the)\b", re.I)
+_DID_YOU_LEAD_RE = re.compile(r"^\s*(?:(?:jarvis|so|and)[,\s]+)*(?:did|have|had)\s+you\b", re.I)
+
+
+def _asks_about_own_work(text):
+    t = (text or "").strip()
+    return bool((_WH_QUESTION_RE.match(t) or _DID_YOU_LEAD_RE.match(t)) and _OWN_WORK_RE.search(t))
+
+
+def _own_work_facts():
+    """What JARVIS recently did, from the job log and the audit trail."""
+    parts = []
+    try:
+        import jobs
+        work = jobs.recent_work()
+        if work:
+            parts.append("Background jobs, newest first:\n" + work)
+    except Exception:
+        pass
+    try:
+        import tools
+        writes = tools.recent_file_writes()
+        if writes:
+            parts.append("Files JARVIS wrote itself (write_file), oldest first:\n"
+                         + "\n".join(f"- {w}" for w in writes))
+    except Exception:
+        pass
+    if not parts:
+        return ""
+    return ("\n\n[WHAT JARVIS DID RECENTLY - facts from the job log and audit trail. "
+            "Answer from these; say plainly when they do not cover the question.]\n"
+            + "\n".join(parts) + "\n[END]")
 
 
 _OPEN_LEAD_RE = re.compile(
@@ -1414,8 +1460,17 @@ class JarvisBrain:
         except Exception:
             pass
         self._lead_record = None
-        reply = self._think_turn(user_input, on_hermes_done=on_hermes_done,
-                                 progress_cb=progress_cb)
+        self._grounded = None
+        try:
+            reply = self._think_turn(user_input, on_hermes_done=on_hermes_done,
+                                     progress_cb=progress_cb)
+        finally:
+            # The facts rode along for this one answer; history keeps the
+            # user's own words so they are not re-sent on every later turn.
+            if self._grounded:
+                msg, original = self._grounded
+                msg["content"] = original
+                self._grounded = None
         if started is not None:
             try:
                 fixed = honest_reply(reply, intent_router._audit_since(started["audit_pos"]),
@@ -1432,6 +1487,16 @@ class JarvisBrain:
             except Exception as e:
                 print(f"[shadow] observer failed: {type(e).__name__}", flush=True)
         return reply
+
+    def _ground_own_work(self):
+        """Attach what JARVIS recently did to this turn's user message, for
+        the model to answer from; think() puts the original text back."""
+        facts = _own_work_facts()
+        if not facts or not self.conversation or self.conversation[-1].get("role") != "user":
+            return
+        msg = self.conversation[-1]
+        self._grounded = (msg, msg["content"])
+        msg["content"] = msg["content"] + facts
 
     def _think_turn(self, user_input: str, on_hermes_done=None, progress_cb=None) -> str:
         """Route to Cerebras (primary); then 9router; then local Ollama; then mock.
@@ -1656,6 +1721,11 @@ class JarvisBrain:
             _conversational = is_conversational(user_input)
         except Exception:
             _conversational = False
+        # "What coding agent did you use to create this website?" is answered
+        # from the record by the cloud brain, never re-run as a new goal.
+        if _asks_about_own_work(user_input):
+            _conversational = True
+            self._ground_own_work()
         # Phase 5: the understand-first router leads where the old code was
         # about to delegate or guess. It runs an ability or a rule it is
         # confident about (asking first when the user marked it "ask");
