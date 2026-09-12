@@ -91,6 +91,34 @@ def test_a_bare_check_in_is_answered_without_a_model(text, reply):
     assert b._check_in_reply(text) == reply
 
 
+@pytest.mark.parametrize("text, question", [
+    ("In one word, what colour is the sky on a clear day?", True),
+    ("Quick one, how many sites do you know?", True),
+    ("Open notepad, what do you think?", True),
+    ("open notepad, then close it", False)])
+def test_a_question_after_a_lead_in_is_still_a_question(text, question):
+    assert b._is_question_not_request(text) is question
+
+
+@pytest.mark.parametrize("method, kwargs", [
+    ("_think_router", {}),
+    ("_think_openai_compat", {"base_url": "http://x", "api_key": "k", "model": "m"})])
+def test_model_clients_never_retry_a_timed_out_call(monkeypatch, method, kwargs):
+    import openai
+    made = []
+
+    class Client:
+        def __init__(self, **kw):
+            made.append(kw)
+            raise RuntimeError("stop here")
+    monkeypatch.setattr(openai, "OpenAI", Client)
+    brain = object.__new__(b.JarvisBrain)
+    brain.conversation = []
+    with pytest.raises(RuntimeError):
+        getattr(brain, method)("hi", **kwargs)
+    assert made and made[0]["max_retries"] == 0
+
+
 def test_a_real_request_is_not_a_check_in():
     assert b._is_bare_check_in("test the login page") is False
     assert b._is_bare_check_in("open notepad") is False

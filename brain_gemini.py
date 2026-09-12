@@ -154,6 +154,8 @@ def _run_bounded(fn, budget, label):
 # One budget per turn for the whole model chain. A model that is down held a
 # turn for minutes - 9router's per-model retries at 45 s each, then 180 s on
 # the CPU model - and turns stacked up behind each other (2026-09-12).
+# The chain's OpenAI clients are built with max_retries=0: the SDK's default
+# retried a timed-out call twice, so one 40 s Ollama wait became two minutes.
 TURN_BUDGET = float(os.getenv("JARVIS_TURN_BUDGET", "45"))
 MIN_CALL_SECONDS = 2.0
 _NO_MODEL_REPLY = ("I couldn't get an answer from my AI model in time, sir. The online service "
@@ -643,6 +645,11 @@ def _check_in_reply(text):
 _YES_NO_RE = re.compile(r"^\s*(?:(?:jarvis|cygnus|so|and|hey)[,\s]+)*"
                         r"(?:can|could|would|will|do|does|did|is|are|have|has)\s+"
                         r"(?:you|it|there|i|we|this|that)\b.*\?\s*$", re.I)
+# A short lead-in, then a wh-question: "In one word, what colour is the sky
+# on a clear day?" went to Hermes with a confirm - no wh-word first, and
+# "clear" reads as a change to the machine (2026-09-12).
+_LED_QUESTION_RE = re.compile(r"^[^?,]{1,40},\s*(?:what|which|who|whose|why|how|when|where)\b.*\?\s*$",
+                              re.I)
 # What a "can you X?" asks for when it is a request, not a capability question.
 _REQUEST_ROUTES = {"task", "multi", "app_action", "open_site", "open_app", "close_app", "music",
                    "media_control", "web_search", "read_page", "report", "launch_project"}
@@ -655,7 +662,7 @@ def _is_question_not_request(text):
     website with opencode?" asks for one). Until the router is loaded, a
     yes-no question stays a request, as before."""
     t = (text or "").strip()
-    if _WH_QUESTION_RE.match(t):
+    if _WH_QUESTION_RE.match(t) or _LED_QUESTION_RE.match(t):
         return True
     if not _YES_NO_RE.match(t):
         return False
@@ -2357,7 +2364,7 @@ class JarvisBrain:
         """Call 9router (OpenAI-compatible) with mimo model + tool loop."""
         from openai import OpenAI
 
-        client = OpenAI(base_url=ROUTER_BASE_URL, api_key=ROUTER_API_KEY)
+        client = OpenAI(base_url=ROUTER_BASE_URL, api_key=ROUTER_API_KEY, max_retries=0)
         otools = _openai_tools()
 
         # Build OpenAI-style messages from shared conversation history
@@ -2609,7 +2616,7 @@ class JarvisBrain:
         """
         from openai import OpenAI
 
-        client = OpenAI(base_url=base_url, api_key=api_key)
+        client = OpenAI(base_url=base_url, api_key=api_key, max_retries=0)
         otools = _openai_tools()
 
         messages = [{"role": "system", "content": JARVIS_SYSTEM}]
@@ -2758,7 +2765,7 @@ class JarvisBrain:
         if not GROQ_API_KEY:
             raise RuntimeError("GROQ_API_KEY not available")
 
-        client = OpenAI(base_url=GROQ_BASE_URL, api_key=GROQ_API_KEY)
+        client = OpenAI(base_url=GROQ_BASE_URL, api_key=GROQ_API_KEY, max_retries=0)
         otools = _openai_tools()
 
         # Build OpenAI-style messages from shared conversation history
@@ -2877,7 +2884,7 @@ class JarvisBrain:
         if not CEREBRAS_API_KEY:
             raise RuntimeError("CEREBRAS_API_KEY not available")
 
-        client = OpenAI(base_url=CEREBRAS_BASE_URL, api_key=CEREBRAS_API_KEY)
+        client = OpenAI(base_url=CEREBRAS_BASE_URL, api_key=CEREBRAS_API_KEY, max_retries=0)
         otools = _openai_tools()
 
         # Build OpenAI-style messages from shared conversation history
