@@ -1754,7 +1754,10 @@ def resolve_open_target(text: str, force: str | None = None,
         with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                "app_registry.json"), encoding="utf-8") as f:
             apps = json.load(f).get("apps", {})
-        app_hit = t in apps
+        # A name open_application knows by alias ("vs code" -> code) is an
+        # app: "open VS Code" otherwise fell through to the coding specialist
+        # because of the word "code" (2026-09-12).
+        app_hit = t in apps or t in APP_ALIASES
         if not app_hit:
             # fuzzy on app names too (spotify vs spotifly etc.)
             close = difflib.get_close_matches(t, list(apps.keys()), n=1, cutoff=0.85)

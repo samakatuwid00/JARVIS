@@ -82,6 +82,12 @@ def test_an_exact_name_beats_a_fuzzy_one(registries):
     assert tools.resolve_open_target("github for me") == ("site", "github")
 
 
+def test_an_alias_is_an_app(registries, monkeypatch):
+    monkeypatch.setattr(tools, "APP_ALIASES", {"vs code": "code", "calculator": "calc"})
+    assert tools.resolve_open_target("VS Code") == ("app", "vs code")
+    assert tools.resolve_open_target("calculator") == ("app", "calculator")
+
+
 def test_the_desktop_path_opens_registered_sites(registries, monkeypatch):
     ran = []
     monkeypatch.setattr(tools, "execute_tool", lambda name, args, *a: ran.append((name, args)) or "ok")
