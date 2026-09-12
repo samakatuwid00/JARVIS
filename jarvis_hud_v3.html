@@ -97,6 +97,27 @@
   #hud.speaking { filter: hue-rotate(var(--hue)) brightness(var(--bright)) saturate(var(--sat)); }
   #hud.listening { filter: hue-rotate(-12deg) brightness(1.05); transition: filter .3s; }
 
+  /* Cygnus: the black hole replaces the old animated orb. Its own fixed
+     layer sits above the dimmer (#jv-backdim, z 20) and below the panels
+     (#jv-shell, z 35); inside #stage the dimmer would darken it. */
+  #hud { display: none !important; }
+  #cy-stage { position: fixed; z-index: 24; left: 50%; top: 44%; transform: translate(-50%, -50%);
+    width: clamp(220px, 34vmin, 400px); aspect-ratio: 1; pointer-events: none; }
+  #cy-stage svg, #jv-mini-orb svg { width: 100%; height: 100%; display: block; overflow: visible; }
+  .cy-idle { color: var(--holo); }
+  .cy-listen { color: #9dff8a; --flow: 3s; --spin: 4s; --breathe: 1.4s; }
+  .cy-think { color: #7cc4ff; --flow: 6s; --spin: 1.6s; --breathe: 2.8s; }
+  .cy-speak { color: var(--holo); --flow: 2.2s; --spin: 3.2s; --breathe: .75s; animation: cySpeak .75s ease-in-out infinite; }
+  .bh-flow { animation: bhFlow var(--flow, 8s) linear infinite; }
+  .bh-glint { transform-origin: 50px 50px; animation: bhSpin var(--spin, 10s) linear infinite; }
+  .bh-halo { transform-origin: 50px 50px; animation: bhBreathe var(--breathe, 4.8s) ease-in-out infinite; }
+  @keyframes bhFlow { to { stroke-dashoffset: -64; } }
+  @keyframes bhSpin { to { transform: rotate(360deg); } }
+  @keyframes bhBreathe { 0%, 100% { opacity: .3; transform: scale(1); } 50% { opacity: .58; transform: scale(1.08); } }
+  @keyframes cySpeak { 0%, 100% { filter: drop-shadow(0 0 5px rgba(255, 180, 84, .5)); }
+    50% { filter: drop-shadow(0 0 16px rgba(255, 180, 84, .95)); } }
+  @media (prefers-reduced-motion: reduce) { .bh-flow, .bh-glint, .bh-halo, .cy-speak { animation: none; } }
+
   /* Voice overlay — subtle full-screen tint only */
   #jv-glow { position: fixed; inset: 0; z-index: 50; pointer-events: none; opacity: 0;
     transition: opacity .25s; box-shadow: inset 0 0 160px color-mix(in srgb, var(--holo) 40%, transparent); }
@@ -641,13 +662,10 @@
       border-radius: 16px 16px 0 0; box-shadow: 0 -24px 60px rgba(0, 0, 0, .55); }
   }
 
-  /* Phones, portrait or landscape: the background artifact crops its desktop
-     layout badly and animates constantly; a soft orb glow stands in for it.
-     The wrapper's own glow and rings still react to listening and speaking. */
+  /* Phones and the widget: a smaller black hole, higher up, over the space
+     the trimmed transcript leaves (step 5 of CYGNUS_UI_PLAN.md). */
   @media (max-width: 700px), (pointer: coarse) and (max-height: 500px) {
-    #hud { display: none; }
-    #stage { background: radial-gradient(70% 45% at 50% 40%,
-        color-mix(in srgb, var(--holo) 22%, transparent), transparent 72%); }
+    #cy-stage { top: 38%; width: clamp(150px, 46vw, 210px); }
   }
   /* Touch tablets in portrait: keep the TALK dock clear under the input. */
   @media (pointer: coarse) and (max-width: 1099px) and (min-height: 501px) {
@@ -681,25 +699,54 @@
   #jv-mini-orb { display: none; }
   html[data-desk="mini"], html[data-desk="mini"] body { background: transparent !important; }
   html[data-desk="mini"] body > * { display: none !important; }
-  html[data-desk="mini"] body > #jv-mini-orb { display: block !important; position: fixed; inset: 10px;
-    border-radius: 50%; cursor: pointer; touch-action: none;
-    background: radial-gradient(circle at 50% 38%, color-mix(in srgb, var(--holo) 40%, #05070c), #05070c 72%);
-    border: 2px solid var(--holo); box-shadow: 0 0 18px color-mix(in srgb, var(--holo) 50%, transparent);
-    animation: jvOrb 3s ease-in-out infinite; }
-  #jv-mini-orb.listening { border-color: #9dff8a; box-shadow: 0 0 22px #9dff8a; animation-duration: .9s; }
-  #jv-mini-orb.thinking, #jv-mini-orb.transcribing { border-color: #6ec3ff; box-shadow: 0 0 22px #6ec3ff;
-    animation-duration: 1.4s; }
-  #jv-mini-orb.speaking { box-shadow: 0 0 28px var(--holo); animation-duration: .7s; }
-  @keyframes jvOrb { 50% { transform: scale(1.06); } }
+  /* The orb is the black hole itself: transparent around it, with room for
+     the glow inside the 96px window. Colour and tempo come from the cy-*
+     state class that setState() puts on it. */
+  html[data-desk="mini"] body > #jv-mini-orb { display: block !important; position: fixed; inset: 12px;
+    cursor: pointer; touch-action: none; background: transparent; }
 </style>
 </head>
 <body>
+  <!-- The Cygnus mark: a black disc in a gold photon ring, the accretion
+       band tilted across it, its near half passing in front. Colour comes
+       from `color`; the tempo of the moving parts from --flow, --spin and
+       --breathe, set per state on the element that uses it. -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+    <defs>
+      <filter id="cy-soft" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="4.5"/></filter>
+      <filter id="cy-haze" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="1.4"/></filter>
+      <clipPath id="cy-front"><rect x="0" y="50" width="100" height="50"/></clipPath>
+      <symbol id="cy-bh" viewBox="0 0 100 100">
+        <circle class="bh-halo" cx="50" cy="50" r="30" fill="none" stroke="currentColor" stroke-width="15" opacity=".4" filter="url(#cy-soft)"/>
+        <g transform="rotate(-9 50 50)">
+          <ellipse cx="50" cy="50" rx="46" ry="6.5" fill="none" stroke="currentColor" stroke-width="5" opacity=".4" filter="url(#cy-haze)"/>
+          <ellipse cx="50" cy="50" rx="46" ry="6.5" fill="none" stroke="currentColor" stroke-width="1.9"/>
+          <ellipse class="bh-flow" cx="50" cy="50" rx="46" ry="6.5" fill="none" stroke="#fff4dc" stroke-width="1.1" stroke-dasharray="4 12" opacity=".55"/>
+        </g>
+        <circle cx="50" cy="50" r="26.5" fill="none" stroke="currentColor" stroke-width="9" opacity=".8" filter="url(#cy-haze)"/>
+        <circle cx="50" cy="50" r="26.5" fill="none" stroke="currentColor" stroke-width="4.6"/>
+        <circle cx="50" cy="50" r="26.5" fill="none" stroke="#fff4dc" stroke-width="1.6" opacity=".9"/>
+        <circle class="bh-glint" cx="50" cy="50" r="26.5" fill="none" stroke="#ffffff" stroke-width="2.4" stroke-linecap="round" stroke-dasharray="14 152.5" opacity=".9"/>
+        <circle cx="50" cy="50" r="23.6" fill="#000"/>
+        <g transform="rotate(-9 50 50)" clip-path="url(#cy-front)">
+          <ellipse cx="50" cy="50" rx="46" ry="6.5" fill="none" stroke="currentColor" stroke-width="5.5" opacity=".5" filter="url(#cy-haze)"/>
+          <ellipse cx="50" cy="50" rx="46" ry="6.5" fill="none" stroke="currentColor" stroke-width="2.2"/>
+          <ellipse cx="50" cy="50" rx="46" ry="6.5" fill="none" stroke="#fff4dc" stroke-width=".8" opacity=".8"/>
+          <ellipse class="bh-flow" cx="50" cy="50" rx="46" ry="6.5" fill="none" stroke="#ffffff" stroke-width="1.3" stroke-dasharray="4 12" opacity=".75"/>
+        </g>
+      </symbol>
+    </defs>
+  </svg>
   <div id="jv-atmos"></div>
   <div id="jv-clarify-root"></div>
   <div id="jv-backdim"></div>
+  <!-- The old animated orb (hud_artifact.html) is retired. The frame stays,
+       empty and hidden, because older overlay code still measures it. -->
   <div id="stage">
-    <iframe id="hud" src="/hud.html" allow="microphone"></iframe>
+    <iframe id="hud" aria-hidden="true" tabindex="-1"></iframe>
   </div>
+  <!-- Cygnus: the black hole, above the dimmer and below the panels. -->
+  <div id="cy-stage" class="cy-idle" aria-hidden="true"><svg><use href="#cy-bh"/></svg></div>
   <div id="jv-glow"></div>
   <div id="jv-rings"></div><!-- filled by spawnPeak() while speaking -->
 
@@ -831,7 +878,7 @@
 
   <button id="jv-talk" type="button" aria-label="Tap to talk">Talk</button>
 
-  <div id="jv-mini-orb" role="button" aria-label="Open Cygnus panel"></div>
+  <div id="jv-mini-orb" class="cy-idle" role="button" aria-label="Open Cygnus panel"><svg><use href="#cy-bh"/></svg></div>
 
   <div id="jv-drawer" role="dialog" aria-modal="true" aria-label="Panels">
     <div id="jv-drawer-card">
@@ -914,6 +961,7 @@
   var unlockBtn = document.getElementById('jv-unlock');
   var endBtn = document.getElementById('jv-end');
   var miniOrb = document.getElementById('jv-mini-orb');
+  var cyStage = document.getElementById('cy-stage');
   var hud = document.getElementById('hud');
   // Transcript now renders in the HUD's right column; #jv-log is kept in the
   // DOM (hidden) so nothing that references it breaks.
@@ -972,7 +1020,13 @@
       : (st === 'thinking' || st === 'transcribing') ? 'think' : '';
     if (txt) { statusEl.textContent = txt; statusEl.title = txt; }
     statusEl.className = (st === 'listening' || st === 'speaking') ? 'live' : '';
-    if (miniOrb) miniOrb.className = st;         // the desktop app's mini orb mirrors it
+    // The black hole (centre stage and the desktop app's mini orb) takes the
+    // state's colour and tempo.
+    var cyClass = st === 'listening' ? 'cy-listen'
+      : (st === 'thinking' || st === 'transcribing') ? 'cy-think'
+      : st === 'speaking' ? 'cy-speak' : 'cy-idle';
+    if (miniOrb) miniOrb.className = cyClass;
+    if (cyStage) cyStage.className = cyClass;
     // The HUD artifact is read-only; it ignores this, but forward anyway so a
     // future HUD build can react without touching hud_artifact.html.
     try { hud.contentWindow.postMessage({ source: 'jarvis', type: 'state', state: st }, '*'); } catch (e) {}
