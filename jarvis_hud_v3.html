@@ -495,12 +495,6 @@
     #jv-shell { grid-template-columns: minmax(0, 1fr); gap: 8px; margin-top: 8px;
         height: calc(100vh - 8px); height: calc(100dvh - 8px); }
     #jv-col-left, #jv-col-right { display: none; }
-    /* The background artifact crops its desktop layout badly at this width
-       and animates constantly; a soft orb glow stands in for it. The
-       wrapper's own glow and rings still react to listening and speaking. */
-    #hud { display: none; }
-    #stage { background: radial-gradient(70% 45% at 50% 40%,
-        color-mix(in srgb, var(--holo) 22%, transparent), transparent 72%); }
     /* Topbar on two rows: brand, dot, Online, Apps; then the status. */
     #jv-topbar { flex-wrap: wrap; gap: 6px 10px; padding: 8px 12px; }
     #jv-brand { font-size: 17px; letter-spacing: .22em; }
@@ -624,6 +618,31 @@
     #jv-drawer-card { width: 100%; height: 82vh; height: 82dvh; border-left: 0;
       border-top: 1px solid color-mix(in srgb, var(--holo) 32%, transparent);
       border-radius: 16px 16px 0 0; box-shadow: 0 -24px 60px rgba(0, 0, 0, .55); }
+  }
+
+  /* Phones, portrait or landscape: the background artifact crops its desktop
+     layout badly and animates constantly; a soft orb glow stands in for it.
+     The wrapper's own glow and rings still react to listening and speaking. */
+  @media (max-width: 700px), (pointer: coarse) and (max-height: 500px) {
+    #hud { display: none; }
+    #stage { background: radial-gradient(70% 45% at 50% 40%,
+        color-mix(in srgb, var(--holo) 22%, transparent), transparent 72%); }
+  }
+  /* Touch tablets in portrait: keep the TALK dock clear under the input. */
+  @media (pointer: coarse) and (max-width: 1099px) and (min-height: 501px) {
+    #jv-center { margin-bottom: calc(112px + env(safe-area-inset-bottom)); }
+  }
+  /* Phones in landscape: thin topbar, transcript fills the height, TALK
+     docked on the right edge so it never covers text. */
+  @media (pointer: coarse) and (max-height: 500px) {
+    #jv-shell { gap: 6px; margin-top: 6px; height: calc(100vh - 6px); height: calc(100dvh - 6px); }
+    #jv-topbar { padding: 4px 12px; }
+    #jv-center { align-self: stretch; margin: 0 116px 6px 0; }
+    #jv-center .jv-spacer { display: none; }
+    #jv-feed { flex: 1 1 auto; min-height: 0; max-height: none; }
+    #jv-talk { left: auto; right: max(16px, env(safe-area-inset-right)); bottom: auto; top: 50%;
+      transform: translateY(-50%); }
+    #jv-talk:active { transform: translateY(-50%) scale(.95); }
   }
 </style>
 </head>

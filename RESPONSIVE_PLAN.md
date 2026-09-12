@@ -132,6 +132,15 @@ Tablet and desktop keep the artifact as today.
    is 300px wide (its column) instead of 287px.
 4. **Tablet + landscape** — two-region layout, docked drawer on wide
    tablets, landscape rule with TALK on the right.
+   *Done 2026-09-12.* The two-region layout came with step 3 (columns
+   collapse below 1100px). Touch tablets in portrait keep a 112px dock
+   under the input for TALK. Touch screens 500px tall or less (phone
+   landscape): artifact hidden, thin topbar, transcript fills the height,
+   TALK docked on the right edge. Checked at 768x1024, 1024x768 (touch),
+   860x400, 915x412 (POCO landscape), 400x860: TALK overlaps neither the
+   input nor the transcript. Non-touch and desktop sizes identical to
+   step 3. Docked drawer on wide tablets skipped: the overlay sheet
+   already works at 1024px.
 5. **Apps modal** — full screen on phones, tab row scroll.
 
 Each step is its own commit, testable in Chrome devtools device mode.
