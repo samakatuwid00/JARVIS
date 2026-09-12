@@ -1712,6 +1712,32 @@ async def websocket_endpoint(websocket: WebSocket):
         except Exception:
             pass
 
+    # Which model answered this client's last reply (router_health.answering).
+    # Starts as the configured model, so only a change is announced: "Claude
+    # 4.5 Sonnet is answering now." (the owner's ask, 2026-09-12).
+    try:
+        import router_health as _rh
+        _answered_by = {"who": _rh.primary()}
+    except Exception:
+        _rh, _answered_by = None, {"who": None}
+
+    async def _say_model_notice():
+        """Show and speak who is answering, when it changed since the last reply."""
+        if _rh is None:
+            return
+        try:
+            st = dict(getattr(brain, "last_stats", {}) or {})
+            backend = st.get("backend") or brain.last_backend
+            line = _rh.answer_notice(st.get("model"), backend, _answered_by["who"])
+            who = _rh.answering(st.get("model"), backend)
+            if who:
+                _answered_by["who"] = who
+            if line:
+                tts_b64 = await tts_to_b64(line)
+                await websocket.send_text(json.dumps({"type": "progress", "text": line, "audio": tts_b64}))
+        except Exception as e:
+            print(f"[WS] model notice failed: {e}", flush=True)
+
     async def _speak_proactive(text: str):
         from starlette.websockets import WebSocketState
         if websocket.client_state != WebSocketState.CONNECTED:
@@ -1953,6 +1979,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         continue
 
                     sstore_log("assistant", response)
+                    await _say_model_notice()
                     await websocket.send_text(json.dumps({"type": "status", "state": "speaking"}))
                     tts_b64 = await tts_to_b64(response)
                     _t["tts"] = time.time()
@@ -2097,6 +2124,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         continue
 
                     sstore_log("assistant", response)
+                    await _say_model_notice()
                     tts_b64 = None
                     if speak:
                         await websocket.send_text(json.dumps({"type": "status", "state": "speaking"}))
@@ -2182,6 +2210,8 @@ async def get_status():
     return {
         "status": "running",
         "brain": actual or model,
+        # The same model as the user would name it, for the top bar.
+        "brain_label": __import__("router_health").friendly(actual or model),
         "configured": model,
         "local_only": bool(getattr(brain, "_local_only", False)),
         "route": route,

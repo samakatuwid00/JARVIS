@@ -1528,7 +1528,7 @@
     // Same endpoint the status bar already exposes; no new server work.
     fetch('/status', { cache: 'no-store' }).then(function (r) { return r.json(); })
       .then(function (s) {
-        setVal(stBrain, s.brain || '—');
+        setVal(stBrain, s.brain_label || s.brain || '—');   // "Gemini 3.8 Flash", live
         syncBrainPill();
         var b = s.last_backend;
         setVal(stBackend, b ? b : 'awaiting first turn',
