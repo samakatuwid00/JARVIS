@@ -342,7 +342,9 @@ function setMode (next) {
   win.webContents.send('desk:mode', mode)
   const { workArea } = screen.getDisplayMatching(stickyBounds)
   if (mode === 'mini') {
+    // Locked both ways: at 125% scaling Windows let the orb grow while dragged.
     win.setMinimumSize(MINI.size, MINI.size)
+    win.setMaximumSize(MINI.size, MINI.size)
     win.setBounds({
       x: workArea.x + workArea.width - MINI.size - MINI.margin,
       y: workArea.y + workArea.height - MINI.size - MINI.margin,
@@ -352,6 +354,7 @@ function setMode (next) {
     win.setResizable(false)
   } else {
     win.setResizable(true)
+    win.setMaximumSize(0, 0)                      // 0 = no maximum
     win.setMinimumSize(STICKY.minWidth, STICKY.minHeight)
     win.setBounds(mode === 'expanded' ? workArea : stickyBounds)
   }
@@ -381,14 +384,27 @@ ipcMain.on('desk:surface', () => {
   if (!win.isVisible()) win.showInactive()
 })
 
-// The orb is dragged by hand, not with a drag region: a drag region swallows
-// the click that opens the panel (Sticky Brain's pet works the same way).
-ipcMain.on('desk:dragStart', () => { dragOrigin = win && !win.isDestroyed() ? win.getPosition() : null })
-ipcMain.on('desk:dragMove', (_e, d) => {
-  if (!dragOrigin || mode !== 'mini') return
-  win.setPosition(Math.round(dragOrigin[0] + (Number(d && d.dx) || 0)), Math.round(dragOrigin[1] + (Number(d && d.dy) || 0)))
+// The orb and the panel's top bar are dragged by hand, not with a drag
+// region: a drag region swallows the clicks on and under it (Sticky Brain's
+// pet works the same way). The full HUD fills the screen and never moves.
+// setBounds with the size taken at the start, never setPosition: at 125%
+// scaling each setPosition rounded the size up a pixel, and the orb grew.
+ipcMain.on('desk:dragStart', () => {
+  dragOrigin = win && !win.isDestroyed() && mode !== 'expanded' ? win.getBounds() : null
 })
-ipcMain.on('desk:dragEnd', () => { dragOrigin = null })
+ipcMain.on('desk:dragMove', (_e, d) => {
+  if (!dragOrigin || mode === 'expanded') return
+  win.setBounds({
+    x: Math.round(dragOrigin.x + (Number(d && d.dx) || 0)),
+    y: Math.round(dragOrigin.y + (Number(d && d.dy) || 0)),
+    width: dragOrigin.width,
+    height: dragOrigin.height
+  })
+})
+ipcMain.on('desk:dragEnd', () => {
+  if (dragOrigin && mode === 'sticky') stickyBounds = win.getBounds()
+  dragOrigin = null
+})
 
 // ---------------------------------------------------------------- tray
 

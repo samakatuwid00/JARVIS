@@ -26,7 +26,10 @@
     /* Amplitude-driven levers. JS rewrites these on every animation frame while
        the TTS clip plays, and resets them to exactly these idle values when it
        ends, so the whole reactive layer collapses to "off" with no leftovers. */
-    --amp: 0; --hue: 0deg; --bright: 1; --sat: 1; --glow: 0; --glow-r: 48vmin; }
+    --amp: 0; --hue: 0deg; --bright: 1; --sat: 1; --glow: 0; --glow-k: 1.4;
+    /* Where the black hole sits and how wide it is. Its speaking glow and
+       rings read these too, so all three stay centred on it at every size. */
+    --cy-y: 44%; --cy-w: clamp(220px, 34vmin, 400px); }
   html, body { height: 100%; background: var(--ink); overflow: hidden;
     font-family: Archivo, system-ui, sans-serif; color: #f2ead9; }
 
@@ -101,8 +104,8 @@
      layer sits above the dimmer (#jv-backdim, z 20) and below the panels
      (#jv-shell, z 35); inside #stage the dimmer would darken it. */
   #hud { display: none !important; }
-  #cy-stage { position: fixed; z-index: 24; left: 50%; top: 44%; transform: translate(-50%, -50%);
-    width: clamp(220px, 34vmin, 400px); aspect-ratio: 1; pointer-events: none; }
+  #cy-stage { position: fixed; z-index: 24; left: 50%; top: var(--cy-y); transform: translate(-50%, -50%);
+    width: var(--cy-w); aspect-ratio: 1; pointer-events: none; }
   #cy-stage svg, #jv-mini-orb svg { width: 100%; height: 100%; display: block; overflow: visible; }
   .cy-idle { color: var(--holo); }
   .cy-listen { color: #9dff8a; --flow: 3s; --spin: 4s; --breathe: 1.4s; }
@@ -121,10 +124,11 @@
   /* Voice overlay — subtle full-screen tint only */
   #jv-glow { position: fixed; inset: 0; z-index: 50; pointer-events: none; opacity: 0;
     transition: opacity .25s; box-shadow: inset 0 0 160px color-mix(in srgb, var(--holo) 40%, transparent); }
-  /* Speaking: not a tint but a soft radial disc sitting behind the orb, whose
-     radius (--glow-r) and brightness (--glow) both track speech energy. */
-  #jv-glow.speak { opacity: 1; box-shadow: none; }
-  #jv-glow.speak::after { content: ''; position: absolute; left: 50%; top: 50%;
+  /* Speaking: not a tint but a soft radial disc sitting behind the black hole
+     (below it and below the panels), whose radius (--glow-k, in black-hole
+     widths) and brightness (--glow) both track speech energy. */
+  #jv-glow.speak { opacity: 1; box-shadow: none; z-index: 23; --glow-r: calc(var(--cy-w) * var(--glow-k)); }
+  #jv-glow.speak::after { content: ''; position: absolute; left: 50%; top: var(--cy-y);
     width: calc(var(--glow-r) * 2); height: calc(var(--glow-r) * 2);
     margin: calc(var(--glow-r) * -1) 0 0 calc(var(--glow-r) * -1);
     border-radius: 50%; opacity: var(--glow); mix-blend-mode: screen;
@@ -140,12 +144,14 @@
   @keyframes jvBreathe { 0%,100% { opacity: .45; } 50% { opacity: 1; } }
 
   /* ------------------------------------------------------------ speaking rings */
-  /* Rings launched from the orb's edge while JARVIS talks. The orb sits at the
-     viewport centre, so the container does too; --r is the base radius. */
-  #jv-rings { position: fixed; inset: 0; z-index: 50; pointer-events: none;
-    display: none; --r: 24vmin; }
+  /* Rings launched from the black hole's photon ring while Cygnus talks,
+     centred on it (--cy-y) and over it, but under the panels (#jv-shell, z 35).
+     --r is half its width: at the first keyframe's .55 a ring sits just
+     outside the photon ring (26.5% of the width). */
+  #jv-rings { position: fixed; inset: 0; z-index: 25; pointer-events: none;
+    display: none; --r: calc(var(--cy-w) * .5); }
   #jv-rings.speak { display: block; }
-  #jv-rings i { position: absolute; left: 50%; top: 50%; display: block;
+  #jv-rings i { position: absolute; left: 50%; top: var(--cy-y); display: block;
     width: calc(var(--r) * 2); height: calc(var(--r) * 2); margin: calc(var(--r) * -1) 0 0 calc(var(--r) * -1);
     border-radius: 50%; opacity: 0;
     border: 1px solid color-mix(in srgb, var(--holo) calc(45% + var(--amp) * 55%), transparent); }
@@ -404,10 +410,10 @@
 
   #jv-input { flex: 1 1 auto; min-width: 0; border: 0; outline: 0; background: transparent;
     font-family: var(--font-body);
-    font-size: 13.5px; font-weight: 500; letter-spacing: .03em;
+    font-size: 13.5px; font-weight: 500; letter-spacing: .01em;
     color: #ffe7c4; caret-color: var(--holo); }
-  #jv-input::placeholder { color: #8a7a5e;
-    letter-spacing: .14em; font-weight: 600; }
+  /* Same voice as the messages above it: sentence case, body weight. */
+  #jv-input::placeholder { color: #8a7a5e; letter-spacing: inherit; font-weight: 500; }
 
   /* Layer 1 (Intake) "did you mean?" clarification chips */
   #jv-clarify-root { position: fixed; inset: 0; pointer-events: none; z-index: 60; }
@@ -447,16 +453,17 @@
     border: 1px solid color-mix(in srgb, var(--holo) 32%, transparent);
     box-shadow: 0 32px 80px rgba(0, 0, 0, .6);
     font-family: var(--font-body); }
-  #jv-apps-head { display: flex; align-items: center; gap: 10px;
+  /* Apps and Panels share one head: ‹ (narrow only), title, ×. */
+  #jv-apps-head, #jv-drawer-head { display: flex; align-items: center; gap: 10px;
     padding: 10px 14px 6px; }
-  #jv-apps-title { font: 700 13px/1 var(--font-display); letter-spacing: .22em;
+  #jv-apps-title, #jv-drawer-title { font: 700 13px/1 var(--font-display); letter-spacing: .22em;
     color: #ffd9a0; flex: 1; }
   #jv-apps-count { font-family: var(--font-data); font-size: 11px; letter-spacing: .08em;
     color: #d8b98a; }
-  #jv-apps-close { background: none; border: 1px solid transparent; border-radius: 8px;
-    cursor: pointer; font-size: 18px; line-height: 1; padding: 3px 9px;
+  #jv-apps-close, #jv-drawer-close { background: none; border: 1px solid transparent; border-radius: 8px;
+    cursor: pointer; font: 400 18px/1 var(--font-body); letter-spacing: 0; padding: 3px 9px;
     color: #ffd9a0; transition: background .12s, border-color .12s; }
-  #jv-apps-close:hover { background: color-mix(in srgb, var(--holo) 16%, transparent);
+  #jv-apps-close:hover, #jv-drawer-close:hover { background: color-mix(in srgb, var(--holo) 16%, transparent);
     border-color: var(--hairline); }
   #jv-apps-frame { width: 100%; height: calc(100% - 54px); border: none;
     border-radius: 0 0 14px 14px; background: #0e0e12; }
@@ -465,9 +472,9 @@
   @media (pointer: coarse) {
     #jv-apps-frame { flex: 1 1 auto; height: auto; min-height: 0; }
   }
-  #jv-apps-back { display: none; background: none; border: 1px solid transparent; border-radius: 8px;
+  #jv-apps-back, #jv-drawer-back { display: none; background: none; border: 1px solid transparent; border-radius: 8px;
     cursor: pointer; padding: 3px 7px; color: #ffd9a0; place-items: center; }
-  #jv-apps-back:hover { background: color-mix(in srgb, var(--holo) 16%, transparent); border-color: var(--hairline); }
+  #jv-apps-back:hover, #jv-drawer-back:hover { background: color-mix(in srgb, var(--holo) 16%, transparent); border-color: var(--hairline); }
   /* Phones and the widget: Apps opens as a panel under the top bar instead
      of a window laid over it, so the bar (and the desktop drag handle) stays
      out of the way of ‹ and ×. The bar's bottom edge is measured on open. */
@@ -573,7 +580,7 @@
   /* Touch screens: every control at least 44px, and a 16px input so the
      browser does not zoom in on focus. */
   @media (pointer: coarse) {
-    .jv-btn, .jv-npbtn, .jv-gate-btn, #jv-apps-close { min-height: 44px; min-width: 44px; }
+    .jv-btn, .jv-npbtn, .jv-gate-btn, #jv-apps-close, #jv-drawer-close { min-height: 44px; min-width: 44px; }
     .vf-opt { min-height: 44px; display: flex; align-items: center; justify-content: center; }
     #jv-mic { width: 44px; height: 44px; margin: -6px -10px -6px 0; }
     #jv-input { font-size: 16px; }
@@ -712,9 +719,6 @@
     background: linear-gradient(165deg, #0c1118, #080c12);
     border-left: 1px solid color-mix(in srgb, var(--holo) 32%, transparent);
     box-shadow: -24px 0 60px rgba(0, 0, 0, .55); padding-bottom: env(safe-area-inset-bottom); }
-  #jv-drawer-head { display: flex; align-items: center; justify-content: space-between;
-    padding: 12px 14px 8px; font: 700 13px/1 var(--font-display); letter-spacing: .22em;
-    text-transform: uppercase; color: #ffd9a0; }
   #jv-drawer-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
     display: flex; flex-direction: column; gap: 12px; padding: 4px 12px 16px;
     scrollbar-width: thin;
@@ -742,17 +746,21 @@
     #jv-col-left, #jv-col-right { display: none; }
     #jv-panels { display: inline-flex; align-items: center; justify-content: center; }
   }
+  /* Phones and the widget: Panels opens exactly where and how Apps does,
+     docked under the top bar (see dockUnderBar), not as a dimmed sheet. */
   @media (max-width: 700px) {
-    #jv-drawer.show { align-items: flex-end; }
-    #jv-drawer-card { width: 100%; height: 82vh; height: 82dvh; border-left: 0;
+    #jv-drawer { top: var(--cy-bar-bottom, 74px); background: transparent; backdrop-filter: none; }
+    #jv-drawer.show { align-items: stretch; }
+    #jv-drawer-card { width: 100%; height: 100%; border-left: 0; border-radius: 14px 14px 0 0;
       border-top: 1px solid color-mix(in srgb, var(--holo) 32%, transparent);
-      border-radius: 16px 16px 0 0; box-shadow: 0 -24px 60px rgba(0, 0, 0, .55); }
+      box-shadow: 0 32px 80px rgba(0, 0, 0, .6); }
+    #jv-drawer-back { display: inline-grid; }
   }
 
   /* Phones and the widget: a smaller black hole, higher up, over the space
      the trimmed transcript leaves (step 5 of CYGNUS_UI_PLAN.md). */
   @media (max-width: 700px), (pointer: coarse) and (max-height: 500px) {
-    #cy-stage { top: 38%; width: clamp(150px, 46vw, 210px); }
+    :root { --cy-y: 38%; --cy-w: clamp(150px, 46vw, 210px); }
   }
   /* Phones in landscape: thin topbar, transcript fills the height. */
   @media (pointer: coarse) and (max-height: 500px) {
@@ -761,7 +769,7 @@
     #jv-center { align-self: stretch; margin: 0 0 6px; }
     #jv-center .jv-spacer { display: none; }
     #jv-feed { flex: 1 1 auto; min-height: 0; max-height: none; }
-    #cy-stage, .jv-tx-toggle { display: none; }
+    #cy-stage, .jv-tx-toggle, #jv-rings.speak, #jv-glow.speak::after { display: none; }
   }
 
   /* Desktop app (Electron): one window, three sizes (ELECTRON_PLAN.md,
@@ -769,11 +777,18 @@
      itself out for it. */
   #jv-desk-ctl { display: inline-flex; gap: 2px; }
   #jv-desk-ctl[hidden] { display: none; }
-  /* Only the brand block drags the desktop window. Windows claims a drag
-     region before the page sees the click, whatever lies on top of it, so
-     the whole-bar strip used to swallow the Apps window's close button. */
-  html[data-desk] #jv-brandblock { -webkit-app-region: drag; }
-  html[data-desk] #jv-apps-modal, html[data-desk] #jv-drawer { -webkit-app-region: no-drag; }
+  /* The panel is dragged by its top bar, by hand (bindDrag), not with
+     -webkit-app-region: Windows claims a drag region before the page sees
+     the click, so it swallowed the Apps close button and, in the widget,
+     never moved the window at all. */
+  html[data-desk="sticky"] #jv-topbar { cursor: grab; user-select: none; }
+  html[data-desk="sticky"] #jv-topbar.dragging { cursor: grabbing; }
+  /* The panel window is transparent; the page paints it with round corners
+     and a hairline edge instead of the square box Windows would draw. */
+  html[data-desk="sticky"] { background: transparent; }
+  html[data-desk="sticky"] body { clip-path: inset(0 round 16px); }
+  html[data-desk="sticky"] body::after { content: ''; position: fixed; inset: 0; z-index: 1000;
+    pointer-events: none; border-radius: 16px; border: 1px solid var(--hairline); }
   #jv-mini-orb { display: none; }
   html[data-desk="mini"], html[data-desk="mini"] body { background: transparent !important; }
   html[data-desk="mini"] body > * { display: none !important; }
@@ -918,7 +933,7 @@
         <div id="jv-input-wrap" style="margin-top:10px">
           <span class="jv-wave" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
           <input id="jv-input" type="text" autocomplete="off" spellcheck="false"
-                 placeholder="SPEAK TO CYGNUS - TYPE, THEN PRESS ENTER" />
+                 placeholder="Speak to Cygnus: type, then press Enter" />
           <button id="jv-mic" type="button" aria-label="Talk" title="Talk (Ctrl+Alt+J)">
             <svg class="i-mic" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>
             <svg class="i-stop" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>
@@ -977,8 +992,10 @@
   <div id="jv-drawer" role="dialog" aria-modal="true" aria-label="Panels">
     <div id="jv-drawer-card">
       <div id="jv-drawer-head">
-        <span>Panels</span>
-        <button id="jv-drawer-close" class="jv-btn" type="button" aria-label="Close panels">&times;</button>
+        <button id="jv-drawer-back" class="jv-btn" type="button" aria-label="Back" title="Back"><svg class="jv-ico" viewBox="0 0 24 24"
+                aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button>
+        <span id="jv-drawer-title">PANELS</span>
+        <button id="jv-drawer-close" class="jv-btn" type="button" aria-label="Close panels" title="Close">×</button>
       </div>
       <div id="jv-drawer-tabs" role="tablist" aria-label="Panels">
         <button type="button" role="tab" data-tab="tasks">Tasks<span id="jv-tab-count" hidden></span></button>
@@ -1077,7 +1094,7 @@
   var chatInput = document.getElementById('jv-input');
   var chatWrap = document.getElementById('jv-input-wrap');
   var rootStyle = document.documentElement.style;
-  var PLACEHOLDER = 'SPEAK TO CYGNUS - TYPE, THEN PRESS ENTER';
+  var PLACEHOLDER = 'Speak to Cygnus: type, then press Enter';
   // Phones get tap-to-talk (the mic in the chat bar, #jv-mic) instead of the
   // always-on wake listener.
   var IS_MOBILE = /Android|iPhone|iPad/i.test(navigator.userAgent) ||
@@ -1089,7 +1106,7 @@
   // app's global hotkey opens a capture the way a TALK tap does.
   var IS_DESKTOP = /\bElectron\//.test(navigator.userAgent);
   // The phone and the desktop panel are narrow; the long hint gets cut off.
-  if (IS_MOBILE || IS_DESKTOP) { PLACEHOLDER = 'TYPE TO CYGNUS…'; chatInput.placeholder = PLACEHOLDER; }
+  if (IS_MOBILE || IS_DESKTOP) { PLACEHOLDER = 'Type to Cygnus…'; chatInput.placeholder = PLACEHOLDER; }
 
   // ---------------------------------------------------------------- hud link
   // The HUD artifact re-sets `--spd` on ITS OWN documentElement on every render,
@@ -1143,7 +1160,7 @@
       talkBtn.classList.toggle('busy', st === 'thinking' || st === 'transcribing');
     }
     if (chatWrap) chatWrap.classList.toggle('listening', st === 'listening');
-    if (st === 'listening') chatInput.placeholder = 'LISTENING… SPEAK NOW';
+    if (st === 'listening') chatInput.placeholder = 'Listening… speak now';
     else if (chatInput.placeholder !== '> ') chatInput.placeholder = PLACEHOLDER;
     // The HUD artifact is read-only; it ignores this, but forward anyway so a
     // future HUD build can react without touching hud_artifact.html.
@@ -1494,24 +1511,33 @@
   // ---------------------------------------------------------------- desktop app
   // The shell tells the page which of its three sizes it is in; the page lays
   // itself out for it and asks for a change with the two topbar buttons. The
-  // orb opens the panel on a click and is dragged by hand, not with a drag
-  // region, which would swallow that click (Sticky Brain's pet works the same).
-  function bindOrb(orb) {
+  // orb and the panel's top bar move the window by hand, not with a drag
+  // region, which would swallow clicks (Sticky Brain's pet works the same).
+  // onTap: what a press without a drag does (the orb opens the panel); without
+  // it, presses on the bar's buttons are left to the buttons.
+  function bindDrag(el, onTap) {
     var start = null;
-    orb.addEventListener('pointerdown', function (e) {
+    el.addEventListener('pointerdown', function (e) {
+      if (e.button !== 0) return;
+      if (!onTap && e.target.closest('button, a, input, [role="button"]')) return;
       start = [e.screenX, e.screenY];
-      orb.setPointerCapture(e.pointerId);
+      el.setPointerCapture(e.pointerId);
+      el.classList.add('dragging');
       jarvisDesktop.dragStart();
     });
-    orb.addEventListener('pointermove', function (e) {
+    el.addEventListener('pointermove', function (e) {
       if (start) jarvisDesktop.dragMove(e.screenX - start[0], e.screenY - start[1]);
     });
-    orb.addEventListener('pointerup', function (e) {
-      var moved = start && Math.hypot(e.screenX - start[0], e.screenY - start[1]) > 4;
+    function end(e) {
+      if (!start) return;
+      var moved = Math.hypot(e.screenX - start[0], e.screenY - start[1]) > 4;
       start = null;
+      el.classList.remove('dragging');
       jarvisDesktop.dragEnd();
-      if (!moved) jarvisDesktop.setMode('sticky');
-    });
+      if (!moved && onTap && e.type === 'pointerup') onTap();
+    }
+    el.addEventListener('pointerup', end);
+    el.addEventListener('pointercancel', end);
   }
 
   if (IS_DESKTOP && window.jarvisDesktop) {
@@ -1529,7 +1555,8 @@
       jarvisDesktop.setMode(expanded ? 'sticky' : 'expanded');
     };
     document.getElementById('jv-desk-mini').onclick = function () { jarvisDesktop.setMode('mini'); };
-    bindOrb(miniOrb);
+    bindDrag(miniOrb, function () { jarvisDesktop.setMode('sticky'); });
+    bindDrag(document.getElementById('jv-topbar'));   // the shell ignores it outside the panel
   }
 
   // ---------------------------------------------------------------- panel drawer
@@ -1567,7 +1594,18 @@
   }
   drawerTabs.forEach(function (b) { b.onclick = function () { showTab(b.dataset.tab); }; });
 
-  function openDrawer() { drawerEl.classList.add('show'); panelsBtn.setAttribute('aria-expanded', 'true'); }
+  // Narrow layouts dock Apps and Panels under the top bar (CSS); tell them
+  // where the bar ends.
+  function dockUnderBar() {
+    var bar = document.getElementById('jv-topbar').getBoundingClientRect();
+    document.documentElement.style.setProperty('--cy-bar-bottom', Math.round(bar.bottom + 6) + 'px');
+  }
+  function openDrawer() {
+    closeApps();
+    dockUnderBar();
+    drawerEl.classList.add('show');
+    panelsBtn.setAttribute('aria-expanded', 'true');
+  }
   function closeDrawer() { drawerEl.classList.remove('show'); panelsBtn.setAttribute('aria-expanded', 'false'); }
 
   function placePanels() {
@@ -1583,6 +1621,7 @@
 
   panelsBtn.onclick = openDrawer;
   document.getElementById('jv-drawer-close').onclick = closeDrawer;
+  document.getElementById('jv-drawer-back').onclick = closeDrawer;
   drawerEl.addEventListener('click', function (e) { if (e.target === drawerEl) closeDrawer(); });
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeDrawer(); });
   narrowMq.addEventListener('change', placePanels);
@@ -2107,7 +2146,7 @@
     rootStyle.setProperty('--bright', (1 + 0.25 * rms).toFixed(3));
     rootStyle.setProperty('--sat', (1 + 0.40 * rms).toFixed(3));
     rootStyle.setProperty('--glow', (0.40 + 0.60 * peak).toFixed(3));
-    rootStyle.setProperty('--glow-r', (48 + 40 * rms).toFixed(1) + 'vmin');
+    rootStyle.setProperty('--glow-k', (1.4 + 1.2 * rms).toFixed(3));
     // The HUD's own React frame loop consumes --spd, so this really does speed
     // up the inner blob's bands/chords/dust on loud phonemes.
     setHudSpeed(2.4 + 1.6 * rms);
@@ -2119,7 +2158,7 @@
     rootStyle.setProperty('--bright', '1');
     rootStyle.setProperty('--sat', '1');
     rootStyle.setProperty('--glow', '0');
-    rootStyle.setProperty('--glow-r', '48vmin');
+    rootStyle.setProperty('--glow-k', '1.4');
     lastRMS = 0; peakRMS = 0; wasOverPeak = false;
   }
 
@@ -2821,9 +2860,8 @@
   var appsFrame = document.getElementById('jv-apps-frame');
 
   function openApps() {
-    // Narrow layouts dock Apps under the top bar (CSS); tell it where that ends.
-    var bar = document.getElementById('jv-topbar').getBoundingClientRect();
-    document.documentElement.style.setProperty('--cy-bar-bottom', Math.round(bar.bottom + 6) + 'px');
+    closeDrawer();
+    dockUnderBar();
     appsModal.classList.add('show');
     // iframe auto-loads /apps.html on each open; no local data fetch needed.
     if (appsFrame) { try { appsFrame.contentWindow.location.reload(); } catch (e) {} }
