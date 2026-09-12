@@ -83,7 +83,8 @@ def test_yes_no_questions_ask_the_semantic_router(monkeypatch, pick, question):
 
 
 @pytest.mark.parametrize("text, reply", [
-    ("test", "I'm here, sir. What can I do for you?"), ("jarvis?", "I'm here, sir. What can I do for you?"),
+    ("test", "I'm here, sir. What can I do for you?"), ("jarvis", "I'm here, sir. What can I do for you?"),
+    ("testing.", "I'm here, sir. What can I do for you?"),
     ("ok", "Alright, sir."), ("never mind.", "Alright, sir.")])
 def test_a_bare_check_in_is_answered_without_a_model(text, reply):
     assert b._is_bare_check_in(text) is True
