@@ -437,7 +437,21 @@
     .tabs { gap: 16px; overflow-x: auto; scrollbar-width: none; }
     .tabs::-webkit-scrollbar { display: none; }
     .tab { flex: 0 0 auto; white-space: nowrap; }
+    /* The four header actions fold into ⋯ (Stop deep scan stays out, so a
+       running scan can always be stopped). */
+    .head-acts .btn:not(#h-deep-cancel) { display: none; }
+    .top-row .head-more { display: block; }   /* beats the base .head-more rule below */
   }
+  .head-more { position: relative; display: none; }
+  #h-more { font-size: 18px; line-height: 1; letter-spacing: 1px; }
+  .head-menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 30; width: 230px; padding: 6px;
+    display: grid; background: var(--surface-2, #16161c); border: 1px solid var(--border-strong, rgba(255, 255, 255, .17));
+    border-radius: 12px; box-shadow: 0 18px 40px rgba(0, 0, 0, .55); }
+  .head-menu[hidden] { display: none; }
+  .head-menu button { text-align: left; font: inherit; font-size: 13.5px; color: var(--text); background: transparent;
+    border: 0; border-radius: 8px; padding: 9px 10px; cursor: pointer; }
+  .head-menu button:hover, .head-menu button:focus-visible { background: var(--hover, rgba(255, 255, 255, .06)); outline: none; }
+  .head-menu hr { border: 0; border-top: 1px solid var(--border, rgba(255, 255, 255, .1)); margin: 4px 2px; }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
   }
@@ -463,6 +477,17 @@
           <button class="btn btn-sm btn-primary" id="h-gen" title="Give every registered app its predefined abilities">Create predefined rules for all</button>
           <button class="btn btn-sm" id="h-deep" title="Open, read and close every registered app not scanned yet, one at a time">Deep scan all</button>
           <button class="btn btn-sm btn-danger" id="h-deep-cancel" hidden>Stop deep scan</button>
+        </div>
+        <div class="head-more">
+          <button class="icon-btn" id="h-more" aria-haspopup="menu" aria-expanded="false"
+                  aria-label="More actions" title="More actions">⋯</button>
+          <div class="head-menu" id="h-menu" role="menu" hidden>
+            <button type="button" role="menuitem" data-for="h-add">Add app</button>
+            <button type="button" role="menuitem" data-for="h-scan">Full scan</button>
+            <button type="button" role="menuitem" data-for="h-deep">Deep scan all</button>
+            <hr>
+            <button type="button" role="menuitem" data-for="h-gen">Create predefined rules for all</button>
+          </div>
         </div>
         <button class="icon-btn" id="refresh" title="Refresh" aria-label="Refresh"></button>
       </div>
@@ -1658,6 +1683,19 @@ function init() {
   $("#h-gen").addEventListener("click", e => generateAll(e.currentTarget));
   $("#h-deep").addEventListener("click", e => deepScanAll(e.currentTarget));
   $("#h-deep-cancel").addEventListener("click", e => cancelDeepScan(e.currentTarget));
+  // Narrow screens fold the four header actions into ⋯. Each item presses the
+  // real button, so its handler, busy state and disabled state stay the same.
+  const moreBtn = $("#h-more"), moreMenu = $("#h-menu");
+  const setMoreMenu = open => { moreMenu.hidden = !open; moreBtn.setAttribute("aria-expanded", String(open)); };
+  moreBtn.addEventListener("click", e => { e.stopPropagation(); setMoreMenu(moreMenu.hidden); });
+  moreMenu.addEventListener("click", e => {
+    const item = e.target.closest("[data-for]");
+    if (!item) return;
+    setMoreMenu(false);
+    document.getElementById(item.dataset.for).click();
+  });
+  document.addEventListener("click", e => { if (!moreMenu.hidden && !e.target.closest(".head-more")) setMoreMenu(false); });
+  document.addEventListener("keydown", e => { if (e.key === "Escape") setMoreMenu(false); });
   $("#list").addEventListener("click", e => {
     const v = e.target.closest("[data-verdict]");
     if (v) return labelShadow(v.dataset.sid, v.dataset.verdict, v);

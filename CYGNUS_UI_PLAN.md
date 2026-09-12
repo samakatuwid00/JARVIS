@@ -1,6 +1,8 @@
 # CYGNUS_UI_PLAN.md — the Cygnus look for the HUD, widget, phone and tray
 
-Status: approved 2026-09-12, in progress. Design:
+Status: all eight steps done 2026-09-12 (commits below). Still open: the
+wake word (owner to decide), and checks on the real phone and in the real
+desktop window by hand. Design:
 https://claude.ai/code/artifact/d25f561a-e279-4ef6-ae2f-8e38049b29a8 (version 2).
 
 ## Decisions (owner, 2026-09-12)
@@ -37,6 +39,24 @@ https://claude.ai/code/artifact/d25f561a-e279-4ef6-ae2f-8e38049b29a8 (version 2)
 7. **Apps inside the widget.** Opens under the top bar with back and close;
    in `apps_panel.html` the four action buttons fold into a ⋯ menu when narrow.
 8. **Widget height 560** in `desktop/main.js`.
+
+## Done
+
+| Step | Commit | Checked with |
+|---|---|---|
+| 1 Name and mark assets | `bf7fd0e` | title, wordmark, manifest; desktop app attaches by `id="jv-shell"`, not the title |
+| 2 Black hole replaces the old orb | `9c3d6a6` | no `/hud.html` request; centred at 1400x900; mini orb renders alone |
+| 3 Mic in the chat bar | `cc417a4` | tap, stop, Send (a typed turn got its reply), hotkey; widget, phone, 1400 |
+| 4 Top bar in two groups | `716291d` | drag region only on the brand block; Apps opens and closes in the widget |
+| 5 Trimmed transcript | `1230e7d` | 2 lines trimmed, all 8 expanded; black hole clear of the card |
+| 6 Panels as tabs | `94ecb98` | each tab shows its sections; sections back in columns at 1400 |
+| 7 Apps inside the widget | (this commit) | docked under the top bar; ‹, ×, Escape close; ⋯ menu presses the real buttons |
+| 8 Widget 560 px | `846499c` | real window 383x560 |
+
+Two cascade bugs of the same kind were caught on the way (step 5 spacer,
+step 7 ⋯ button): a narrow-screen rule placed before the base rule it
+overrides loses the tie on source order; both now use a more specific
+selector.
 
 ## Not changing
 

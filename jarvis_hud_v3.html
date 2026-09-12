@@ -465,12 +465,19 @@
   @media (pointer: coarse) {
     #jv-apps-frame { flex: 1 1 auto; height: auto; min-height: 0; }
   }
-  /* Phones: the Apps window is the whole screen. */
+  #jv-apps-back { display: none; background: none; border: 1px solid transparent; border-radius: 8px;
+    cursor: pointer; padding: 3px 7px; color: #ffd9a0; place-items: center; }
+  #jv-apps-back:hover { background: color-mix(in srgb, var(--holo) 16%, transparent); border-color: var(--hairline); }
+  /* Phones and the widget: Apps opens as a panel under the top bar instead
+     of a window laid over it, so the bar (and the desktop drag handle) stays
+     out of the way of ‹ and ×. The bar's bottom edge is measured on open. */
   @media (max-width: 700px) {
+    #jv-apps-modal { top: var(--cy-bar-bottom, 74px); background: transparent; backdrop-filter: none; }
     #jv-apps-modal.show { align-items: stretch; }
-    #jv-apps-card { width: 100%; height: 100vh; height: 100dvh; border: 0; border-radius: 0;
+    #jv-apps-card { width: 100%; height: 100%; border-radius: 14px 14px 0 0; border-width: 1px 0 0;
       padding-bottom: env(safe-area-inset-bottom); }
     #jv-apps-frame { border-radius: 0; }
+    #jv-apps-back { display: inline-grid; }
   }
 
 
@@ -987,9 +994,11 @@
   <div id="jv-apps-modal">
     <div id="jv-apps-card">
       <div id="jv-apps-head">
+        <button id="jv-apps-back" class="jv-btn" type="button" aria-label="Back" title="Back"><svg class="jv-ico" viewBox="0 0 24 24"
+                aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button>
         <span id="jv-apps-title">CYGNUS APPS</span>
         <span id="jv-apps-count"></span>
-        <button id="jv-apps-close" class="jv-btn">×</button>
+        <button id="jv-apps-close" class="jv-btn" type="button" aria-label="Close Apps" title="Close">×</button>
       </div>
       <iframe id="jv-apps-frame" src="/apps.html" allowtransparency="false"></iframe>
     </div>
@@ -2816,15 +2825,22 @@
   var appsFrame = document.getElementById('jv-apps-frame');
 
   function openApps() {
+    // Narrow layouts dock Apps under the top bar (CSS); tell it where that ends.
+    var bar = document.getElementById('jv-topbar').getBoundingClientRect();
+    document.documentElement.style.setProperty('--cy-bar-bottom', Math.round(bar.bottom + 6) + 'px');
     appsModal.classList.add('show');
     // iframe auto-loads /apps.html on each open; no local data fetch needed.
     if (appsFrame) { try { appsFrame.contentWindow.location.reload(); } catch (e) {} }
   }
 
+  function closeApps() { appsModal.classList.remove('show'); }
+
   document.getElementById('jv-apps').onclick = openApps;
-  document.getElementById('jv-apps-close').onclick = function () {
-    appsModal.classList.remove('show');
-  };
+  document.getElementById('jv-apps-close').onclick = closeApps;
+  document.getElementById('jv-apps-back').onclick = closeApps;
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && appsModal.classList.contains('show')) closeApps();
+  });
   appsModal.onclick = function (e) {
     if (e.target === appsModal) appsModal.classList.remove('show');
   };
