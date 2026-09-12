@@ -619,6 +619,26 @@ def _asks_about_own_work(text):
     return bool((_WH_QUESTION_RE.match(t) or _DID_YOU_LEAD_RE.match(t)) and _OWN_WORK_RE.search(t))
 
 
+_ACKNOWLEDGE_RE = re.compile(r"(?:ok(?:ay)?|yes|yeah|yep|sure|no|nope|nothing|never\s*mind|hmm+)"
+                             r"[\s.!?,]*", re.I)
+
+
+def _is_bare_check_in(text):
+    """A lone "test", "ok", "jarvis?" - tools' own not-a-task words."""
+    try:
+        import tools
+        return tools._is_not_a_task(text)
+    except Exception:
+        return False
+
+
+def _check_in_reply(text):
+    """"ok" is acknowledged; "test" or "jarvis?" is someone checking in."""
+    if _ACKNOWLEDGE_RE.fullmatch((text or "").strip()):
+        return "Alright, sir."
+    return "I'm here, sir. What can I do for you?"
+
+
 # "can you / do you / is there ..." ending in a question mark.
 _YES_NO_RE = re.compile(r"^\s*(?:(?:jarvis|cygnus|so|and|hey)[,\s]+)*"
                         r"(?:can|could|would|will|do|does|did|is|are|have|has)\s+"
@@ -1843,6 +1863,16 @@ class JarvisBrain:
             self.last_backend = "instant"
             self.last_stats = {"backend": "instant", "intent": intent}
             return ans
+
+        # "test", "ok", "jarvis?" on their own: someone checking Cygnus is
+        # listening, not a task. They used to cost a full model turn (48 s
+        # with the online model down) before delegate() turned them away.
+        if intent == "general" and _is_bare_check_in(user_input):
+            reply = _check_in_reply(user_input)
+            self.conversation.append({"role": "assistant", "content": reply})
+            self.last_backend = "instant"
+            self.last_stats = {"backend": "instant", "intent": "check_in"}
+            return reply
 
         # Where the keywords found nothing specific, a confident semantic pick
         # for a route it earned leads (semantic_route.lead; JARVIS_SEMANTIC).

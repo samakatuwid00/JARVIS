@@ -82,6 +82,19 @@ def test_yes_no_questions_ask_the_semantic_router(monkeypatch, pick, question):
     assert b._is_question_not_request("can you visit websites?") is question
 
 
+@pytest.mark.parametrize("text, reply", [
+    ("test", "I'm here, sir. What can I do for you?"), ("jarvis?", "I'm here, sir. What can I do for you?"),
+    ("ok", "Alright, sir."), ("never mind.", "Alright, sir.")])
+def test_a_bare_check_in_is_answered_without_a_model(text, reply):
+    assert b._is_bare_check_in(text) is True
+    assert b._check_in_reply(text) == reply
+
+
+def test_a_real_request_is_not_a_check_in():
+    assert b._is_bare_check_in("test the login page") is False
+    assert b._is_bare_check_in("open notepad") is False
+
+
 def test_commands_are_not_questions():
     assert b._is_question_not_request("open notepad") is False
     assert b._is_question_not_request("create a website with opencode") is False
