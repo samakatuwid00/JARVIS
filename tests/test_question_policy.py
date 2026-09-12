@@ -43,7 +43,16 @@ def test_a_held_tool_never_reaches_tools(monkeypatch):
     assert out.startswith("[Held]") and ran == []
 
 
-def _fake_hermes(monkeypatch, changes):
+def _fake_hermes(monkeypatch, changes, tmp_path):
+    import jobs
+    # The job registry and audit trail are the real ones otherwise: every run
+    # of these tests put a "read jarvis_hud_v3.html…" job in the owner's
+    # Active Tasks.
+    monkeypatch.setattr(jobs, "_LOG_PATH", tmp_path / "jobs.jsonl")
+    monkeypatch.setattr(jobs, "_jobs", {})
+    monkeypatch.setattr(jobs, "_loaded", True)
+    monkeypatch.setattr(jobs, "_listeners", [])
+    monkeypatch.setattr(tools, "_audit_log", lambda *a, **k: None)
     sent = []
     snapshots = iter(changes)
     monkeypatch.setattr(tools, "_is_safe_task", lambda t: True)
@@ -52,15 +61,15 @@ def _fake_hermes(monkeypatch, changes):
     return sent
 
 
-def test_a_look_only_job_is_told_so(monkeypatch):
-    sent = _fake_hermes(monkeypatch, [{}, {}])
+def test_a_look_only_job_is_told_so(monkeypatch, tmp_path):
+    sent = _fake_hermes(monkeypatch, [{}, {}], tmp_path)
     out = tools.delegate_to_hermes("read jarvis_hud_v3.html and find the chat CSS")
     assert sent[0].startswith("LOOK-ONLY TASK")
     assert out == "Here is what I found."
 
 
-def test_a_look_only_job_that_changed_a_file_says_so(monkeypatch):
-    _fake_hermes(monkeypatch, [{"tools.py": 1.0}, {"tools.py": 1.0, "jarvis_hud_v3.html": 2.0}])
+def test_a_look_only_job_that_changed_a_file_says_so(monkeypatch, tmp_path):
+    _fake_hermes(monkeypatch, [{"tools.py": 1.0}, {"tools.py": 1.0, "jarvis_hud_v3.html": 2.0}], tmp_path)
     out = tools.delegate_to_hermes("read jarvis_hud_v3.html and find the chat CSS")
     assert "changed while this look-only job ran: jarvis_hud_v3.html" in out
     assert "tools.py" not in out.split("ran:")[1]
