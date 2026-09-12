@@ -34,9 +34,12 @@ AGREE = 0.8             # word-level similarity that counts as the same sentence
 CONFIDENT = -0.45       # Whisper mean segment log-prob above this = sure of itself
 VERY_LOW = -0.95        # at or below this Whisper is guessing (the 2026-09-11 garbage scored -0.97/-0.99)
 MIN_HINT_SHARE = 0.6    # live text needs 60% of Whisper's word count (not a fragment)
-_WAKE = {"jarvis", "jarviss", "jarvus", "jervis", "javis"}
+# The wake word is Cygnus (as Whisper spells it, see wake_engine.WAKE_RE);
+# the old "jarvis" forms stay so a habit is still recognised as a wake word.
+_WAKE = {"cygnus", "signus", "signis", "signess", "signes", "signez", "signezz", "signeze",
+         "signas", "sygnus", "cignus", "jarvis", "jarviss", "jarvus", "jervis", "javis"}
 _COMMAND_RE = re.compile(
-    r"^(?:(?:jarvis|hey|ok(?:ay)?|please)\s+)*(?:open|close|play|pause|stop|search|find|"
+    r"^(?:(?:[cs][iy]gn[aeiu][sz]{1,2}e?|jarvis|hey|ok(?:ay)?|please)\s+)*(?:open|close|play|pause|stop|search|find|"
     r"go|visit|launch|start|turn|set|show|next|skip|mute|volume|remember|what|who|how|"
     r"can|could|tell|read|write|create|make|send)\b", re.I)
 

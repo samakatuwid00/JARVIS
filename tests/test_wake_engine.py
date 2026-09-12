@@ -139,7 +139,7 @@ def test_release_does_not_cut_the_post_speech_suspend_short():
 
 
 def test_wake_word_fires_the_callback_once_per_cooldown():
-    voice = _Voice("jarvis")
+    voice = _Voice("cygnus")
     engine = WakeEngine(voice)
     fired = []
     engine.set_callback(lambda: fired.append(1))

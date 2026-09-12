@@ -102,6 +102,7 @@ _FILLERS = {
     "me", "for", "my", "to", "of", "on", "in", "is", "are", "do", "did",
     "does", "i", "want", "need", "just", "like", "uh", "um", "so", "then",
     "okay", "ok", "hey", "hi", "hello", "jarvis", "javis", "jarvus",
+    "cygnus", "signus", "signis", "signess", "signes",
     "makita", "kita", "naman", "lang", "nga", "po", "pero", "yung", "yong",
     "yung", "itong", "eto", "nito", "din", "rin", "na", "pa", "ba",
 }

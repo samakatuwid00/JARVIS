@@ -93,8 +93,8 @@ class VoiceEngine:
             print(f"[YOU] {text}")
 
         # Check for wake word (fuzzy match)
-        wake_words = ["jarvis", "hey jarvis", "ok jarvis", "hello jarvis"]
-        return any(w in text for w in wake_words)
+        from wake_engine import wake_word_in
+        return wake_word_in(text)
 
     def listen_for_command(self, timeout=8.0):
         """Record and transcribe a voice command."""

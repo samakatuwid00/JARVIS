@@ -967,7 +967,7 @@ _RULE_URL_RE = re.compile(
     r"https?://[^\s'\"<>]+|(?:www\.)?[\w-]+(?:\.[\w-]+)*\.[a-z]{2,24}"
     r"(?:/[^\s'\"<>]*)?", re.I)
 _RULE_VERB_RE = re.compile(
-    r"^(?:please\s+|jarvis\s+)*(?:visit|go\s+to|take\s+me\s+to|open|launch)\s+"
+    r"^(?:please\s+|(?:jarvis|cygnus)\s+)*(?:visit|go\s+to|take\s+me\s+to|open|launch)\s+"
     r"(?:the\s+|my\s+)?", re.I)
 
 
@@ -1252,7 +1252,7 @@ def strip_correction_prefix(text: str) -> str:
 
 # Conversational lead-ins: "Now search me X", "okay, jarvis, visit Y".
 _FILLER_START = re.compile(
-    r"^(?:now|so|ok(?:ay)?|well|please|jarvis|sir)\b[,.!:]?\s*", re.I)
+    r"^(?:now|so|ok(?:ay)?|well|please|jarvis|cygnus|sir)\b[,.!:]?\s*", re.I)
 
 
 def strip_fillers(text: str) -> str:
@@ -1512,7 +1512,7 @@ _NEW_COMMAND_RE = re.compile(
     r"rescan|volume|turn|set|delete|remove|create|make|send|write|download|install|"
     r"email|message)\b", re.I)
 _SLOT_LEAD_RE = re.compile(r"^(?:it'?s|it\s+is|the\s+one\s+called|called|named)\s+", re.I)
-_TRAILING_VOCATIVE_RE = re.compile(r"[,\s]+(?:jarvis|sir)[.!?,\s]*$", re.I)
+_TRAILING_VOCATIVE_RE = re.compile(r"[,\s]+(?:jarvis|cygnus|sir)[.!?,\s]*$", re.I)
 
 
 def run_rule_action(rule: dict, owner: str, action: dict, slot: str = "",
@@ -1590,10 +1590,10 @@ def _learn_preference(action: dict, site: str, browser: str | None) -> str:
 # longer ("yes, search movie Godzilla") is a new command and is routed as one.
 _PREF_YES_RE = re.compile(
     r"^(?:yes|yeah|yep|yup|sure|ok(?:ay)?|do it|go ahead|please do|make it (?:the )?default)"
-    r"[\s.,!]*(?:please|sir|jarvis)?[\s.!]*$", re.I)
+    r"[\s.,!]*(?:please|sir|jarvis|cygnus)?[\s.!]*$", re.I)
 _PREF_NO_RE = re.compile(
     r"^(?:no|nope|nah|no thanks|don'?t|never ?mind|not now|skip it|leave it)"
-    r"[\s.,!]*(?:thanks|sir|jarvis)?[\s.!]*$", re.I)
+    r"[\s.,!]*(?:thanks|sir|jarvis|cygnus)?[\s.!]*$", re.I)
 
 
 _LEAD_ACK_RE = re.compile(r"^(?:yes|yeah|yep|ok(?:ay)?|sure)[,.!]?\s+(?=\S)", re.I)
@@ -1686,7 +1686,7 @@ def resolve_open_target(text: str, force: str | None = None,
     """
     t = text.strip().lower().rstrip(".!?")
     # strip filler words
-    for w in ("please", "jarvis", "the ", "my ", "up ", "now "):
+    for w in ("please", "jarvis", "cygnus", "the ", "my ", "up ", "now "):
         if t.startswith(w):
             t = t[len(w):]
     for suffix, forced in ((" app", "app"), (" application", "app"),
@@ -1840,7 +1840,7 @@ _MUTATING_RE = re.compile(
 # Politeness and request framing before the real instruction: "please",
 # "can you", "I need you to", "go ahead and".
 _REQUEST_LEAD_RE = re.compile(
-    r"^(?:(?:please|jarvis|sir|hey|ok(?:ay)?|now|so|just|go\s+ahead\s+and|"
+    r"^(?:(?:please|jarvis|cygnus|sir|hey|ok(?:ay)?|now|so|just|go\s+ahead\s+and|"
     r"(?:can|could|would|will)\s+you|i\s+(?:want|need)\s+you\s+to)\b[,\s]*)+", re.I)
 # How chat starts: a pronoun, question word, auxiliary, greeting or a reply.
 # A task starting with anything else reads as an instruction ("empty my
@@ -2463,7 +2463,7 @@ def delegate_to_hermes_grounded(task: str, timeout: int = 300, max_turns: int = 
         recent = recent_summary(6)
         appctx = _app_context(task)
         prefix = (
-            "CONTEXT (JARVIS persistent memory):\n"
+            "CONTEXT (Cygnus persistent memory):\n"
             f"[PROFILE]\n{profile}\n\n"
             f"[RECENT SESSION]\n{recent}\n\n"
             + f"[KNOWLEDGE BASE] {_VAULT_HINT}\n"
@@ -3346,7 +3346,7 @@ def _dispatch_opencli(task: str, confirm: bool) -> str:
 
 
 _DESKTOP_VERB_RE = re.compile(
-    r"^(?:(?:please|jarvis|hey|ok(?:ay)?|now|so|just|i\s+mean|"
+    r"^(?:(?:please|jarvis|cygnus|hey|ok(?:ay)?|now|so|just|i\s+mean|"
     r"(?:can|could|would|will)\s+you)[,\s]+)*(open|launch|start|run|close|quit|exit)\s+(.+)$",
     re.I)
 
@@ -3492,13 +3492,13 @@ def delegate(
     # act on. Ask instead — a bare open-site request never leaves JARVIS.
     # "I mean visit X" is matched as "visit X"; cw logs keep the spoken text.
     _otask = strip_fillers(strip_correction_prefix(_rtask))
-    _open_m = re.match(r"^\W*(?:(?:please|jarvis|hey)\b\W*)*"
+    _open_m = re.match(r"^\W*(?:(?:please|jarvis|cygnus|hey)\b\W*)*"
                        r"(open|launch|go\s+to|goto|visit|browse|take\s+me\s+to)\b(.*)$",
                        _otask, flags=re.I | re.S)
     if _open_m:
         _rest = re.sub(r"\bfor\s+me\b", " ", _open_m.group(2).lower())
         _words = re.findall(r"[a-z0-9]+(?:[.'][a-z0-9]+)*", _rest)
-        if all(w in ("please", "jarvis", "sir", "the", "a", "an", "to", "my",
+        if all(w in ("please", "jarvis", "cygnus", "sir", "the", "a", "an", "to", "my",
                      "me", "up", "now") for w in _words):
             return "Which site or app should I open?"
 
@@ -3648,7 +3648,7 @@ def write_to_notepad(content: str, filename: str = "") -> str:
                 p = p.with_suffix(".txt")
         else:
             stamp = datetime.datetime.now().strftime("%Y-%m-%d %H%M")
-            p = DEFAULT_WRITE_DIR / f"JARVIS Note {stamp}.txt"
+            p = DEFAULT_WRITE_DIR / f"Cygnus Note {stamp}.txt"
 
         p.parent.mkdir(parents=True, exist_ok=True)
         # Notepad on older Windows builds only renders CRLF correctly.
@@ -4157,22 +4157,22 @@ def install_app(app: str, enable: bool = True) -> str:
     if not ok:
         return f'[Error] Found "{key}" in the registry but could not register it.'
     state = "enabled" if enable else "disabled"
-    return f'Installed "{key}" into JARVIS — registered and {state}.'
+    return f'Installed "{key}" into Cygnus — registered and {state}.'
 
 
 def uninstall_app(app: str) -> str:
-    """Remove an app from JARVIS's voice registry (opt it out). The program
+    """Remove an app from Cygnus's voice registry (opt it out). The program
     stays installed on Windows; JARVIS just stops routing voice commands to it."""
     from curate import is_registered, mark_registered
     key = _find_app_by_name(app)
     if not key:
         return f'I could not find "{app}" in the registry. It may not be installed on this machine.'
     if not is_registered(key):
-        return f'"{key}" is already not installed in JARVIS — it is not in your active app set.'
+        return f'"{key}" is already not installed in Cygnus — it is not in your active app set.'
     ok = mark_registered(key, registered=False)
     if not ok:
         return f'[Error] Found "{key}" but could not remove it.'
-    return f'Removed "{key}" from JARVIS. Say "rescan my apps" to bring it back as a candidate.'
+    return f'Removed "{key}" from Cygnus. Say "rescan my apps" to bring it back as a candidate.'
 
 
 def list_installed_apps() -> str:
@@ -4180,8 +4180,8 @@ def list_installed_apps() -> str:
     from curate import registered_apps
     apps = registered_apps()
     if not apps:
-        return "Your JARVIS app catalog is empty, sir. Say \"install <app name>\" to add one."
-    lines = [f"You have {len(apps)} app(s) installed in JARVIS:"]
+        return "Your Cygnus app catalog is empty, sir. Say \"install <app name>\" to add one."
+    lines = [f"You have {len(apps)} app(s) installed in Cygnus:"]
     for a in sorted(apps):
         lines.append(f"  * {a}")
     return "\n".join(lines)
@@ -4203,8 +4203,8 @@ def close_application(app: str, force: bool = False) -> str:
     if requested.lower() in {"it", "this", "that", "app", "application",
                              "the", "a", "my", ""}:
         return "[Error] Which app should I close? Name it, e.g. 'close Spotify'."
-    if requested.lower() in {"yourself", "you", "jarvis", "yourself jarvis"}:
-        return ("I can't close myself, sir. Close the JARVIS tab, or say "
+    if requested.lower() in {"yourself", "you", "jarvis", "yourself jarvis", "cygnus", "yourself cygnus"}:
+        return ("I can't close myself, sir. Close the Cygnus window, or say "
                 "\"go to sleep\" to end the session.")
 
     # Resolve through the same chain as open_application.
@@ -4619,7 +4619,7 @@ TOOLS = [
         "name": "open_site",
         "description": ("Open a website by name from the user's site registry "
                         "(web_registry.json — manual entries + their most-visited "
-                        "domains) in a new tab of the JARVIS browser. Also accepts "
+                        "domains) in a new tab of the Cygnus browser. Also accepts "
                         "a raw URL. Use for 'open facebook', 'open my email', etc."),
         "input_schema": {
             "type": "object",
@@ -4635,7 +4635,7 @@ TOOLS = [
         "name": "rescan_sites",
         "description": ("Rescan the default browser's history and update the user's "
                         "site registry (most-visited domains). Use when the user says "
-                        "'rescan my sites' or asks JARVIS to learn their sites."),
+                        "'rescan my sites' or asks Cygnus to learn their sites."),
         "input_schema": {"type": "object", "properties": {}}
     },
     {
@@ -4665,7 +4665,7 @@ TOOLS = [
     },
     {
         "name": "search_sessions",
-        "description": ("Search past JARVIS voice conversations by keyword "
+        "description": ("Search past Cygnus voice conversations by keyword "
                         "(full-text over all session transcripts). Use when the "
                         "user asks what they said before, to recall an earlier "
                         "request, or references something from a previous day."),
@@ -4684,7 +4684,7 @@ TOOLS = [
                         "background (Hermes plans, executes, verifies each step, "
                         "reports evidence). Use for goals needing several actions: "
                         "'organize my downloads folder', 'build a landing page', "
-                        "'research X and write it up'. Returns immediately; JARVIS "
+                        "'research X and write it up'. Returns immediately; Cygnus "
                         "speaks progress and the final result. NOT for single quick "
                         "actions — use delegate/open_application for those."),
         "input_schema": {
@@ -4908,7 +4908,7 @@ TOOLS = [
                 "task": {"type": "string", "description": "The self-contained task to perform"},
                 "backend": {"type": "string", "description": "Force backend: hermes, music, desktop, web, chatgpt, manus (or null for auto-detect)"},
                 "confirm": {"type": "boolean", "description": "Set true ONLY to run a previously-confirmed destructive task"},
-                "grounded": {"type": "boolean", "description": "Inject JARVIS memory context (default true). Set false for raw Hermes."},
+                "grounded": {"type": "boolean", "description": "Inject Cygnus memory context (default true). Set false for raw Hermes."},
                 "timeout": {"type": "integer", "description": "Max seconds (15-600, default 300)"},
                 "max_turns": {"type": "integer", "description": "Max agent iterations (1-30, default 15)"}
             },
@@ -4918,11 +4918,11 @@ TOOLS = [
     {
         "name": "install_app",
         "description": (
-            "Install an app into JARVIS's voice registry - makes it a registered, "
+            "Install an app into Cygnus's voice registry - makes it a registered, "
             "enabled voice-controlled app. The Windows program itself is NOT modified; "
-            "this adds the app to JARVIS's curated launch set so voice commands "
+            "this adds the app to Cygnus's curated launch set so voice commands "
             "like 'open spotify' resolve to it reliably. Use when the user says "
-            "'add X to my apps', 'install X in JARVIS', or 'make X available to JARVIS'."
+            "'add X to my apps', 'install X in Cygnus', or 'make X available to Cygnus'."
         ),
         "input_schema": {
             "type": "object",
@@ -4936,15 +4936,15 @@ TOOLS = [
     {
         "name": "uninstall_app",
         "description": (
-            "Remove an app from JARVIS's voice registry (opt it out). The Windows "
-            "program stays installed; JARVIS just stops routing voice commands to it. "
-            "Use when the user says 'remove X from JARVIS', 'uninstall X from my apps', "
+            "Remove an app from Cygnus's voice registry (opt it out). The Windows "
+            "program stays installed; Cygnus just stops routing voice commands to it. "
+            "Use when the user says 'remove X from Cygnus', 'uninstall X from my apps', "
             "or 'stop controlling X'. The app can be re-added later via 'rescan my apps'."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "app": {"type": "string", "description": "App name to remove from JARVIS (e.g. 'snipping tool')"}
+                "app": {"type": "string", "description": "App name to remove from Cygnus (e.g. 'snipping tool')"}
             },
             "required": ["app"]
         }
@@ -4952,9 +4952,9 @@ TOOLS = [
     {
         "name": "list_installed_apps",
         "description": (
-            "List all apps currently installed in JARVIS's voice registry - the apps "
+            "List all apps currently installed in Cygnus's voice registry - the apps "
             "you can control by voice. Use when the user asks 'what apps do I have?', "
-            "'list my installed apps', or 'what can I open with JARVIS'."
+            "'list my installed apps', or 'what can I open with Cygnus'."
         ),
         "input_schema": {
             "type": "object",

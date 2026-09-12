@@ -55,11 +55,11 @@ _KIND_HINTS = {"browser": r"\b(movie|film|site|website|web|search|google|youtube
                "office": r"\b(document|spreadsheet|slides|word|excel|powerpoint)s?\b"}
 
 _PROMPT = """You are the command router of JARVIS, a voice assistant that controls this PC.
-Decide what JARVIS should do for the user's command. Do not do it; only decide.
+Decide what Cygnus should do for the user's command. Do not do it; only decide.
 
 COMMAND: "{text}"
 CONVERSATION NOW: {state}
-APPS JARVIS MAY USE (abilities and the user's own rules):
+APPS CYGNUS MAY USE (abilities and the user's own rules):
 {catalog}
 
 Return ONLY one JSON object:

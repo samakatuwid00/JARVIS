@@ -162,14 +162,14 @@ WAKE_WHISPER_CPU_THREADS = int(os.getenv("WAKE_WHISPER_CPU_THREADS", "2"))
 # Vocabulary bias so the wake word and domain terms decode cleanly.
 WHISPER_INITIAL_PROMPT = os.getenv(
     "WHISPER_INITIAL_PROMPT",
-    "JARVIS, Jarvis, Stark, DepEd, Department of Education, iRIMS-V, iRIMS, "
+    "Cygnus, Stark, DepEd, Department of Education, iRIMS-V, iRIMS, "
     "LRMIS, IRIMS, Haristay, Two Goals, Manila, Philippines, Philippine, "
     "dashboard, report, project, vault, compose, play music, YouTube Music, "
     "Brave, browser, movie, movies, analysis, system, online, open, search, weather."
 )
 
 # Wake Word
-WAKE_WORD = os.getenv("WAKE_WORD", "jarvis")
+WAKE_WORD = os.getenv("WAKE_WORD", "cygnus")
 WAKE_WORD_TIMEOUT = int(os.getenv("WAKE_WORD_TIMEOUT", "10"))
 PORCUPINE_ACCESS_KEY = os.getenv("PORCUPINE_ACCESS_KEY", "")
 

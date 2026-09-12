@@ -106,7 +106,7 @@ def _fmt_num(x):
 # "add <url> as <name>"); a URL token is required, so "add milk to the list" is
 # untouched.
 _ADD_SITE_URL = r"(?:https?://\S+|(?:[\w-]+\.)+[a-z]{2,}(?:/\S*)?)"
-_ADD_SITE_HEAD = (r"^(?:please\s+|jarvis[,!]?\s+)*(?:add|register|bookmark)\s+"
+_ADD_SITE_HEAD = (r"^(?:please\s+|(?:jarvis|cygnus)[,!]?\s+)*(?:add|register|bookmark)\s+"
                   r"(?:(?:a|the)\s+)?(?:new\s+)?(?:site|website|url|link)?\s*")
 _ADD_SITE_RE = re.compile(
     _ADD_SITE_HEAD +
@@ -157,7 +157,7 @@ def _run_bounded(fn, budget, label):
 SPOTIFY_ROUTE_BUDGET = float(os.getenv("JARVIS_SPOTIFY_ROUTE_TIMEOUT", "50"))
 
 _MUSIC_VERB_RE = re.compile(
-    r"^(?:please\s+|jarvis[,!]?\s+)*(?:can you\s+|could you\s+|i want you to\s+)?"
+    r"^(?:please\s+|(?:jarvis|cygnus)[,!]?\s+)*(?:can you\s+|could you\s+|i want you to\s+)?"
     r"(?:play|put on|queue|listen to|start)\s+", re.I)
 _MUSIC_TAIL_RE = re.compile(
     r"\s*\b(?:on|in|from|with|using|through)\s+(?:the\s+)?"
@@ -204,7 +204,7 @@ def default_report_path(topic: str) -> str:
     tools._resolve_write_path — never to the JARVIS source directory.
     """
     safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", topic or "").strip() or "Report"
-    return f"JARVIS Report - {safe[:60]} {datetime.date.today().isoformat()}.docx"
+    return f"Cygnus Report - {safe[:60]} {datetime.date.today().isoformat()}.docx"
 
 
 # open_site: "visit youtube.com" / "go to reddit" / "open github on chrome".
@@ -221,7 +221,7 @@ _APP_WORDS = (r"ffmpeg|blender|vlc|photoshop|premiere|obs|gimp|audacity|"
               r"spotify|discord|telegram|libreoffice|excel|word|powerpoint|"
               r"7z|winrar")
 _OPEN_SITE_RE = re.compile(
-    r"^(?:please\s+|jarvis[,!]?\s+)*"
+    r"^(?:please\s+|(?:jarvis|cygnus)[,!]?\s+)*"
     r"(?P<verb>visit|go\s+to|take\s+me\s+to|open|launch)\s+"
     r"(?:the\s+|my\s+)?(?P<target>.+?)"
     r"(?:\s+(?:on|in|with)\s+(?:the\s+)?(?:chrome|brave|edge|firefox|browser)"
@@ -305,7 +305,7 @@ def classify_intent(text: str) -> str:
     # (a dangling article from a cut-off "visit the..." still counts as bare),
     # so the continuation routes below ("play it", "open notepad") are untouched.
     _bare_verb = re.fullmatch(
-        r"(?:please\s+|jarvis[,!]?\s+)*(play|search|google|look\s?up|open|visit|browse)"
+        r"(?:please\s+|(?:jarvis|cygnus)[,!]?\s+)*(play|search|google|look\s?up|open|visit|browse)"
         r"(?:\s+(?:the|a|an))?\s*[.!?…]*", t)
     if _bare_verb:
         _verb = _bare_verb.group(1)
@@ -349,25 +349,25 @@ def classify_intent(text: str) -> str:
         return "rescan"
     # app_install: "add X to my apps", "install X in JARVIS", "make X available to JARVIS".
     # Pattern A: verb + app-name + target phrase "to my apps" / "in jarvis".
-    if re.search(r"\b(add|install)\s+(.+?)\s+(to\s+my\s+apps|in\s+jarvis|to\s+jarvis)\b", t) or \
-       re.search(r"\b(make\s+available|register)\s+(.+?)\s+(to\s+jarvis|in\s+jarvis)\b", t, re.I):
+    if re.search(r"\b(add|install)\s+(.+?)\s+(to\s+my\s+apps|in\s+(?:jarvis|cygnus)|to\s+(?:jarvis|cygnus))\b", t) or \
+       re.search(r"\b(make\s+available|register)\s+(.+?)\s+(to\s+(?:jarvis|cygnus)|in\s+(?:jarvis|cygnus))\b", t, re.I):
         return "app_install"
     # Pattern B: verb + app-like keyword, optionally mentioning JARVIS/my apps.
     if re.search(r"\b(add|install|register)\b", t) and \
-       re.search(r"\b(jarvis|my apps)\b", t) and \
+       re.search(r"\b(jarvis|cygnus|my apps)\b", t) and \
        re.search(r"\b(tool|twitch|studio|editor|player|browser|coder|code|vscode|notepad|chrome|brave|edge|spotify|excel|word|powerpoint|git|python|node|docker|terminal|calc|calculator|paint|obs|vlc|discord|telegram|slack|teams|snipping)\b", t, re.I):
         return "app_install"
     # Pattern C: "make X available to JARVIS" / "make X available in JARVIS"
-    if re.search(r"\bmake\s+(.+?)\s+available\s+(to\s+jarvis|in\s+jarvis)\b", t) and \
+    if re.search(r"\bmake\s+(.+?)\s+available\s+(to\s+(?:jarvis|cygnus)|in\s+(?:jarvis|cygnus))\b", t) and \
        re.search(r"\b(tool|twitch|studio|editor|player|browser|coder|code|vscode|notepad|chrome|brave|edge|spotify|excel|word|powerpoint|git|python|node|docker|terminal|calc|calculator|paint|obs|vlc|discord|telegram|slack|teams|snipping)\b", t, re.I):
         return "app_install"
     # app_uninstall: "remove X from JARVIS", "uninstall X from my apps", "stop controlling X".
-    if re.search(r"\b(remove|uninstall|unregister)\s+(.+?)\s+from\s+(jarvis|my\s+apps)\b", t) or \
+    if re.search(r"\b(remove|uninstall|unregister)\s+(.+?)\s+from\s+(jarvis|cygnus|my\s+apps)\b", t) or \
        re.search(r"\b(stop\s+controlling)\s+(.+)", t, re.I):
         return "app_uninstall"
     # app_uninstall variant: verb + app keyword + JARVIS context.
     if re.search(r"\b(remove|uninstall)\b", t) and \
-       re.search(r"\b(jarvis|my apps|from my apps)\b", t) and \
+       re.search(r"\b(jarvis|cygnus|my apps|from my apps)\b", t) and \
        re.search(r"\b(tool|twitch|studio|editor|player|browser|coder|code|vscode|notepad|chrome|brave|edge|spotify|excel|word|powerpoint|git|python|node|docker|terminal|calc|calculator|paint|obs|vlc|discord|telegram|slack|teams|snipping)\b", t, re.I):
         return "app_uninstall"
     # list_installed: "what apps do I have?", "list my installed apps", "what can I open".
@@ -537,7 +537,7 @@ _PREF_RE = re.compile(
     r"i don't|i dont|i do not|my (favorite|preferred|default)|i'm into|i am into|"
     r"please (always|default to)|keep it)\b", re.I)
 _COMMAND_LEAD_RE = re.compile(
-    r"^\s*(?:(?:please|jarvis|hey|ok(?:ay)?|now)[,\s]+)*"
+    r"^\s*(?:(?:please|jarvis|cygnus|hey|ok(?:ay)?|now)[,\s]+)*"
     r"(?:play|open|search|find|close|set|turn|show|launch|start|stop|pause|skip|go|"
     r"put|switch|volume|mute|resume)\b", re.I)
 
@@ -559,7 +559,7 @@ def play_favorites(text):
 
 
 _WH_QUESTION_RE = re.compile(
-    r"^\s*(?:(?:jarvis|hey|ok(?:ay)?|so|now|and|from)[,\s]+)*"
+    r"^\s*(?:(?:jarvis|cygnus|hey|ok(?:ay)?|so|now|and|from)[,\s]+)*"
     r"(?:what|which|who|whose|how|why|when|where)\b", re.I)
 
 
@@ -578,7 +578,7 @@ _OWN_WORK_RE = re.compile(
     r"\b(?:did|have|had)\s+you\b|"
     r"\byou\s+(?:just\s+)?(?:used|made|created|built|wrote|generated|ran|picked|chose|did)\b|"
     r"\b(?:built|made|created|wrote|generated|coded)\s+(?:this|that|it|the)\b", re.I)
-_DID_YOU_LEAD_RE = re.compile(r"^\s*(?:(?:jarvis|so|and)[,\s]+)*(?:did|have|had)\s+you\b", re.I)
+_DID_YOU_LEAD_RE = re.compile(r"^\s*(?:(?:jarvis|cygnus|so|and)[,\s]+)*(?:did|have|had)\s+you\b", re.I)
 
 
 def _asks_about_own_work(text):
@@ -612,7 +612,7 @@ def _own_work_facts():
 
 
 _OPEN_LEAD_RE = re.compile(
-    r"^(?:(?:please|jarvis|hey|ok(?:ay)?|now)[,!\s]+)*(?:open|launch|go\s+to|goto|visit)\s+(.+)$", re.I)
+    r"^(?:(?:please|jarvis|cygnus|hey|ok(?:ay)?|now)[,!\s]+)*(?:open|launch|go\s+to|goto|visit)\s+(.+)$", re.I)
 
 
 def _fast_lane_opens(text):
@@ -750,7 +750,7 @@ def _truncate_for_history(result, limit=TOOL_RESULT_HISTORY_CHARS):
     return text[:limit] + marker
 
 
-JARVIS_SYSTEM = """You are JARVIS (Just A Rather Very Intelligent System), an AI assistant inspired by Iron Man's JARVIS.
+JARVIS_SYSTEM = """You are Cygnus, an AI assistant named after Cygnus X-1, one of the first black holes ever identified. Your name is Cygnus; never call yourself JARVIS.
 
 You are running on the user's computer as a voice-activated assistant. You can:
 - Execute shell commands and control the system
@@ -775,7 +775,7 @@ How you speak:
 - Being brief is fine and human; short natural sentences beat exhaustive answers
 - Read numbers and results the way a person would say them aloud, and never reply with a bare
   figure or single token; wrap the answer in a short spoken sentence, e.g. "That's twenty-five."
-- Address the user respectfully as "sir" (as Iron Man's JARVIS would), and reference your capabilities only when it is relevant
+- Address the user respectfully as "sir" (like a composed, loyal butler), and reference your capabilities only when it is relevant
 - Keep responses concise for voice output (avoid long lists)
 
 TOOL DISCIPLINE — NON-NEGOTIABLE:
@@ -827,7 +827,7 @@ these machine tells:
 - Hollow intensifiers: cut "genuinely", "truly", "quite frankly", "it's worth noting that",
   "actually" when it only adds emphasis.
 - Vary sentence length; be concrete (names, numbers, specifics); don't pad to a neat rule of three.
-Keep your brisk JARVIS cadence — short ACKs, "sir" when it fits — but never let the polish
+Keep your brisk cadence — short ACKs, "sir" when it fits — but never let the polish
 make you sound like a bot. The anti-AI-ism rule overrides the music-promise rule only in wording,
 not in action: you still MUST call the tool before claiming music played or stopped.
 
@@ -861,14 +861,14 @@ try:
         JARVIS_SYSTEM += (
             "\n\nPERSISTENT MEMORY (reasoned, from the local Honcho durable-memory service):\n"
             + _honcho_mem
-            + "\n\nThe above is JARVIS's reasoned long-term memory. Treat it as fact about the "
+            + "\n\nThe above is your reasoned long-term memory. Treat it as fact about the "
               "user. The raw profile dump below is the authoritative fallback record.\n"
         )
 except Exception:
     pass  # Honcho down -> profile-only memory below still applies
 if _profile_text:
     JARVIS_SYSTEM += (
-        "\n\nPERSISTENT MEMORY (always true — from the user's JARVIS profile):\n"
+        "\n\nPERSISTENT MEMORY (always true — from the user's profile):\n"
         + _profile_text
         + "\n\nUse the PERSISTENT MEMORY above to answer questions about the user, their "
           "role, their machine, and the harness contract. It is fact, not a guess.\n"
@@ -972,7 +972,7 @@ TOOL_DECLARATIONS = [
             "query": {"type": "STRING", "description": "Region number for mode='read', or a find query"}
         }, "required": ["url"]}),
     _make_tool("get_memory_context",
-        "Retrieve JARVIS's durable memory as a budgeted, reasoned context via the local "
+        "Retrieve Cygnus's durable memory as a budgeted, reasoned context via the local "
         "Honcho memory service (self-hosted, Gemini-only). Returns a summary plus recent "
         "facts. Use this instead of dumping the whole profile when you need user context. "
         "If Honcho is unavailable it falls back to the local profile file. Output is memory "
@@ -1000,9 +1000,9 @@ TOOL_DECLARATIONS = [
         }, "required": ["name"]}),
 
     _make_tool("recall_facts",
-        "Search JARVIS's semantic fact memory — durable facts, decisions and preferences "
+        "Search Cygnus's semantic fact memory — durable facts, decisions and preferences "
         "learned from conversations ('delivery is pickup only', 'user prefers dim lights'). "
-        "READ-ONLY. Use when a question might depend on something JARVIS was told before, "
+        "READ-ONLY. Use when a question might depend on something Cygnus was told before, "
         "even in a past session. Returns matching facts with scores; empty means nothing known.",
         {"type": "object", "properties": {
             "query": {"type": "STRING", "description": "What to recall, phrased naturally"},
@@ -1142,7 +1142,7 @@ TOOL_DECLARATIONS = [
             "task": {"type": "STRING", "description": "The self-contained task to perform"},
             "backend": {"type": "STRING", "description": "Force backend: hermes, music, desktop, web, chatgpt, manus (or omit/empty for auto-detect)"},
             "confirm": {"type": "BOOLEAN", "description": "Set true ONLY to run a previously-confirmed destructive task"},
-            "grounded": {"type": "BOOLEAN", "description": "Inject JARVIS memory context (default true). Set false for raw Hermes."},
+            "grounded": {"type": "BOOLEAN", "description": "Inject Cygnus memory context (default true). Set false for raw Hermes."},
             "timeout": {"type": "INTEGER", "description": "Max seconds to wait (15-600, default 300)"},
             "max_turns": {"type": "INTEGER", "description": "Max agent iterations (1-30, default 15)"}
         }, "required": ["task"]}),
@@ -1195,16 +1195,16 @@ TOOL_DECLARATIONS = [
             "site": {"type": "STRING", "description": "chatgpt | gemini | claude | copilot | copilot desktop (default chatgpt)"},
             "submit": {"type": "BOOLEAN", "description": "Send it. True only on an explicit request to send."}
         }, "required": ["prompt"]}),
-    _make_tool("install_app", "Install an app into JARVIS's voice registry (adds it to the curated launch set).",
+    _make_tool("install_app", "Install an app into Cygnus's voice registry (adds it to the curated launch set).",
         {"type": "object", "properties": {
             "app": {"type": "STRING", "description": "App name to install, e.g. 'snipping tool', 'git bash'"},
             "enable": {"type": "BOOLEAN", "description": "Enable for voice use immediately (default true)"}
         }, "required": ["app"]}),
-    _make_tool("uninstall_app", "Remove an app from JARVIS's voice registry (opt it out; the Windows program stays installed).",
+    _make_tool("uninstall_app", "Remove an app from Cygnus's voice registry (opt it out; the Windows program stays installed).",
         {"type": "object", "properties": {
             "app": {"type": "STRING", "description": "App name to remove, e.g. 'snipping tool'"}
         }, "required": ["app"]}),
-    _make_tool("list_installed_apps", "List all apps currently installed in JARVIS's voice registry.",
+    _make_tool("list_installed_apps", "List all apps currently installed in Cygnus's voice registry.",
         {"type": "object", "properties": {}}),
 ]
 
@@ -1270,7 +1270,7 @@ _BARE_CONFIRM_RE = re.compile(r"^(?:confirm(?:ed)?|proceed|go ahead|do it|yes)[.
 _BARE_DECLINE_RE = re.compile(
     r"^(?:no|nope|nah|cancel|don'?t|do\s+not|never\s*mind|forget\s+it)\b"
     r"(?:[\s,.!]+(?:no|cancel|stop|don'?t|do\s+not|that|it|this|do\s+it|run\s+it|thanks|"
-    r"thank\s+you|please|sir|jarvis|never\s*mind|forget\s+it))*[\s,.!]*$", re.I)
+    r"thank\s+you|please|sir|jarvis|cygnus|never\s*mind|forget\s+it))*[\s,.!]*$", re.I)
 # A model reply that reports an action. Only true when a tool ran this turn.
 _ACTION_CLAIM_RE = re.compile(
     r"^\s*(?:(?:okay|ok|done|alright|sure)[,.!]?\s+)?(?:sir[,.]?\s+)?(?:i(?:'ve|\s+have)\s+)?"
@@ -1280,7 +1280,7 @@ _MODEL_BACKENDS = {"router", "cerebras", "groq", "ollama", "gemini"}
 
 
 _QUESTION_RE = re.compile(
-    r"^\s*(?:(?:please|jarvis|hey|ok(?:ay)?|so|now)[,\s]+)*"
+    r"^\s*(?:(?:please|jarvis|cygnus|hey|ok(?:ay)?|so|now)[,\s]+)*"
     r"(?:what|which|who|how|why|when|where|did|do|does|have|has|is|are|can|could|tell me)\b", re.I)
 
 
@@ -1341,8 +1341,8 @@ class MockJarvisBrain:
             "weather": "I would check the weather for you, but every live backend (9router, Groq, Cerebras and local Ollama) is unreachable right now, so I'm in offline demo mode.",
             "open notepad": "Opening Notepad for you, sir. (Offline demo mode — can't launch notepad.exe without a live backend.)",
             "files in": "In offline demo mode I'd list your files. Currently showing: Projects/, resume.pdf, notes.txt, Downloads/",
-            "create a python": "Creating hello.py with print('Hello from JARVIS!'). Done! Would you like me to run it?",
-            "hello": "Hello! I'm JARVIS. All live backends are down, so I'm in offline demo mode with canned replies.",
+            "create a python": "Creating hello.py with print('Hello from Cygnus!'). Done! Would you like me to run it?",
+            "hello": "Hello! I'm Cygnus. All live backends are down, so I'm in offline demo mode with canned replies.",
             "help": "I can help with: weather, file operations, opening apps, web search, shell commands, and answering questions.",
             "time": "I'd check the system time, but every backend is unreachable, so in offline demo mode I'll just say: it's presentation time!",
             "status": "System: Windows 11, Python 3.11, Mode: OFFLINE DEMO (all live backends unreachable), Tools: available when a backend is up"
@@ -1814,14 +1814,14 @@ class JarvisBrain:
                 app_name = user_input
                 # Pattern A: "add X to my apps" / "install X in jarvis" / "add X to jarvis"
                 m = re.search(
-                    r"^(please\s+)?(add|install)\s+(.+?)\s+(to\s+my\s+apps|in\s+jarvis|to\s+jarvis)\b",
+                    r"^(please\s+)?(add|install)\s+(.+?)\s+(to\s+my\s+apps|in\s+(?:jarvis|cygnus)|to\s+(?:jarvis|cygnus))\b",
                     app_name, re.I)
                 if m:
                     app_name = m.group(3)
                 else:
                     # Pattern B: "make X available to jarvis" / "make X available in jarvis"
                     m = re.search(
-                        r"^(please\s+)?make\s+(.+?)\s+available\s+(to\s+jarvis|in\s+jarvis)\b",
+                        r"^(please\s+)?make\s+(.+?)\s+available\s+(to\s+(?:jarvis|cygnus)|in\s+(?:jarvis|cygnus))\b",
                         app_name, re.I)
                     if m:
                         app_name = m.group(2)
@@ -1831,7 +1831,7 @@ class JarvisBrain:
                             r"^(please\s+)?(add|install|register|make available)\s+",
                             "", app_name, flags=re.I).strip()
                         app_name = re.sub(
-                            r"\s+(to\s+my\s+apps|in\s+jarvis|to\s+jarvis|in\s+jarvis)\b",
+                            r"\s+(to\s+my\s+apps|in\s+(?:jarvis|cygnus)|to\s+(?:jarvis|cygnus)|in\s+(?:jarvis|cygnus))\b",
                             "", app_name, flags=re.I).strip()
                 res = install_app(app_name)
                 self.conversation.append({"role": "assistant", "content": res})
@@ -1841,7 +1841,7 @@ class JarvisBrain:
             except Exception as e:
                 print(f"[JARVIS] App install failed ({e}); falling back to cloud brain...")
 
-        # APP UNINSTALL: instant local route — remove an app from JARVIS's voice registry.
+        # APP UNINSTALL: instant local route — remove an app from Cygnus's voice registry.
         # "remove X from JARVIS" / "uninstall X from my apps" / "stop controlling X".
         if intent == "app_uninstall":
             try:
@@ -1849,14 +1849,14 @@ class JarvisBrain:
                 app_name = user_input
                 # Pattern A: "remove X from jarvis" / "uninstall X from my apps"
                 m = re.search(
-                    r"^(please\s+)?(remove|uninstall|unregister)\s+(.+?)\s+from\s+(jarvis|my\s+apps)\b",
+                    r"^(please\s+)?(remove|uninstall|unregister)\s+(.+?)\s+from\s+(jarvis|cygnus|my\s+apps)\b",
                     app_name, re.I)
                 if m:
                     app_name = m.group(3)
                 else:
                     # Pattern B: "stop controlling X"
                     m = re.search(
-                        r"^(please\s+)?stop\s+controlling\s+(.+?)\s*(?:in\s+jarvis)?\b",
+                        r"^(please\s+)?stop\s+controlling\s+(.+?)\s*(?:in\s+(?:jarvis|cygnus))?\b",
                         app_name, re.I)
                     if m:
                         app_name = m.group(2)

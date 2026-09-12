@@ -237,7 +237,7 @@ def begin_rule_setup(app_key, phrase, registry_path=None):
         if act:
             return _ai_step(app_key, pending, registry_path)
         return {"status": "clarify", "key": app_key, "rule_id": ACTION_Q_ID,
-                "question": f'What should JARVIS do when you say "{trig}"?',
+                "question": f'What should Cygnus do when you say "{trig}"?',
                 "remaining": 1, "candidate_rules": []}
 
     parsed = rc.parse_scaffold(app_key, phrase)

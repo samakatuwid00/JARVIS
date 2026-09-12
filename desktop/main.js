@@ -260,7 +260,7 @@ async function runChecks () {
   const found = []
   if (micBlocked()) found.push('Microphone blocked for desktop apps (Settings > Privacy > Microphone)')
   if (!await portOpen(OLLAMA_PORT)) found.push('Ollama is not running: no offline fallback')
-  if (!await portOpen(CHROME_PORT)) found.push('Chrome (JARVIS) is not open: no clicks inside the browser')
+  if (!await portOpen(CHROME_PORT)) found.push('The automation Chrome is not open: no clicks inside the browser')
   const wake = backend.state === 'ready' ? ((await fetchStatus()) || {}).wake_server : null
   if (wake && !wake.healthy) found.push(`Wake word off: ${wake.error || 'microphone unavailable'}`)
   if (checks === null || found.join('|') !== checks.join('|')) {

@@ -52,7 +52,7 @@ _URL_RE = re.compile(
 _SEARCH_RE = re.compile(r"\b(search|find|look\s*up|look\s+for|query)\b", re.I)
 _BLOCK_RE = re.compile(r"\b(never|block|don'?t|do\s+not|must\s+not|no\s+more)\b", re.I)
 COMMAND_START_RE = re.compile(
-    r"^(?:please\s+|jarvis[,\s]+)*(search|find|look\s*up|look\s+for|open|launch|"
+    r"^(?:please\s+|(?:jarvis|cygnus)[,\s]+)*(search|find|look\s*up|look\s+for|open|launch|"
     r"visit|go\s+to|take\s+me\s+to|play|watch|browse|show)\b", re.I)
 _WHEN_I_SAY_RE = re.compile(
     r"^\s*(?:when|if)\s+i\s+say\s+[\"']?(.+?)[\"']?\s*[,;]\s*(?:then\s+)?(.+)$", re.I)
@@ -60,7 +60,7 @@ _ARROW_RE = re.compile(r"\s*(?:->|=>|→)\s*")
 _MUSIC_CHECK_RE = re.compile(
     r"^pre_play:\s*(skip if track\.explicit|cap \w[\w .-]* volume at \d{1,3}%)$", re.I)
 _SPECIFIC_STOP = {"a", "an", "the", "some", "in", "on", "at", "for", "me", "my",
-                  "please", "jarvis", "sir", "browser", "to", "up"}
+                  "please", "jarvis", "cygnus", "sir", "browser", "to", "up"}
 _VERBS = {"search", "find", "look", "lookup", "open", "launch", "visit", "go",
           "take", "play", "watch", "browse", "show"}
 
@@ -69,7 +69,7 @@ The rule belongs to the app "{app}".{browser_note}
 
 The user wrote:
 COMMAND PHRASE: "{trigger}"
-WHAT JARVIS SHOULD DO: "{action}"{feedback}
+WHAT CYGNUS SHOULD DO: "{action}"{feedback}
 
 Work out what the user really means and return ONLY one JSON object:
 {
@@ -93,9 +93,9 @@ Steps for a website: {"op": "search"}, {"op": "pick", "count": 5} (show the top 
 Steps for a desktop app: {"op": "launch"}, {"op": "click", "target": "<button name>"}, {"op": "type", "target": "<box name>", "text": "{query}"}, {"op": "key", "keys": "{ENTER}"}.
 Add "confirm": true to any step the user would want to approve first. After a search, always add a pick step so the user chooses.
 - block: the user wants something prevented (never / don't / no).
-- reminder: a preference JARVIS should keep in mind.
+- reminder: a preference Cygnus should keep in mind.
 Only use a site the user actually wrote. Never invent one.
-If WHAT JARVIS SHOULD DO is empty, the command phrase may hold both parts - split it yourself.
+If WHAT CYGNUS SHOULD DO is empty, the command phrase may hold both parts - split it yourself.
 JSON only. /no_think"""
 
 

@@ -41,7 +41,7 @@ INTAKE_CORPUS = load_corpus()
 from config import (GEMINI_MODEL, ROUTER_BASE_URL, ROUTER_MODEL, WHISPER_MODEL,
                    GROQ_MODEL, GROQ_BASE_URL, CEREBRAS_MODEL, CEREBRAS_BASE_URL)
 
-app = FastAPI(title="JARVIS Voice Interface")
+app = FastAPI(title="Cygnus Voice Interface")
 
 
 # Browser origins allowed besides JARVIS's own (the phone's Tailscale https

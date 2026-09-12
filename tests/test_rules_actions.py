@@ -222,7 +222,7 @@ def test_voice_setup_asks_for_the_action_then_adds_the_rule(tmp_path, monkeypatc
     step = rules_voice.begin_rule_setup("brave", "search movies in brave browser",
                                         registry_path=str(path))
     assert step["status"] == "clarify"
-    assert step["question"] == 'What should JARVIS do when you say "search movies in brave browser"?'
+    assert step["question"] == 'What should Cygnus do when you say "search movies in brave browser"?'
 
     step = rules_voice.handle_clarification("brave", step["rule_id"],
                                             "search the movie name on hollymoviehd.cc",

@@ -44,7 +44,14 @@ import threading
 import numpy as np
 import sounddevice as sd
 
-WAKE_WORDS = ['jarvis', 'jarviss', 'jarvus', 'jervis', 'javis', 'jarvez', 'charvis', 'jarv']
+import re
+
+# The wake word is "Cygnus", matched the way Whisper actually writes it:
+# Cygnus, Signus, Signis, Signess, Signes, Signez(z), Signeze, and "Heysignas"
+# run together (measured on five edge-tts voices, UK/US/PH, 2026-09-12). The
+# g and the vowel are required, so "signs", "signal", "sinus" and "sickness"
+# never count. The HUD's WAKE_RE is the same pattern.
+WAKE_RE = re.compile(r"(?:^|[\s,])(?:hey)?[cs][iy]gn[aeiu][sz]{1,2}e?(?=$|[\s.,!?;:])", re.I)
 
 # Silence gate: mean |amplitude| of the loudest BURST_S slice of the window must
 # reach this floor or the window is skipped. Measured on the loudest slice, not
@@ -60,19 +67,9 @@ REOPEN_EVERY_S = 10.0
 
 
 def wake_word_in(text):
-    """Mirror of the HUD's wakeWordIn() so server + browser agree on what 'jarvis' is."""
-    if not text:
-        return False
-    import re
-    t = re.sub(r'[.,!?;:]+$', '', (text or '').lower()).strip()
-    if t == 'jarvis':
-        return True
-    for w in WAKE_WORDS:
-        if t == w:
-            return True
-        if re.search(r'(^|\s)' + w + r'(\s|$)', t):
-            return True
-    return False
+    """Mirror of the HUD's wakeWordIn() so server and browser agree on what the
+    wake word is."""
+    return bool(text) and bool(WAKE_RE.search(text.strip()))
 
 
 def wake_targets(clients, remote, desktop):

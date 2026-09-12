@@ -621,7 +621,7 @@ def scan_app(key, launch=False, progress=None):
     data = load_apps()
     entry = data["apps"].get(key)
     if not isinstance(entry, dict):
-        return {"error": f"{key} isn't in JARVIS Apps."}
+        return {"error": f"{key} isn't in Cygnus Apps."}
     name = _display(key, entry)
     window = find_app_window(entry)
     opened = False

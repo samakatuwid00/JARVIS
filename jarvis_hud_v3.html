@@ -245,7 +245,7 @@
     background: rgba(255, 255, 255, .035); border: 1px solid var(--hairline);
     border-radius: 14px; border-bottom-left-radius: 5px; padding: 8px 13px;
     color: #f4e3c8; }
-  .jv-line-jarvis::before { content: 'J'; flex: 0 0 auto; width: 20px; height: 20px;
+  .jv-line-jarvis::before { content: 'C'; flex: 0 0 auto; width: 20px; height: 20px;
     border-radius: 50%; background: rgba(255, 180, 84, .14);
     border: 1px solid rgba(255, 180, 84, .4); color: var(--holo);
     font: 700 11px/20px 'Rajdhani', sans-serif; text-align: center; }
@@ -1013,7 +1013,10 @@
   var DEMO = /[?&]demo=1\b/.test(location.search);
 
   // ---------------------------------------------------------------- config
-  var WAKE_WORDS = ['jarvis', 'jarviss', 'jarvus', 'jervis', 'javis', 'jarvez', 'charvis', 'jarv'];
+  // "Cygnus" as speech engines write it: Cygnus, Signus, Signis, Signess,
+  // Signez... Same pattern as wake_engine.WAKE_RE; "signs"/"signal" never match.
+  var WAKE_WORD = '[cs][iy]gn[aeiu][sz]{1,2}e?';
+  var WAKE_RE = new RegExp('(^|[\\s,])(hey)?' + WAKE_WORD + '(?=$|[\\s.,!?;:])', 'i');
   var TARGET_RATE   = 16000;   // what we ship to Whisper
   var PREROLL_MS    = 900;     // audio kept before speech onset so the wake word is never clipped
   var CMD_HANG_MS   = 1000;    // silence that ends a command clip (sentences breathe; 800 clipped mid-thought)
@@ -1955,10 +1958,12 @@
       var youText = (m.text || '').trim();
       var youLower = youText.toLowerCase().replace(/[.,!?;:]+$/g, '').trim();
       // A bare wake word (and nothing else) — used ONLY to open.
-      var isBareWake = /^(hey\s+|ok\s+|okay\s+|hi\s+)?(jarvis\w*)(\s+(jarvis\w*))*$/i.test(youLower);
+      var youWords = youLower.replace(/[^\w\s']/g, ' ').replace(/\s+/g, ' ').trim();   // "Hey, Cygnus." -> "hey cygnus"
+      var WAKE_TOKEN = '(hey\\s*)?' + WAKE_WORD;
+      var isBareWake = new RegExp('^(ok\\s+|okay\\s+|hi\\s+)?' + WAKE_TOKEN + '(\\s+' + WAKE_TOKEN + ')*$', 'i').test(youWords);
       // Explicit close: a close verb LEADING, optionally followed by the wake
       // word. The verb must lead so a command merely ending in "jarvis" is safe.
-      var isCloseIntent = /^(stop|end|close|exit|quit|that'?s all|that is all|done|finish|bye|goodbye)(\s+(jarvis\w*))?$/i.test(youLower);
+      var isCloseIntent = new RegExp("^(stop|end|close|exit|quit|that'?s all|that is all|done|finish|bye|goodbye)(\\s+" + WAKE_WORD + ')?$', 'i').test(youWords);
       if (mode === 'off' && isBareWake) {
         // Open the voice session and audibly signal listening.
         console.log('[session] wake — opening voice session');
@@ -1974,7 +1979,7 @@
           stopMic();
           mode = 'off';
           cue('Standing by, sir.');
-          setState('idle', 'VOICE SESSION ENDED — SAY "JARVIS" TO RESUME');
+          setState('idle', 'VOICE SESSION ENDED — SAY "CYGNUS" TO RESUME');
           dot.className = 'dead';
           if (endBtn) endBtn.classList.remove('show');
           return;
@@ -2346,16 +2351,7 @@
   var WAKE_STALE_MS = 90000;    // running but silent this long -> assume wedged
 
   function wakeWordIn(text) {
-    if (!text) return false;
-    var t = (text || '').toLowerCase().replace(/[.,!?;:]+$/, '').trim();
-    if (t === 'jarvis') return true;
-    // Fuzzy: any wake-word token as a standalone or trailing word.
-    for (var i = 0; i < WAKE_WORDS.length; i++) {
-      if (t === WAKE_WORDS[i]) return true;
-      var re = new RegExp('(^|\\s)' + WAKE_WORDS[i] + '(\\s|$)', 'i');
-      if (re.test(t)) return true;
-    }
-    return false;
+    return !!text && WAKE_RE.test(String(text).trim());
   }
 
   function startWakeListener() {
@@ -2504,7 +2500,7 @@
       stopMic();
       mode = 'off';
       cue('Standing by, sir.');
-      setState('idle', 'VOICE SESSION ENDED — SAY "JARVIS" TO RESUME');
+      setState('idle', 'VOICE SESSION ENDED — SAY "CYGNUS" TO RESUME');
       dot.className = 'dead';
       if (endBtn) endBtn.classList.remove('show');
       return;
@@ -2518,7 +2514,7 @@
       return;
     }
     mode = 'idle';
-    setState('idle', IS_MOBILE ? 'TAP THE MIC TO TALK' : 'LISTENING FOR “JARVIS”');
+    setState('idle', IS_MOBILE ? 'TAP THE MIC TO TALK' : 'LISTENING FOR “CYGNUS”');
     // A live mic means a voice session is active — surface the End button so
     // the user can always stop it without relying on a spoken close word.
     if (endBtn) endBtn.classList.add('show');

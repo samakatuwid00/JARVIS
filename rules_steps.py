@@ -36,7 +36,7 @@ _ORDINALS = {"first": 1, "one": 1, "second": 2, "two": 2, "third": 3, "three": 3
              "tenth": 10, "ten": 10}
 _CHOICE_FILLER = {"the", "a", "an", "one", "movie", "film", "show", "please", "i", "want",
                   "watch", "open", "pick", "choose", "number", "no", "option", "that",
-                  "play", "give", "me", "lets", "let's", "go", "with", "sir", "jarvis",
+                  "play", "give", "me", "lets", "let's", "go", "with", "sir", "jarvis", "cygnus",
                   "it", "this", "start", "stream", "now"}
 _YES_RE = re.compile(r"^(yes|yeah|yep|yup|sure|ok(ay)?|go( ahead)?|do it|play( it)?|"
                      r"please|confirm|continue|restart( it)?)\b", re.I)
@@ -260,7 +260,7 @@ def _open(run, url, title):
             ok = browser_cdp.launch(browser, url)
         else:
             run["pending_open"] = (url, title)
-            return (f"{browser_cdp.label(browser)} is open without JARVIS control. Restart "
+            return (f"{browser_cdp.label(browser)} is open without Cygnus control. Restart "
                     f"{browser_cdp.label(browser)} so I can click in the page? Your tabs come "
                     f"back if it restores sessions. Say yes, or no to open it without clicks.",
                     "restart")

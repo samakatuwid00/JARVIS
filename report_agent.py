@@ -106,7 +106,7 @@ def compose_report(topic: str, output_path: str = None, verbatim: bool = False) 
         import browser_agent
 
         if not browser_agent.is_signed_in():
-            return ("I need the JARVIS browser signed in to ChatGPT before I can "
+            return ("I need the Cygnus browser signed in to ChatGPT before I can "
                     "gather the source material. Run python browser_agent.py once, "
                     "sign in to ChatGPT in the window it opens, and the session is "
                     "remembered from then on.")

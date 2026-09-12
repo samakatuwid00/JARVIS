@@ -95,7 +95,7 @@ def _default_llm():
 def _repair_search_url(site, tried, form_note, llm):
     """Ask the model for a better search address, given what failed."""
     lines = "\n".join(f"- {r['url']}: {r['evidence']}" for _, _, r in tried)
-    prompt = (f"JARVIS must search the website {site} for a name. These search "
+    prompt = (f"Cygnus must search the website {site} for a name. These search "
               f"addresses were tried in a real browser and failed:\n{lines}\n"
               f"{form_note}\nReply with ONLY a JSON object "
               '{"search_url": "https://..."} giving the most likely working search '
@@ -110,9 +110,9 @@ def _repair_search_url(site, tried, form_note, llm):
 
 def judge_intent(user_text, rule, steps, llm):
     """Does the simulated outcome do what the user asked? {"match", "reason"} or None."""
-    prompt = ("A user set up a rule for the JARVIS voice assistant.\n"
+    prompt = ("A user set up a rule for the Cygnus voice assistant.\n"
               f'THE USER ASKED: "{user_text}"\n'
-              f"JARVIS UNDERSTOOD: {rule.get('summary') or rule.get('intent', '')}\n"
+              f"CYGNUS UNDERSTOOD: {rule.get('summary') or rule.get('intent', '')}\n"
               "SIMULATION (real browser):\n" + "\n".join(f"- {s}" for s in steps) +
               "\nDoes the simulated result do what the user asked? Reply with ONLY "
               '{"match": true or false, "reason": "one short sentence"}. /no_think')
@@ -170,7 +170,7 @@ def _simulate_search(action, sample, steps, say, probe, llm):
             blocked = True
 
     if not blocked and llm is not None:
-        form_note = ("The homepage has no GET search form JARVIS could read."
+        form_note = ("The homepage has no GET search form Cygnus could read."
                      if not found.get("search_url") else "")
         for attempt in range(_MAX_REPAIRS):
             say("Asking the AI to fix the search address...", 88)

@@ -63,7 +63,7 @@ THRESHOLDS = (0.0, 0.5, 0.6, 0.7, 0.8)
 # The best plain-hybrid minimum from the sweep on 2026-09-12.
 TRUST_MIN_SCORE = 0.7
 
-_OPEN_RE = re.compile(r"^\W*(?:(?:please|jarvis|hey|ok(?:ay)?|now)\b\W*)*"
+_OPEN_RE = re.compile(r"^\W*(?:(?:please|jarvis|cygnus|hey|ok(?:ay)?|now)\b\W*)*"
                       r"(?:open|launch|go\s+to|goto|visit|browse|take\s+me\s+to)\s+(.+)$", re.I | re.S)
 
 
