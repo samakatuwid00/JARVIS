@@ -233,12 +233,18 @@ def _is_open_target(name):
     """Whether `name` is a registered app or site (the chain splitter's test
     for "open vscode, notepad and chrome")."""
     try:
+        import machine_capabilities
         import tools
         if tools.resolve_open_target(name)[0] in ("app", "site", "clarify"):
             return True
-        # What open_application finds by alias or product name ("calculator",
-        # "vs code") counts too.
-        return tools._find_app_by_name(tools._clean_app_name(name)) is not None
+        # An alias open_application knows ("calculator" -> calc, "vscode" ->
+        # code) or a registry name spelled another way counts too - never
+        # _find_app_by_name, whose word-overlap scoring took "what is AI" for
+        # an app called "what is new in the latest version".
+        clean = tools._clean_app_name(name).lower().strip()
+        apps = (machine_capabilities.load_registry() or {}).get("apps", {})
+        return clean in tools.APP_ALIASES or clean in apps or \
+            machine_capabilities.resolve_normalized(apps, clean) is not None
     except Exception:
         return False
 

@@ -62,6 +62,25 @@ def test_an_open_list_shares_its_verb_only_with_real_targets():
     assert split_commands("open notepad and chrome") == ["open notepad and chrome"]   # no checker
 
 
+def test_open_targets_are_exact_alias_or_normalized_names(monkeypatch):
+    import machine_capabilities
+    import tools
+    monkeypatch.setattr(tools, "resolve_open_target", lambda name, force=None, browser=None: (None, name))
+    monkeypatch.setattr(tools, "APP_ALIASES", {"calculator": "calc", "vscode": "code"})
+    monkeypatch.setattr(machine_capabilities, "load_registry",
+                        lambda: {"apps": {"notepad": {}, "snippingtool": {}}})
+    monkeypatch.setattr(tools, "_find_app_by_name",
+                        lambda name: (_ for _ in ()).throw(AssertionError("fuzzy lookup used")))
+    for name in ("calculator", "vscode", "notepad", "Snipping Tool"):
+        assert brain_gemini._is_open_target(name) is True, name
+    for name in ("what is AI", "GPT"):
+        assert brain_gemini._is_open_target(name) is False, name
+    assert split_commands("Open chat, GPT, and prompt, what is AI?",
+                          is_target=brain_gemini._is_open_target) == ["Open chat, GPT, and prompt, what is AI?"]
+    assert split_commands("open notepad and calculator", is_target=brain_gemini._is_open_target) == \
+        ["open notepad", "open calculator"]
+
+
 def test_a_chain_runs_each_command_and_stops_at_a_confirm():
     brain = object.__new__(brain_gemini.JarvisBrain)
     ran = []
