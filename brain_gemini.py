@@ -637,6 +637,36 @@ def _fast_lane_opens(text):
         return False
 
 
+def _open_target(text):
+    """What an open/visit request names - also for "can you open X for me",
+    which parse_open_site does not read."""
+    t = (text or "").strip()
+    m = _OPEN_LEAD_RE.match(t.rstrip(".!?"))
+    return parse_open_site(t) or (m.group(1) if m else None)
+
+
+# Semantic routes that lead where the keywords found nothing specific, and
+# the brain route each takes. recall_memory earned trust too, but the cloud
+# brain already answers a specific question ("what is my name?") from the
+# profile; the instant recall would recite the whole memory instead.
+_SEMANTIC_LEAD = {"job_status": "job_status", "open_site": "open_site",
+                  "app_action": "app_reference", "media_control": "app_reference",
+                  "task": "general", "clarify": "clarify"}
+
+
+def _semantic_lead(text):
+    """The brain route a confident, trusted semantic pick leads to, or None."""
+    try:
+        import semantic_route
+        route = semantic_route.lead(text)
+    except Exception as e:
+        print(f"[semantic] lead failed: {type(e).__name__}: {e}", flush=True)
+        return None
+    if route == "open_site" and not _open_target(text):
+        return None
+    return _SEMANTIC_LEAD.get(route)
+
+
 def _looks_like_preference(t):
     """A stated preference ("I prefer lo-fi"), not a command that mentions
     one: "play some of my favorite on spotify" was being saved as a fact."""
@@ -1669,6 +1699,21 @@ class JarvisBrain:
             self.last_stats = {"backend": "instant", "intent": intent}
             return ans
 
+        # Where the keywords found nothing specific, a confident semantic pick
+        # for a route it earned leads (semantic_route.lead; JARVIS_SEMANTIC).
+        _semantic_route = None
+        if intent in ("general", "app_reference"):
+            _semantic_route = _semantic_lead(user_input)
+            if _semantic_route == "clarify":
+                ask = "Sorry, I didn't catch that. Could you say it again?"
+                self.conversation.append({"role": "assistant", "content": ask})
+                self.last_backend = "instant"
+                self.last_stats = {"backend": "instant", "intent": "semantic_clarify"}
+                return ask
+            if _semantic_route:
+                print(f"[semantic] leads: {intent} -> {_semantic_route}", flush=True)
+                intent = _semantic_route
+
         # "Play my favorites on Spotify": the user's Liked Songs, not a search
         # the model makes up ("lo-fi", 2026-09-11).
         if intent == "music":
@@ -1725,6 +1770,11 @@ class JarvisBrain:
             from tools import is_conversational
             _conversational = is_conversational(user_input)
         except Exception:
+            _conversational = False
+        # A semantic lead to an action is acted on - but a question stays a
+        # question, and a question about JARVIS's own work (below) wins.
+        if _semantic_route in ("general", "app_reference") and \
+                not _WH_QUESTION_RE.match(user_input or ""):
             _conversational = False
         # "What coding agent did you use to create this website?" is answered
         # from the record by the cloud brain, never re-run as a new goal.
@@ -1929,7 +1979,7 @@ class JarvisBrain:
                 # "open github in brave": the browser is where, not what.
                 # parse_open_site drops the phrase, so read it off the request.
                 _, _bword = _tools_mod._split_browser(user_input)
-                res = execute_tool("open_site", {"name": parse_open_site(user_input),
+                res = execute_tool("open_site", {"name": _open_target(user_input),
                                                  "browser": _tools_mod._browser_key(_bword)
                                                  if _bword else None},
                                    user_input)

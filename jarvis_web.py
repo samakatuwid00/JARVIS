@@ -108,6 +108,10 @@ print("[JARVIS Web] Loading VoiceEngine (Whisper)...", flush=True)
 voice_engine = VoiceEngine()
 print(f"[JARVIS Web] Loading Brain ({ROUTER_MODEL})...", flush=True)
 brain = JarvisBrain()
+# The semantic router loads in the background (~5 s); until then it neither
+# logs nor leads, and no reply waits for it.
+import semantic_route
+semantic_route.warm()
 import tools  # for the /apps/open endpoint (same dispatcher the brain uses)
 
 # Server-side wake-word fallback. The browser's Web Speech WakeListener is primary,

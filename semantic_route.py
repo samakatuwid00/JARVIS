@@ -6,8 +6,9 @@ nearest examples vote for, compared as model2vec sentence embeddings
 (potion-multilingual-128M: ~0.1 ms a sentence on CPU, reads Tagalog). Below
 MIN_SCORE it abstains and the keyword router keeps the turn.
 
-JARVIS_SEMANTIC=shadow logs its pick next to each turn (intent_router's
-shadow log); "off" skips it and never loads the model (~0.5 GB of RAM).
+JARVIS_SEMANTIC=lead (default) logs its pick next to each turn and lets a
+confident pick for a route it earned lead (lead()); "shadow" only logs;
+"off" skips both and never loads the model (~1 GB of server RAM).
 """
 
 import json
@@ -19,9 +20,15 @@ import numpy as np
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 GOLD = os.path.join(BASE_DIR, "eval", "routing_gold.jsonl")
 MODEL = os.getenv("JARVIS_SEMANTIC_MODEL", "minishlab/potion-multilingual-128M")
-MODE = os.getenv("JARVIS_SEMANTIC", "shadow").strip().lower()
+MODE = os.getenv("JARVIS_SEMANTIC", "lead").strip().lower()
 NEIGHBOURS = 5
 MIN_SCORE = float(os.getenv("JARVIS_SEMANTIC_MIN", "0.6"))
+# Routes where the semantic pick beat the keyword route under nested
+# cross-validation (routing_eval --semantic, 2026-09-12), and the score a pick
+# needs before it leads.
+LEAD_ROUTES = {"app_action", "clarify", "job_status", "media_control", "open_site",
+               "recall_memory", "task"}
+LEAD_MIN_SCORE = 0.7
 
 _model = None
 _model_lock = threading.Lock()
@@ -94,6 +101,22 @@ def _routers():
             _bank = {"route": Router(texts, [r["route"] for r in rows], vectors),
                      "act": Router(texts, [r.get("act") for r in rows], vectors)} if rows else {}
     return _bank
+
+
+def warm():
+    """Load the model and the examples in the background, at server start."""
+    if MODE != "off":
+        threading.Thread(target=_routers, daemon=True, name="semantic-warm").start()
+
+
+def lead(text):
+    """The trusted route for `text` when leading is on and the pick is
+    confident, else None. Never loads the model on the caller's thread: until
+    warm() or a logged turn has loaded it, nothing leads."""
+    if MODE != "lead" or not _bank or not (text or "").strip():
+        return None
+    route, score = _bank["route"].route(text, min_score=LEAD_MIN_SCORE)
+    return route if route in LEAD_ROUTES else None
 
 
 def shadow(text):
