@@ -23,6 +23,9 @@ def clean(monkeypatch):
     ("gh/gpt-5.4-mini", "GPT-5.4 Mini"),
     ("cl/anthropic/claude-sonnet-4.6", "Claude Sonnet 4.6"),
     ("jarvis-qwen3", "the local Qwen model"),
+    ("oc/big-pickle", "Big Pickle"),
+    ("oc/mimo-v2.5-free", "MiMo v2.5"),
+    ("oc/deepseek-v4-flash-free", "DeepSeek v4 Flash"),
 ])
 def test_models_have_names_people_know(model, name):
     assert rh.friendly(model) == name

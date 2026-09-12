@@ -27,8 +27,14 @@ PROBE_TIMEOUT_S = 20.0
 DEFAULT_COOLDOWN_S = 300.0
 EMPTY_COOLDOWN_S = 1800.0          # a provider that answers with nothing is broken, not busy
 # Tried after the configured ROUTER_MODEL + ROUTER_FALLBACK_MODELS, best first.
+# OpenCode Free leads: measured 2026-09-12 with Cygnus's real prompt and all 32
+# tools (7.5k tokens), big-pickle answered in 2.6-6 s and called tools right,
+# ling-3.0-flash in 3-5 s, mimo-v2.5 and nemotron-3.5-lightning in 7-8 s.
+# Left out: nemotron-3-ultra (92 s), deepseek-v4-flash-free (400 errors),
+# muse-spark (empty replies).
 EXTRA_CANDIDATES = [m.strip() for m in os.getenv(
     "JARVIS_ROUTER_CANDIDATES",
+    "oc/big-pickle,oc/ling-3.0-flash-fin-free,oc/mimo-v2.5-free,oc/nemotron-3.5-lightning-free,"
     "gc/gemini-2.5-flash,gc/gemini-3-flash-preview,gc/gemini-2.5-pro,gc/gemini-2.5-flash-lite,"
     "cu/claude-4.5-sonnet,cu/gemini-3-flash-preview,gh/gpt-5.4-mini,cl/anthropic/claude-sonnet-4.6"
 ).split(",") if m.strip()]
@@ -131,6 +137,12 @@ def _loop():
         time.sleep(PROBE_EVERY_S)
 
 
+def start() -> None:
+    """Begin probing now (the server calls this at boot) rather than on the
+    first turn, which would otherwise still walk the dead models."""
+    _ensure_probing()
+
+
 def _ensure_probing() -> None:
     """Start the background probe once per process (never under pytest)."""
     global _thread
@@ -149,9 +161,11 @@ def friendly(model: str) -> str:
     name = str(model or "").split("/")[-1].lower()
     if name.startswith("jarvis-qwen") or name.startswith("qwen"):
         return "the local Qwen model"
-    name = re.sub(r"-(?:extra-low|low|medium|high|preview|agent|thinking|max|review)\b", "", name)
+    name = re.sub(r"-(?:extra-low|low|medium|high|preview|agent|thinking|max|review|free|"
+                  r"contributor)\b", "", name)
     name = re.sub(r"(\d)-(\d)(?=$|-)", r"\1.\2", name)
-    words = ["GPT" if p == "gpt" else (p if p[:1].isdigit() else p.capitalize())
+    words = [{"gpt": "GPT", "mimo": "MiMo", "glm": "GLM", "deepseek": "DeepSeek"}.get(p)
+             or (p if p[:1].isdigit() or re.match(r"v\d", p) else p.capitalize())
              for p in name.split("-") if p]
     return re.sub(r"GPT (\d)", r"GPT-\1", " ".join(words)) or str(model)
 

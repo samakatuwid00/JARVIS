@@ -112,6 +112,10 @@ brain = JarvisBrain()
 # logs nor leads, and no reply waits for it.
 import semantic_route
 semantic_route.warm()
+# 9router health: probe at boot, so the first cloud turn already skips dead
+# models (router_health.py); it re-checks every 5 minutes after that.
+import router_health
+router_health.start()
 import tools  # for the /apps/open endpoint (same dispatcher the brain uses)
 
 # Server-side wake-word fallback. The browser's Web Speech WakeListener is primary,
